@@ -28,6 +28,20 @@ import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
+import zaloPersonalRoutes, { restoreChannels } from "./channels/zalo-personal/routes.js";
+import channelRoutes from "./channels/routes.js";
+import agentConfigRoutes from "./channels/agent-config-routes.js";
+import qaRoutes from "./channels/qa-routes.js";
+import facebookWebhook from "./channels/facebook/webhook.js";
+import crmRoutes from "./channels/crm/crm-routes.js";
+import ticketRoutes from "./channels/crm/ticket-routes.js";
+import orderRoutes from "./channels/crm/order-routes.js";
+import kbRoutes from "./channels/crm/knowledge-base/kb-routes.js";
+import trackingRoutes from "./channels/crm/tracking/tracking-routes.js";
+import conversationRoutes from "./channels/conversation-routes.js";
+import opsRoutes from "./channels/ops-routes.js";
+import socialRoutes from "./channels/social-routes.js";
+import systemRoutes from "./routes/system-routes.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
@@ -220,9 +234,46 @@ export async function createApp(
       allowedHostnames: opts.allowedHostnames,
     }),
   );
+  api.use("/channels/facebook", facebookWebhook);
+  api.use("/channels/zalo-personal", zaloPersonalRoutes);
+  api.use("/channels/agent-configs", agentConfigRoutes);
+  api.use("/channels/qa", qaRoutes);
+  api.use("/channels/crm", crmRoutes);
+  api.use("/channels/crm/tickets", ticketRoutes);
+  api.use("/channels/crm/orders", orderRoutes);
+  api.use("/channels/crm/kb", kbRoutes);
+  api.use("/channels/tracking", trackingRoutes);
+  api.use("/channels/conversations", conversationRoutes);
+  api.use("/ops", opsRoutes);
+  api.use("/", socialRoutes); // /api/social/publish, /api/news/publish, /api/social/pages
+  api.use("/system", systemRoutes);
+  api.use("/channels", channelRoutes);
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
+  });
+
+  // On startup: reset stale agent sessions (old "running" sessions from before restart)
+  import("./channels/zalo-personal/supabase.js").then(({ supabase }) => {
+    supabase.from('agent_sessions')
+      .update({ status: 'idle' })
+      .eq('status', 'running')
+      .then(() => console.log("[Startup] Stale agent sessions reset to idle"));
+  });
+
+  // Restore Zalo channels + start consumer on startup
+  restoreChannels().then(async () => {
+    console.log("[ZaloPersonal] Channel restore complete");
+    // Start the inbound consumer (agent auto-reply pipeline)
+    try {
+      const { startConsumer } = await import("./channels/consumer.js");
+      startConsumer();
+      console.log("[Consumer] Inbound consumer started — agent auto-reply active");
+    } catch (err: any) {
+      console.warn("[Consumer] Failed to start:", err.message);
+    }
+  }).catch((err) => {
+    console.warn("[ZaloPersonal] Channel restore failed:", err.message);
   });
   app.use(pluginUiStaticRoutes(db, {
     localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
@@ -238,9 +289,11 @@ export async function createApp(
     const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
     if (uiDist) {
       const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
-      app.use(express.static(uiDist));
+      app.use(express.static(uiDist, { maxAge: '1h', setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }}));
       app.get(/.*/, (_req, res) => {
-        res.status(200).set("Content-Type", "text/html").end(indexHtml);
+        res.status(200).set("Content-Type", "text/html").set("Cache-Control", "no-cache, no-store, must-revalidate").end(indexHtml);
       });
     } else {
       console.warn("[paperclip] UI dist not found; running in API-only mode");
