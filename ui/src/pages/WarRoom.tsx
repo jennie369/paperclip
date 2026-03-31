@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { warRoomApi, type WarRoomChannel, type WarRoomMessage } from "../api/warRoom";
 import { CreateRoomModal } from "../components/war-room/CreateRoomModal";
+import { RoomSettingsPanel } from "../components/war-room/RoomSettingsPanel";
 
 // ─── Icon resolver ──────────────────────────────────────────
 
@@ -387,7 +388,6 @@ export function WarRoom() {
 
   // Room settings
   const [showRoomSettings, setShowRoomSettings] = useState(false);
-  const [archiving, setArchiving] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const subscriptionRef = useRef<ReturnType<typeof warRoomApi.subscribeToChannel> | null>(null);
@@ -508,23 +508,14 @@ export function WarRoom() {
       setMessages((prev) => (prev.find((m) => m.id === data.id) ? prev : [...prev, data]));
     } else if (data && payload.replyTo) {
       setReplyCounts((prev) => ({ ...prev, [payload.replyTo!]: (prev[payload.replyTo!] ?? 0) + 1 }));
-      if (expandedThreadId === payload.replyTo) setThreadMessages((prev) => [...prev, data]);
+      // Always add to thread messages + auto-expand thread
+      setThreadMessages((prev) => prev.find((m) => m.id === data.id) ? prev : [...prev, data]);
+      setExpandedThreadId(payload.replyTo);
     }
   }
 
   async function handlePin(messageId: string, pinned: boolean) {
     await warRoomApi.pinMessage(messageId, pinned);
-  }
-
-  async function handleArchiveChannel() {
-    if (!activeChannel || activeChannel.is_default) return;
-    setArchiving(true);
-    await warRoomApi.archiveChannel(activeChannelId);
-    setChannels((prev) => prev.filter((c) => c.id !== activeChannelId));
-    const remaining = channels.filter((c) => c.id !== activeChannelId);
-    if (remaining.length > 0) setActiveChannelId(remaining[0].id);
-    setShowRoomSettings(false);
-    setArchiving(false);
   }
 
   function handleRoomCreated(channelId: string) {
@@ -711,30 +702,24 @@ export function WarRoom() {
 
           {/* Room settings panel (inline) */}
           {showRoomSettings && activeChannel && !activeChannel.is_default && (
-            <div className="px-4 py-3 border-t border-border bg-muted/20">
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-[10px] text-muted-foreground">
-                  Loại: <span className="text-foreground font-medium">{activeChannel.channel_type ?? "group"}</span>
-                </span>
-                <span className="text-[10px] text-muted-foreground">
-                  Tạo bởi: <span className="text-foreground font-medium">{activeChannel.created_by ?? "system"}</span>
-                </span>
-                {activeChannel.auto_created && (
-                  <span className="text-[10px] text-amber-500 font-medium">Tự động tạo</span>
-                )}
-                <div className="ml-auto flex items-center gap-2">
-                  <button
-                    onClick={handleArchiveChannel}
-                    disabled={archiving}
-                    className="h-6 px-2 text-[10px] font-medium rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors border-none cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
-                    title="Lưu trữ phòng này"
-                  >
-                    {archiving ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
-                    Lưu trữ
-                  </button>
-                </div>
-              </div>
-            </div>
+            <RoomSettingsPanel
+              channel={activeChannel}
+              onArchived={() => {
+                setChannels((prev) => prev.filter((c) => c.id !== activeChannelId));
+                const remaining = channels.filter((c) => c.id !== activeChannelId);
+                if (remaining.length > 0) setActiveChannelId(remaining[0].id);
+                setShowRoomSettings(false);
+              }}
+              onDeleted={() => {
+                setChannels((prev) => prev.filter((c) => c.id !== activeChannelId));
+                const remaining = channels.filter((c) => c.id !== activeChannelId);
+                if (remaining.length > 0) setActiveChannelId(remaining[0].id);
+                setShowRoomSettings(false);
+              }}
+              onUpdated={(updated) => {
+                setChannels((prev) => prev.map((c) => c.id === updated.id ? updated : c));
+              }}
+            />
           )}
         </div>
 

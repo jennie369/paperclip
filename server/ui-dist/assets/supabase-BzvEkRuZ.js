@@ -1,0 +1,1 @@
+import{s as e}from"./index-1EGc7oZz.js";function a(){return e}function r(){return console.warn("[CC] getSupabaseAdmin() not available in browser. Use API proxy instead."),e}async function s(){}export{s as ensureCCProfile,a as getSupabase,r as getSupabaseAdmin};

@@ -10,8 +10,13 @@ export function dashboardRoutes(db: Db) {
   router.get("/companies/:companyId/dashboard", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const summary = await svc.summary(companyId);
-    res.json(summary);
+    try {
+      const summary = await svc.summary(companyId);
+      res.json(summary);
+    } catch (err: any) {
+      console.error("[dashboard] Error:", err?.message || err);
+      res.status(500).json({ error: err?.message || "Dashboard query failed" });
+    }
   });
 
   return router;

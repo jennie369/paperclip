@@ -101,8 +101,9 @@ export function ActivityRow({ event, agentMap, entityNameMap, entityTitleMap, cl
 
   const entityTitle = entityTitleMap?.get(`${event.entityType}:${event.entityId}`);
 
+  // Heartbeat runs: link to agent dashboard (shows issues + runs), not individual run page
   const link = isHeartbeatEvent && heartbeatAgentId
-    ? `/agents/${heartbeatAgentId}/runs/${event.entityId}`
+    ? `/agents/${heartbeatAgentId}`
     : entityLink(event.entityType, event.entityId, name);
 
   const actor = event.actorType === "agent" ? agentMap.get(event.actorId) : null;

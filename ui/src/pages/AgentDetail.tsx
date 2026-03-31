@@ -997,7 +997,7 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: string }) {
+function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentId: string; issues?: { id: string; identifier?: string | null }[] }) {
   if (runs.length === 0) return null;
 
   const sorted = [...runs].sort(
@@ -1026,15 +1026,15 @@ function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: strin
           {isLive ? "Live Run" : "Latest Run"}
         </h3>
         <Link
-          to={`/agents/${agentId}/runs/${run.id}`}
+          to={issues && issues.length > 0 ? `/issues/${issues[0].identifier ?? issues[0].id}` : `/agents/${agentId}/runs`}
           className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors no-underline"
         >
-          View details &rarr;
+          {issues && issues.length > 0 ? `${issues[0].identifier} →` : "View details →"}
         </Link>
       </div>
 
       <Link
-        to={`/agents/${agentId}/runs/${run.id}`}
+        to={issues && issues.length > 0 ? `/issues/${issues[0].identifier ?? issues[0].id}` : `/agents/${agentId}/runs/${run.id}`}
         className={cn(
           "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
@@ -1086,7 +1086,7 @@ function AgentOverview({
   return (
     <div className="space-y-8">
       {/* Latest Run */}
-      <LatestRunCard runs={runs} agentId={agentRouteId} />
+      <LatestRunCard runs={runs} agentId={agentRouteId} issues={assignedIssues} />
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1428,73 +1428,197 @@ function ConfigurationTab({
 }
 
 function SkillsTab({ agent }: { agent: Agent }) {
-  const instructionsPath =
-    typeof agent.adapterConfig?.instructionsFilePath === "string" && agent.adapterConfig.instructionsFilePath.trim().length > 0
-      ? agent.adapterConfig.instructionsFilePath
-      : null;
-  const { data, isLoading, error } = useQuery({
+  // Resolve disk slug from instructionsFilePath: .../agents/personal-assistant/AGENTS.md → personal-assistant
+  const instrPath = typeof agent.adapterConfig?.instructionsFilePath === 'string' ? agent.adapterConfig.instructionsFilePath : '';
+  const instrMatch = instrPath.replace(/\\/g, '/').match(/agents\/([^/]+)\//);
+  const instrSlug = instrMatch ? instrMatch[1] : '';
+  const agentSlug = instrSlug || agent.urlKey || agent.name?.toLowerCase().replace(/\s+/g, '-') || '';
+
+  // Fetch comprehensive agent resources
+  const { data: resources, isLoading: resourcesLoading } = useQuery({
+    queryKey: ["agent-resources", agentSlug],
+    queryFn: async () => {
+      const res = await fetch(`/api/skills/agent-resources/${encodeURIComponent(agentSlug)}`);
+      return res.json();
+    },
+    enabled: !!agentSlug,
+  });
+
+  // Fallback: also fetch standard skills
+  const { data, isLoading } = useQuery({
     queryKey: queryKeys.skills.available,
     queryFn: () => agentsApi.availableSkills(),
   });
-  const skills = data?.skills ?? [];
+  const fallbackSkills = data?.skills ?? [];
+
+  const skills = resources?.skills ?? fallbackSkills.map((s: any) => ({ ...s, source: s.isPaperclipManaged ? 'paperclip' : 'global' }));
+  const agentFiles = resources?.agentFiles ?? [];
+  const memoryFiles = resources?.memory ?? [];
+  const sops = resources?.sops ?? [];
+  const hooks = resources?.hooks ?? [];
+  const projectFiles = resources?.projectFiles ?? [];
+  const claudeMd = resources?.claudeMd;
+  const loading = isLoading || resourcesLoading;
+
+  const sourceLabel = (s: string) => {
+    switch(s) {
+      case 'global': return 'Global';
+      case 'project': return 'Project';
+      case 'command': return 'Command';
+      case 'paperclip': return 'Paperclip';
+      default: return s;
+    }
+  };
+
+  const sourceBadgeClass = (s: string) => {
+    switch(s) {
+      case 'global': return '';
+      case 'project': return 'bg-blue-500/15 text-blue-600 border-blue-500/30';
+      case 'command': return 'bg-violet-500/15 text-violet-600 border-violet-500/30';
+      default: return '';
+    }
+  };
+
+  function formatSize(bytes: number) {
+    if (bytes < 1024) return `${bytes}B`;
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
 
   return (
     <div className="space-y-4">
-      <div className="border border-border rounded-lg p-4 space-y-2">
-        <h3 className="text-sm font-medium">Skills</h3>
-        <p className="text-sm text-muted-foreground">
-          Skills are reusable instruction bundles the agent can invoke from its local tool environment.
-          This view shows the current instructions file and the skills currently visible to the local agent runtime.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Agent: <span className="font-mono">{agent.name}</span>
-        </p>
-        <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-            Instructions file
+      {/* Agent Files */}
+      <ResourceSection title="Agent Files" subtitle={resources?.agentDir} count={agentFiles.filter((f: any) => f.exists).length}>
+        {loading ? <p className="text-sm text-muted-foreground">Loading…</p> : agentFiles.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Không tìm thấy thư mục agent.</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {agentFiles.map((f: any) => (
+              <div
+                key={f.name}
+                className={`rounded-md border px-3 py-2 text-sm cursor-pointer hover:bg-muted/40 transition-colors ${f.exists ? 'border-border bg-muted/20' : 'border-dashed border-border/50 opacity-50'}`}
+                onClick={() => f.path && navigator.clipboard.writeText(f.path)}
+                title={f.path || 'No path'}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-xs">{f.name}</span>
+                  {f.exists && f.loadedByAgent && <Badge variant="default" className="text-[8px] px-1 py-0 h-3.5 bg-green-600">loaded</Badge>}
+                  {f.exists && !f.loadedByAgent && <Badge variant="outline" className="text-[8px] px-1 py-0 h-3.5">display</Badge>}
+                </div>
+                {f.exists && f.size != null && <span className="text-[10px] text-muted-foreground">{formatSize(f.size)}</span>}
+                {!f.exists && <span className="text-[10px] text-muted-foreground">missing</span>}
+              </div>
+            ))}
           </div>
-          <div className="font-mono break-all">
-            {instructionsPath ?? "No instructions file configured for this agent."}
-          </div>
-        </div>
+        )}
+      </ResourceSection>
 
-        <div className="space-y-2">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">
-            Available skills
+      {/* Skills */}
+      <ResourceSection title="Skills & Commands" count={skills.length}>
+        {loading ? <p className="text-sm text-muted-foreground">Loading…</p> : skills.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No skills found.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {skills.map((skill: any, i: number) => (
+              <div key={`${skill.name}-${i}`} className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm">{skill.name}</span>
+                  <Badge variant="outline" className={`text-[10px] ${sourceBadgeClass(skill.source)}`}>{sourceLabel(skill.source)}</Badge>
+                </div>
+                {skill.description && <p className="text-xs text-muted-foreground mt-1">{skill.description}</p>}
+              </div>
+            ))}
           </div>
-          {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading available skills…</p>
-          ) : error ? (
-            <p className="text-sm text-destructive">
-              {error instanceof Error ? error.message : "Failed to load available skills."}
-            </p>
-          ) : skills.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No local skills were found.</p>
-          ) : (
-            <div className="space-y-2">
-              {skills.map((skill) => (
-                <SkillRow key={skill.name} skill={skill} />
-              ))}
-            </div>
+        )}
+      </ResourceSection>
+
+      {/* Memory */}
+      <ResourceSection title="Memory" subtitle={resources?.memoryDir} count={memoryFiles.length}>
+        {memoryFiles.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Chưa có memory files cho agent này.</p>
+        ) : (
+          <div className="space-y-1">
+            {memoryFiles.map((f: any) => (
+              <CopyableFileRow key={f.name} name={f.name} path={f.path} size={f.size} />
+            ))}
+          </div>
+        )}
+      </ResourceSection>
+
+      {/* SOPs */}
+      <ResourceSection title="SOPs" count={sops.length}>
+        {sops.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Không có SOP nào.</p>
+        ) : (
+          <div className="space-y-1">
+            {sops.map((f: any) => (
+              <CopyableFileRow key={f.name} name={f.name} path={f.path} size={f.size} />
+            ))}
+          </div>
+        )}
+      </ResourceSection>
+
+      {/* Hooks */}
+      <ResourceSection title="Hooks" count={hooks.length}>
+        {hooks.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Không có hooks.</p>
+        ) : (
+          <div className="space-y-1">
+            {hooks.map((h: any) => (
+              <CopyableFileRow key={h.name} name={h.name} path={h.path} />
+            ))}
+          </div>
+        )}
+      </ResourceSection>
+
+      {/* Project Context */}
+      <ResourceSection title="Project Context">
+        <div className="space-y-1">
+          {claudeMd && (
+            <CopyableFileRow name="CLAUDE.md" path={claudeMd.path} size={claudeMd.exists ? claudeMd.size : undefined} missing={!claudeMd.exists} />
           )}
+          {projectFiles.map((f: any) => (
+            <CopyableFileRow key={f.name} name={f.name} path={f.path} size={f.exists ? f.size : undefined} missing={!f.exists} />
+          ))}
         </div>
-      </div>
+      </ResourceSection>
     </div>
   );
 }
 
-function SkillRow({ skill }: { skill: AvailableSkill }) {
+function ResourceSection({ title, subtitle, count, children }: { title: string; subtitle?: string; count?: number; children: React.ReactNode }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 px-3 py-2 space-y-1.5">
+    <div className="border border-border rounded-lg p-4 space-y-2">
       <div className="flex items-center gap-2">
-        <span className="font-mono text-sm">{skill.name}</span>
-        <Badge variant={skill.isPaperclipManaged ? "secondary" : "outline"}>
-          {skill.isPaperclipManaged ? "Paperclip" : "Local"}
-        </Badge>
+        <h3 className="text-sm font-medium">{title}</h3>
+        {count != null && <Badge variant="secondary" className="text-[10px]">{count}</Badge>}
       </div>
-      <p className="text-sm text-muted-foreground">
-        {skill.description || "No description available."}
-      </p>
+      {subtitle && (
+        <p
+          className="text-[10px] text-muted-foreground font-mono break-all cursor-pointer hover:text-foreground transition-colors"
+          onClick={() => navigator.clipboard.writeText(subtitle)}
+          title="Click to copy path"
+        >{subtitle}</p>
+      )}
+      {children}
+    </div>
+  );
+}
+
+function CopyableFileRow({ name, path, size, missing }: { name: string; path?: string; size?: number; missing?: boolean }) {
+  function formatSize(bytes: number) {
+    if (bytes < 1024) return `${bytes}B`;
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
+  return (
+    <div
+      className={`flex items-center justify-between rounded-md border px-3 py-1.5 text-xs cursor-pointer hover:bg-muted/40 transition-colors ${missing ? 'border-dashed opacity-50' : 'border-border bg-muted/20'}`}
+      onClick={() => path && navigator.clipboard.writeText(path)}
+      title={path || name}
+    >
+      <span className="font-mono truncate">{name}</span>
+      <span className="text-muted-foreground shrink-0 ml-2">
+        {missing ? 'missing' : size != null ? formatSize(size) : ''}
+      </span>
     </div>
   );
 }

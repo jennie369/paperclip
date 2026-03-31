@@ -25,6 +25,11 @@ import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRa
 import { PageSkeleton } from "../components/PageSkeleton";
 import type { Agent, Issue } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
+import { ChannelStatusCards } from "@/components/ops/ChannelStatusCards";
+import { AgentStatusGrid } from "@/components/ops/AgentStatusGrid";
+import { CRMPipelineCard } from "@/components/ops/CRMPipelineCard";
+import { ActivityFeed } from "@/components/ops/ActivityFeed";
+import { CapabilitiesGrid } from "@/components/ops/CapabilitiesGrid";
 
 function getRecentIssues(issues: Issue[]): Issue[] {
   return [...issues]
@@ -54,6 +59,8 @@ export function Dashboard() {
     queryKey: queryKeys.dashboard(selectedCompanyId!),
     queryFn: () => dashboardApi.summary(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+    retry: 1,
+    staleTime: 30_000,
   });
 
   const { data: activity } = useQuery({
@@ -179,7 +186,7 @@ export function Dashboard() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && !error) {
     return <PageSkeleton variant="dashboard" />;
   }
 
@@ -206,128 +213,96 @@ export function Dashboard() {
         </div>
       )}
 
+      {/* Operations Center — Channel + Agents + CRM + Activity */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="rounded-xl border bg-card p-4">
+          <ChannelStatusCards />
+        </div>
+        <div className="rounded-xl border bg-card p-4">
+          <AgentStatusGrid />
+        </div>
+      </div>
+      {/* Capabilities Grid — ngay sau Kênh Chat + Agents */}
+      <div className="rounded-xl border bg-card p-4">
+        <CapabilitiesGrid />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="rounded-xl border bg-card p-4">
+          <CRMPipelineCard />
+        </div>
+        <div className="rounded-xl border bg-card p-4">
+          <ActivityFeed />
+        </div>
+      </div>
+
       <ActiveAgentsPanel companyId={selectedCompanyId!} />
 
-      {data && (
-        <>
-          {data.budgets.activeIncidents > 0 ? (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-500/20 bg-[linear-gradient(180deg,rgba(255,80,80,0.12),rgba(255,255,255,0.02))] px-4 py-3">
-              <div className="flex items-start gap-2.5">
-                <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
-                <div>
-                  <p className="text-sm font-medium text-red-50">
-                    {data.budgets.activeIncidents} active budget incident{data.budgets.activeIncidents === 1 ? "" : "s"}
-                  </p>
-                  <p className="text-xs text-red-100/70">
-                    {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects paused · {data.budgets.pendingApprovals} pending budget approvals
-                  </p>
-                </div>
-              </div>
-              <Link to="/costs" className="text-sm underline underline-offset-2 text-red-100">
-                Open budgets
-              </Link>
+      {data?.budgets?.activeIncidents ? (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-500/20 bg-[linear-gradient(180deg,rgba(255,80,80,0.12),rgba(255,255,255,0.02))] px-4 py-3">
+          <div className="flex items-start gap-2.5">
+            <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
+            <div>
+              <p className="text-sm font-medium text-red-50">
+                {data.budgets.activeIncidents} active budget incident{data.budgets.activeIncidents === 1 ? "" : "s"}
+              </p>
+              <p className="text-xs text-red-100/70">
+                {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects paused · {data.budgets.pendingApprovals} pending budget approvals
+              </p>
             </div>
-          ) : null}
-
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
-            <MetricCard
-              icon={Bot}
-              value={data.agents.active + data.agents.running + data.agents.paused + data.agents.error}
-              label="Agents Enabled"
-              to="/agents"
-              description={
-                <span>
-                  {data.agents.running} running{", "}
-                  {data.agents.paused} paused{", "}
-                  {data.agents.error} errors
-                </span>
-              }
-            />
-            <MetricCard
-              icon={CircleDot}
-              value={data.tasks.inProgress}
-              label="Tasks In Progress"
-              to="/issues"
-              description={
-                <span>
-                  {data.tasks.open} open{", "}
-                  {data.tasks.blocked} blocked
-                </span>
-              }
-            />
-            <MetricCard
-              icon={DollarSign}
-              value={formatCents(data.costs.monthSpendCents)}
-              label="Month Spend"
-              to="/costs"
-              description={
-                <span>
-                  {data.costs.monthBudgetCents > 0
-                    ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
-                </span>
-              }
-            />
-            <MetricCard
-              icon={ShieldCheck}
-              value={data.pendingApprovals + data.budgets.pendingApprovals}
-              label="Pending Approvals"
-              to="/approvals"
-              description={
-                <span>
-                  {data.budgets.pendingApprovals > 0
-                    ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
-                    : "Awaiting board review"}
-                </span>
-              }
-            />
           </div>
+          <Link to="/costs" className="text-sm underline underline-offset-2 text-red-100">
+            Open budgets
+          </Link>
+        </div>
+      ) : null}
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <ChartCard title="Run Activity" subtitle="Last 14 days">
-              <RunActivityChart runs={runs ?? []} />
-            </ChartCard>
-            <ChartCard title="Issues by Priority" subtitle="Last 14 days">
-              <PriorityChart issues={issues ?? []} />
-            </ChartCard>
-            <ChartCard title="Issues by Status" subtitle="Last 14 days">
-              <IssueStatusChart issues={issues ?? []} />
-            </ChartCard>
-            <ChartCard title="Success Rate" subtitle="Last 14 days">
-              <SuccessRateChart runs={runs ?? []} />
-            </ChartCard>
-          </div>
+      <div className="grid grid-cols-2 xl:grid-cols-2 gap-1 sm:gap-2">
+        <MetricCard
+          icon={Bot}
+          value={(data?.agents?.active ?? 0) + (data?.agents?.running ?? 0) + (data?.agents?.paused ?? 0) + (data?.agents?.error ?? 0) || (agents?.length ?? 0)}
+          label="Agents Enabled"
+          to="/agents"
+          description={
+            <span>
+              {data?.agents?.running ?? 0} running{", "}
+              {data?.agents?.paused ?? 0} paused{", "}
+              {data?.agents?.error ?? 0} errors
+            </span>
+          }
+        />
+        <MetricCard
+          icon={CircleDot}
+          value={data?.tasks?.inProgress ?? 0}
+          label="Tasks In Progress"
+          to="/issues"
+          description={
+            <span>
+              {data?.tasks?.open ?? 0} open{", "}
+              {data?.tasks?.blocked ?? 0} blocked
+            </span>
+          }
+        />
+      </div>
 
-          <PluginSlotOutlet
-            slotTypes={["dashboardWidget"]}
-            context={{ companyId: selectedCompanyId }}
-            className="grid gap-4 md:grid-cols-2"
-            itemClassName="rounded-lg border bg-card p-4 shadow-sm"
-          />
+      <div className="grid grid-cols-2 gap-4">
+        <ChartCard title="Run Activity" subtitle="Last 14 days">
+          <RunActivityChart runs={runs ?? []} />
+        </ChartCard>
+        <ChartCard title="Issues by Priority" subtitle="Last 14 days">
+          <PriorityChart issues={issues ?? []} />
+        </ChartCard>
+      </div>
 
+      <PluginSlotOutlet
+        slotTypes={["dashboardWidget"]}
+        context={{ companyId: selectedCompanyId }}
+        className="grid gap-4 md:grid-cols-2"
+        itemClassName="rounded-lg border bg-card p-4 shadow-sm"
+      />
+
+          {/* Recent Tasks */}
           <div className="grid md:grid-cols-2 gap-4">
-            {/* Recent Activity */}
-            {recentActivity.length > 0 && (
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                  Recent Activity
-                </h3>
-                <div className="border border-border divide-y divide-border overflow-hidden">
-                  {recentActivity.map((event) => (
-                    <ActivityRow
-                      key={event.id}
-                      event={event}
-                      agentMap={agentMap}
-                      entityNameMap={entityNameMap}
-                      entityTitleMap={entityTitleMap}
-                      className={animatedActivityIds.has(event.id) ? "activity-row-enter" : undefined}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Recent Tasks */}
             <div className="min-w-0">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
                 Recent Tasks
@@ -379,10 +354,48 @@ export function Dashboard() {
                 </div>
               )}
             </div>
+
+            {/* Recent Activity */}
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                Recent Activity
+              </h3>
+              {recentActivity.length === 0 ? (
+                <div className="border border-border p-4">
+                  <p className="text-sm text-muted-foreground">No activity yet.</p>
+                </div>
+              ) : (
+                <div className="border border-border divide-y divide-border overflow-hidden">
+                  {recentActivity.map((event) => {
+                    const entityLink = event.entityType === "issue" ? `/issues/${entityNameMap.get(`issue:${event.entityId}`) ?? event.entityId}`
+                      : event.entityType === "agent" ? `/agents/${event.entityId}`
+                      : event.entityType === "project" ? `/projects/${event.entityId}`
+                      : event.entityType === "heartbeat_run" ? `/agents/${event.agentId}`
+                      : null;
+                    const entityLabel = entityNameMap.get(`${event.entityType}:${event.entityId}`) ?? event.entityType;
+                    return (
+                      <Link
+                        key={event.id}
+                        to={entityLink ?? "/activity"}
+                        className={`px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block ${animatedActivityIds.has(event.id) ? "bg-accent/30" : ""}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xs font-mono text-muted-foreground shrink-0">{event.actorType === "agent" ? "AG" : "BO"}</span>
+                            <span className="truncate">
+                              {event.actorType === "agent" ? "Agent" : "Board"} {event.action?.replace(/_/g, ".")} <strong>{entityLabel}</strong>
+                            </span>
+                          </div>
+                          <span className="text-xs text-muted-foreground shrink-0">{timeAgo(event.createdAt)}</span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
-        </>
-      )}
     </div>
   );
 }

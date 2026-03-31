@@ -175,9 +175,47 @@ export const warRoomApi = {
         .select()
         .single();
       if (error) throw error;
+
+      // Trigger agent wakeups for all members in this channel
+      if (data) {
+        void this._wakeWarRoomAgents(payload.channelId, data.id, payload.content);
+      }
+
       return data;
     } catch {
       return null;
+    }
+  },
+
+  /** Wake CEO agent only — CEO delegates to other agents as needed.
+   *  Previous approach woke ALL channel members (23 agents!) which exhausted resources. */
+  async _wakeWarRoomAgents(channelId: string, messageId: string, content: string): Promise<void> {
+    try {
+      // Only wake CEO agent — prevents resource exhaustion from mass spawning
+      const { data: ceo } = await getSupabase()
+        .from("agents")
+        .select("id, slug, company_id")
+        .eq("role", "ceo")
+        .not("status", "eq", "terminated")
+        .limit(1)
+        .single();
+
+      if (!ceo) return;
+
+      const { agentsApi } = await import("./agents");
+
+      await agentsApi.wakeup(
+        ceo.id,
+        {
+          source: "on_demand",
+          triggerDetail: "system",
+          reason: `War Room #${channelId}: ${content.slice(0, 100)}`,
+          payload: { channelId, messageId, content: content.slice(0, 500) },
+        },
+        ceo.company_id,
+      );
+    } catch {
+      // War Room trigger is best-effort
     }
   },
 
@@ -222,8 +260,8 @@ export const warRoomApi = {
 
   // ─── Channel CRUD ─────────────────────────────────────────
 
-  async createChannel(params: CreateChannelParams): Promise<WarRoomChannel> {
-    const { members, ...channelData } = params;
+  async createChannel(params: CreateChannelParams & { agentNames?: Record<string, string> }): Promise<WarRoomChannel> {
+    const { members, agentNames, ...channelData } = params;
     const { data: channel, error } = await getSupabase()
       .from("war_room_channels")
       .insert(channelData)
@@ -235,18 +273,23 @@ export const warRoomApi = {
       const rows = members.map((slug) => ({
         channel_id: channel.id,
         agent_slug: slug,
+        agent_name: agentNames?.[slug] ?? slug,
         role: "member",
       }));
       await getSupabase().from("war_room_members").insert(rows);
     }
 
+    // Welcome message with agent names
+    const memberNames = members.map((s) => agentNames?.[s] ?? s).join(", ");
     await getSupabase().from("war_room_messages").insert({
       channel_id: channel.id,
       sender_type: "system",
       sender_id: "system",
       sender_name: "Hệ thống",
       message_type: "status",
-      content: `Phòng #${params.name} đã được tạo. ${members.length} agents tham gia.`,
+      content: members.length > 0
+        ? `Phòng #${params.name} đã được tạo. ${members.length} agents tham gia: ${memberNames}.`
+        : `Phòng #${params.name} đã được tạo.`,
       priority: 3,
     });
 
@@ -331,9 +374,18 @@ export const warRoomApi = {
     try {
       const { data } = await getSupabase()
         .from("agents")
-        .select("id, name, slug")
+        .select("id, name, role")
+        .not("status", "eq", "terminated")
         .order("name", { ascending: true });
-      return data ?? [];
+      // Paperclip uses role as slug for known roles (ceo, cto, cmo, designer, researcher)
+      // For "general" role agents, slugify the name (e.g., "Sales Closer" → "sales-closer")
+      return (data ?? []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        slug: (a.role && a.role !== "general")
+          ? a.role
+          : a.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+      }));
     } catch {
       return [];
     }

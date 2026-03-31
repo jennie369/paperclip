@@ -1,0 +1,141 @@
+// Channel-Agent Auto-Reply — Message Bus
+// EventEmitter + Supabase persistence for inbound/outbound message routing
+
+import { EventEmitter } from 'node:events';
+import { supabase } from './zalo-personal/supabase.js';
+import type { InboundMessage, OutboundMessage, PeerKind } from './types.js';
+
+class MessageBus extends EventEmitter {
+  private realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
+
+  constructor() {
+    super();
+    this.setMaxListeners(50);
+  }
+
+  /**
+   * Publish an inbound message: persist to channel_pending_messages, then emit locally.
+   */
+  async publishInbound(msg: InboundMessage): Promise<string | null> {
+    const dedupeKey = msg.dedupeKey
+      || `${msg.channel}:${msg.chatId}:${msg.senderId}:${msg.timestamp.getTime()}`;
+
+    const sessionKey = `${msg.channel}:${msg.chatId}:${msg.senderId}`;
+
+    const { data, error } = await supabase.from('channel_pending_messages').insert({
+      channel_name: msg.channel,
+      thread_id: msg.chatId,
+      thread_type: msg.peerKind === 'group' ? 'group' : 'dm',
+      from_uid: msg.senderId,
+      sender_name: msg.senderName,
+      message_id: msg.id,
+      body: msg.content,
+      content_type: msg.contentType,
+      media: msg.media?.map(m => m.url || m.path).filter(Boolean) || null,
+      metadata: msg.metadata || {},
+      status: 'pending',
+      peer_kind: msg.peerKind,
+      session_key: sessionKey,
+      dedupe_key: dedupeKey,
+      ts: msg.timestamp.toISOString(),
+    }).select('id').single();
+
+    if (error) {
+      console.error('[Bus] Failed to persist inbound message:', error.message);
+      return null;
+    }
+
+    this.emit('inbound', msg);
+    return data?.id || null;
+  }
+
+  /**
+   * Publish an outbound message: emit for channel dispatch.
+   */
+  publishOutbound(msg: OutboundMessage): void {
+    this.emit('outbound', msg);
+  }
+
+  /**
+   * Subscribe to Supabase Realtime for new pending messages.
+   * Useful when multiple server instances need to coordinate.
+   */
+  subscribeRealtime(): void {
+    if (this.realtimeChannel) return;
+
+    this.realtimeChannel = supabase
+      .channel('channel-pending-inserts')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'channel_pending_messages',
+          filter: 'status=eq.pending',
+        },
+        (payload) => {
+          const row = payload.new as Record<string, any>;
+          const msg: InboundMessage = {
+            id: row.message_id || row.id,
+            channel: row.channel_name,
+            channelType: 'zalo_personal', // Will be resolved by consumer
+            chatId: row.thread_id,
+            senderId: row.from_uid,
+            senderName: row.sender_name || row.from_uid,
+            content: row.body || '',
+            contentType: (row.content_type || 'text') as InboundMessage['contentType'],
+            peerKind: (row.peer_kind || 'direct') as PeerKind,
+            metadata: row.metadata || {},
+            timestamp: new Date(row.ts || row.created_at),
+            dedupeKey: row.dedupe_key,
+          };
+          this.emit('inbound:realtime', msg, row.id);
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[Bus] Realtime subscription active for channel_pending_messages');
+        }
+      });
+  }
+
+  /**
+   * Unsubscribe from Supabase Realtime.
+   */
+  async unsubscribeRealtime(): Promise<void> {
+    if (this.realtimeChannel) {
+      await supabase.removeChannel(this.realtimeChannel);
+      this.realtimeChannel = null;
+      console.log('[Bus] Realtime subscription removed');
+    }
+  }
+
+  /**
+   * Mark a pending message as handled.
+   */
+  async markHandled(
+    pendingId: string,
+    handledBy: string,
+    status: 'handled' | 'failed' | 'skipped' = 'handled',
+    skipReason?: string
+  ): Promise<void> {
+    const updatePayload: Record<string, any> = {
+      status,
+      handled_by: handledBy,
+      handled_at: new Date().toISOString(),
+    };
+    if (skipReason) updatePayload.skip_reason = skipReason;
+
+    const { error } = await supabase
+      .from('channel_pending_messages')
+      .update(updatePayload)
+      .eq('id', pendingId);
+
+    if (error) {
+      console.error('[Bus] Failed to mark message handled:', error.message);
+    }
+  }
+}
+
+// Singleton instance
+export const bus = new MessageBus();

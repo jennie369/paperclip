@@ -12,11 +12,17 @@ description: >
 
 # PARA Memory Files
 
-Persistent, file-based memory organized by Tiago Forte's PARA method. Three layers: a knowledge graph, daily notes, and tacit knowledge. All paths are relative to `$AGENT_HOME`.
+Persistent, file-based memory organized by Tiago Forte's PARA method. Three layers: a knowledge graph, daily notes, and tacit knowledge.
+
+**IMPORTANT: All paths are relative to PROJECT ROOT `memory/` folder, NOT `$AGENT_HOME`.**
+- Knowledge graph: `memory/knowledge/` (replaces `$AGENT_HOME/life/`)
+- Daily notes: `memory/agents/{role}/daily/` (replaces `$AGENT_HOME/memory/`)
+- Tacit knowledge: `memory/agents/{role}/MEMORY.md` (replaces `$AGENT_HOME/MEMORY.md`)
+- Full rules: `memory/MEMORY_RULES.md`
 
 ## Three Memory Layers
 
-### Layer 1: Knowledge Graph (`$AGENT_HOME/life/` -- PARA)
+### Layer 1: Knowledge Graph (`memory/knowledge/` -- PARA)
 
 Entity-based storage. Each entity gets a folder with two tiers:
 
@@ -24,17 +30,15 @@ Entity-based storage. Each entity gets a folder with two tiers:
 2. `items.yaml` -- atomic facts, load on demand.
 
 ```text
-$AGENT_HOME/life/
+memory/knowledge/
   projects/          # Active work with clear goals/deadlines
     <name>/
       summary.md
       items.yaml
-  areas/             # Ongoing responsibilities, no end date
-    people/<name>/
-    companies/<name>/
+  people/            # People entities
+    <name>/
   resources/         # Reference material, topics of interest
     <topic>/
-  archives/          # Inactive items from the other three
   index.md
 ```
 
@@ -50,7 +54,7 @@ $AGENT_HOME/life/
 - Save durable facts immediately to `items.yaml`.
 - Weekly: rewrite `summary.md` from active facts.
 - Never delete facts. Supersede instead (`status: superseded`, add `superseded_by`).
-- When an entity goes inactive, move its folder to `$AGENT_HOME/life/archives/`.
+- When an entity goes inactive, move its folder to `memory/knowledge/archives/`.
 
 **When to create an entity:**
 
@@ -61,14 +65,15 @@ $AGENT_HOME/life/
 
 For the atomic fact YAML schema and memory decay rules, see [references/schemas.md](references/schemas.md).
 
-### Layer 2: Daily Notes (`$AGENT_HOME/memory/YYYY-MM-DD.md`)
+### Layer 2: Daily Notes (`memory/agents/{role}/daily/YYYY-MM-DD.md`)
 
 Raw timeline of events -- the "when" layer.
 
 - Write continuously during conversations.
 - Extract durable facts to Layer 1 during heartbeats.
+- Also append summary to `memory/today.md` (shared across all agents).
 
-### Layer 3: Tacit Knowledge (`$AGENT_HOME/MEMORY.md`)
+### Layer 3: Tacit Knowledge (`memory/agents/{role}/MEMORY.md`)
 
 How the user operates -- patterns, preferences, lessons learned.
 
@@ -80,7 +85,7 @@ How the user operates -- patterns, preferences, lessons learned.
 Memory does not survive session restarts. Files do.
 
 - Want to remember something -> WRITE IT TO A FILE.
-- "Remember this" -> update `$AGENT_HOME/memory/YYYY-MM-DD.md` or the relevant entity file.
+- "Remember this" -> update `memory/agents/{role}/daily/YYYY-MM-DD.md` or the relevant entity file in `memory/knowledge/`.
 - Learn a lesson -> update AGENTS.md, TOOLS.md, or the relevant skill file.
 - Make a mistake -> document it so future-you does not repeat it.
 - On-disk text files are always better than holding it in temporary context.
@@ -95,7 +100,7 @@ qmd search "specific phrase"              # BM25 keyword search
 qmd vsearch "conceptual question"         # Pure vector similarity
 ```
 
-Index your personal folder: `qmd index $AGENT_HOME`
+Index the memory folder: `qmd index memory/`
 
 Vectors + BM25 + reranking finds things even when the wording differs.
 

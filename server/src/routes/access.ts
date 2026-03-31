@@ -1699,6 +1699,136 @@ export function accessRoutes(
     res.json({ skills: listAvailableSkills() });
   });
 
+  /**
+   * GET /skills/agent-resources/:slug
+   * Returns ALL resources for an agent: skills, commands, memory, SOPs, hooks, agent files, CLAUDE.md
+   */
+  router.get("/skills/agent-resources/:slug", (req, res) => {
+    const slug = req.params.slug;
+    const projectRoot = process.env.PROJECT_ROOT || "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner";
+    const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+
+    const result: Record<string, any> = {};
+
+    // 1. Skills — from ALL sources
+    const allSkills: Array<{ name: string; source: string; description: string; path: string }> = [];
+
+    // ~/.claude/skills/
+    const claudeSkillsDir = path.join(homeDir, ".claude", "skills");
+    try {
+      for (const entry of fs.readdirSync(claudeSkillsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        const skillMd = path.join(claudeSkillsDir, entry.name, "SKILL.md");
+        let desc = "";
+        try { desc = parseSkillFrontmatter(fs.readFileSync(skillMd, "utf8")).description; } catch {}
+        allSkills.push({ name: entry.name, source: "global", description: desc, path: skillMd });
+      }
+    } catch {}
+
+    // skills-store/
+    const skillsStoreDir = path.join(projectRoot, "skills-store");
+    try {
+      for (const entry of fs.readdirSync(skillsStoreDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        const skillMd = path.join(skillsStoreDir, entry.name, "SKILL.md");
+        let desc = "";
+        try { desc = parseSkillFrontmatter(fs.readFileSync(skillMd, "utf8")).description; } catch {}
+        allSkills.push({ name: entry.name, source: "project", description: desc, path: skillMd });
+      }
+    } catch {}
+
+    // ~/.claude/commands/
+    const commandsDir = path.join(homeDir, ".claude", "commands");
+    try {
+      for (const entry of fs.readdirSync(commandsDir)) {
+        if (!entry.endsWith(".md")) continue;
+        const name = entry.replace(".md", "");
+        allSkills.push({ name: `/${name}`, source: "command", description: "", path: path.join(commandsDir, entry) });
+      }
+    } catch {}
+
+    result.skills = allSkills;
+
+    // 2. Agent files (SOUL.md, AGENTS.md, TOOLS.md, HEARTBEAT.md, CLAUDE.md)
+    const agentDir = path.join(projectRoot, "agents", slug);
+    const loadedByAgent = ["SOUL.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md"]; // Files router.ts buildSystemPrompt() reads
+    const agentFiles: Array<{ name: string; exists: boolean; path: string; size?: number; loadedByAgent: boolean }> = [];
+    for (const fname of ["SOUL.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md", "CLAUDE.md"]) {
+      const fpath = path.join(agentDir, fname);
+      const exists = fs.existsSync(fpath);
+      agentFiles.push({
+        name: fname,
+        exists,
+        path: fpath,
+        size: exists ? fs.statSync(fpath).size : undefined,
+        loadedByAgent: loadedByAgent.includes(fname),
+      });
+    }
+    result.agentFiles = agentFiles;
+    result.agentDir = agentDir;
+
+    // 3. Memory — agent-specific
+    const memoryDir = path.join(projectRoot, "memory", "agents", slug);
+    const memoryFiles: Array<{ name: string; path: string; size: number }> = [];
+    try {
+      const walkDir = (dir: string, prefix = "") => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = path.join(dir, entry.name);
+          const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) {
+            walkDir(fullPath, relPath);
+          } else {
+            memoryFiles.push({ name: relPath, path: fullPath, size: fs.statSync(fullPath).size });
+          }
+        }
+      };
+      if (fs.existsSync(memoryDir)) walkDir(memoryDir);
+    } catch {}
+    result.memory = memoryFiles;
+    result.memoryDir = memoryDir;
+
+    // 4. SOPs
+    const sopsDir = path.join(projectRoot, "memory", "sops");
+    const sops: Array<{ name: string; path: string; size: number }> = [];
+    try {
+      for (const entry of fs.readdirSync(sopsDir)) {
+        if (!entry.endsWith(".md")) continue;
+        const fpath = path.join(sopsDir, entry);
+        sops.push({ name: entry, path: fpath, size: fs.statSync(fpath).size });
+      }
+    } catch {}
+    result.sops = sops;
+
+    // 5. Hooks
+    const hooksDir = path.join(projectRoot, ".claude", "hooks");
+    const hooks: Array<{ name: string; path: string }> = [];
+    try {
+      for (const entry of fs.readdirSync(hooksDir)) {
+        hooks.push({ name: entry, path: path.join(hooksDir, entry) });
+      }
+    } catch {}
+    result.hooks = hooks;
+
+    // 6. Project CLAUDE.md
+    const claudeMdPath = path.join(projectRoot, "CLAUDE.md");
+    result.claudeMd = {
+      exists: fs.existsSync(claudeMdPath),
+      path: claudeMdPath,
+      size: fs.existsSync(claudeMdPath) ? fs.statSync(claudeMdPath).size : 0,
+    };
+
+    // 7. Key project files
+    const keyFiles = [
+      { name: "memory/today.md", path: path.join(projectRoot, "memory", "today.md") },
+      { name: "memory/patterns.md", path: path.join(projectRoot, "memory", "patterns.md") },
+      { name: "memory/INDEX.md", path: path.join(projectRoot, "memory", "INDEX.md") },
+      { name: "memory/active-tasks.json", path: path.join(projectRoot, "memory", "active-tasks.json") },
+    ].map(f => ({ ...f, exists: fs.existsSync(f.path), size: fs.existsSync(f.path) ? fs.statSync(f.path).size : 0 }));
+    result.projectFiles = keyFiles;
+
+    res.json(result);
+  });
+
   router.get("/skills/index", (_req, res) => {
     res.json({
       skills: [

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
+import { RoomMembersSelect } from "./RoomMembersSelect";
 import {
   Hash, Folder, Target, Lock, X, Plus,
   Megaphone, AlertTriangle, BookOpen, Users, Zap,
-  Check, ChevronDown, Loader2, Settings,
+  ChevronDown, Loader2, Settings,
 } from "lucide-react";
 import { warRoomApi, type CreateChannelParams } from "../../api/warRoom";
 
@@ -131,6 +132,13 @@ export function CreateRoomModal({
     setLoading(true);
     setError("");
     try {
+      // Build slug→name map for display
+      const agentNames: Record<string, string> = {};
+      for (const s of selectedAgents) {
+        const a = agents.find((ag) => ag.slug === s);
+        if (a) agentNames[s] = a.name;
+      }
+
       const result = await warRoomApi.createChannel({
         name: slug,
         display_name: `#${slug}`,
@@ -150,6 +158,7 @@ export function CreateRoomModal({
           max_messages: 200,
         },
         members: selectedAgents,
+        agentNames,
       });
       onCreated(result.id);
       resetForm();
@@ -324,44 +333,12 @@ export function CreateRoomModal({
           )}
 
           {/* Agent members */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Agents tham gia</label>
-              <button
-                onClick={() => setSelectedAgents(agents.map((a) => a.slug))}
-                className="text-[10px] text-primary hover:underline bg-transparent border-none cursor-pointer"
-              >
-                Chọn tất cả
-              </button>
-            </div>
-            <div className="border border-border rounded-lg max-h-40 overflow-y-auto">
-              {agents.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-muted-foreground">Chưa có agents</div>
-              ) : (
-                agents.map((agent) => (
-                  <button
-                    key={agent.slug}
-                    onClick={() => toggleAgent(agent.slug)}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent transition-colors cursor-pointer bg-transparent border-none text-left text-foreground ${
-                      selectedAgents.includes(agent.slug) ? "bg-primary/5" : ""
-                    }`}
-                  >
-                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                      selectedAgents.includes(agent.slug)
-                        ? "bg-primary border-primary"
-                        : "border-border"
-                    }`}>
-                      {selectedAgents.includes(agent.slug) && <Check size={10} className="text-white" />}
-                    </div>
-                    <span>{agent.name}</span>
-                  </button>
-                ))
-              )}
-            </div>
-            <div className="text-[10px] text-muted-foreground mt-1">
-              Đã chọn: {selectedAgents.length}/{agents.length} agents
-            </div>
-          </div>
+          <RoomMembersSelect
+            agents={agents}
+            selectedAgents={selectedAgents}
+            onToggle={toggleAgent}
+            onSelectAll={() => setSelectedAgents(agents.map((a) => a.slug))}
+          />
 
           {/* Settings */}
           <div className="space-y-2">
