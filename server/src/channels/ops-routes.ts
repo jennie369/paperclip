@@ -730,6 +730,18 @@ router.post('/workflows/:id/run', async (req, res) => {
 // PHASE 5: PLANNER BOARD ENDPOINTS
 // ═══════════════════════════════════════════════════════
 
+// Map free-text topic → valid cc_scripts pillar value
+function topicToPillar(topic: string): string {
+  const t = topic.toLowerCase();
+  if (/trading|scanner|kỹ thuật|đầu tư|crypto|tài chính|tiền/.test(t)) return 'trading';
+  if (/tâm linh|spiritual|crystal|năng lượng|ritual|chakra/.test(t)) return 'spiritual';
+  if (/sức khỏe|wellness|ngủ|thiền|meditation|yoga|thể dục/.test(t)) return 'wellness';
+  if (/lifestyle|cuộc sống|phong cách|daily|routine/.test(t)) return 'lifestyle';
+  if (/khóa học|course|latc|tmt|education|học|mindset/.test(t)) return 'latc_money';
+  if (/cộng đồng|community|forum|kết nối/.test(t)) return 'community';
+  return 'integration';
+}
+
 // GET /content-pipeline/planner?start=YYYY-MM-DD&end=YYYY-MM-DD
 router.get('/content-pipeline/planner', async (req, res) => {
   const { start, end, plan_id } = req.query as Record<string, string>;
@@ -844,11 +856,12 @@ router.post('/content-pipeline/planner/parse-plan', async (req, res) => {
     if (/trading|kỹ thuật|scanner|app|sản phẩm|education|gemral/.test(topic)) account = 'page_gemral';
     else if (/tình yêu|ritual|crystal|spiritual|7 ngày|vision/.test(topic)) account = 'profile_jennie';
 
+    const rawPillar = row['Pillar'] || row['Chủ đề'] || '';
     return {
       title: row['Tiêu đề'] || row['Tieu de'] || row['Chủ đề'] || 'Không có tiêu đề',
       content_type: 'social_post',
       track: 'wealth',
-      pillar: row['Chủ đề'] || row['Pillar'] || 'integration',
+      pillar: topicToPillar(rawPillar),
       persona: 'jennie_mentor',
       writing_mode: 'mode_1_calm',
       status: 'topic',
@@ -1027,7 +1040,7 @@ router.post('/content-pipeline/planner/import', async (req, res) => {
       title: row['Tiêu đề'] || row['Chủ đề'] || 'Không tiêu đề',
       content_type: 'social_post',
       track: 'wealth',
-      pillar: row['Chủ đề'] || 'integration',
+      pillar: topicToPillar(row['Pillar'] || row['Chủ đề'] || ''),
       persona: 'jennie_mentor',
       writing_mode: 'mode_1_calm',
       status: 'topic',
