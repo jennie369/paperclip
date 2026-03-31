@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Outlet } from '@/lib/router';
 import { Moon, Sun } from 'lucide-react';
+import { ToastContainer } from '@gem/ui';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +41,7 @@ export default function CCLayout() {
           </button>
         </div>
         <Outlet />
+        <ToastContainer position="bottom-right" />
       </div>
     </QueryClientProvider>
   );

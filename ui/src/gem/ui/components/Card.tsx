@@ -34,7 +34,7 @@ export function Card({
       className={cn(
         baseClass,
         paddingMap[padding],
-        hoverable && 'hover:shadow-glass-hover hover:scale-[1.02] cursor-pointer',
+        hoverable && 'hover:shadow-glass-hover cursor-pointer',
         onClick && 'cursor-pointer',
         className,
       )}

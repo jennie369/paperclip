@@ -150,8 +150,10 @@ async function publishToFacebook(
 // ─── Instagram Publish ───────────────────────────────────────────
 async function publishToInstagram(content: string, imageUrls?: string[]): Promise<{ id: string; url: string }> {
   const igAccountId = process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
-  const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-  if (!igAccountId || !token) throw new Error('Thiếu INSTAGRAM_BUSINESS_ACCOUNT_ID hoặc FACEBOOK_PAGE_ACCESS_TOKEN');
+  const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN
+    ?? process.env.FB_PAGE_TOKEN_JENNIE; // fallback to Jennie page token
+  if (!igAccountId) throw new Error('Chưa cấu hình INSTAGRAM_BUSINESS_ACCOUNT_ID trong .env — liên hệ admin để thêm.');
+  if (!token) throw new Error('Thiếu FACEBOOK_PAGE_ACCESS_TOKEN hoặc FB_PAGE_TOKEN_JENNIE trong .env.');
   if (!imageUrls || imageUrls.length === 0) throw new Error('Instagram yêu cầu ít nhất 1 hình ảnh.');
 
   const graphUrl = `https://graph.facebook.com/v21.0/${igAccountId}`;
@@ -187,7 +189,7 @@ async function publishToInstagram(content: string, imageUrls?: string[]): Promis
 async function publishToThreads(content: string, imageUrls?: string[]): Promise<{ id: string; url: string }> {
   const userId = process.env.THREADS_USER_ID;
   const token = process.env.THREADS_ACCESS_TOKEN;
-  if (!userId || !token) throw new Error('Thiếu THREADS_USER_ID hoặc THREADS_ACCESS_TOKEN trong .env');
+  if (!userId || !token) throw new Error('Chưa cấu hình Threads. Thêm THREADS_USER_ID và THREADS_ACCESS_TOKEN vào .env.');
 
   const graphUrl = `https://graph.threads.net/v1.0/${userId}`;
   const containerBody: Record<string, string> = {
