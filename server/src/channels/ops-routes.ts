@@ -420,25 +420,38 @@ router.post('/content-pipeline/schedule', async (req, res) => {
     const { script_id, scheduled_at, account } = req.body;
     if (!script_id || !scheduled_at) return res.status(400).json({ error: 'script_id và scheduled_at là bắt buộc' });
 
-    // Lấy script để lấy caption/body
-    const { data: script } = await supabase.from('cc_scripts').select('title, body, caption, image_urls').eq('id', script_id).single();
+    const dt = new Date(scheduled_at);
+    const scheduledDate = dt.toISOString().split('T')[0]; // YYYY-MM-DD
+    const scheduledTime = dt.toTimeString().slice(0, 8);   // HH:MM:SS
 
-    // Tạo calendar event
+    // Lấy script
+    const { data: script } = await supabase.from('cc_scripts').select('title, body, image_urls, content_type, track, pillar, persona').eq('id', script_id).single();
+
+    // Tạo calendar event — đúng schema cc_calendar_events
     const { data, error } = await supabase.from('cc_calendar_events').insert({
       script_id,
       title: script?.title || 'Bài đăng',
-      caption: script?.body || script?.caption || '',
-      image_urls: script?.image_urls || [],
-      scheduled_at,
-      account: account || 'profile_jennie',
+      description: script?.body?.slice(0, 300) || '',
+      content_type: script?.content_type || 'social_post',
+      track: script?.track || null,
+      pillar: script?.pillar || null,
+      persona: script?.persona || null,
+      scheduled_date: scheduledDate,
+      scheduled_time: scheduledTime,
       status: 'scheduled',
-      created_at: new Date().toISOString(),
+      event_type: 'post',
+      platforms: [account || 'profile_jennie'],
+      metadata: { account, image_urls: script?.image_urls || [] },
     }).select().single();
 
     if (error) throw error;
 
-    // Cập nhật trạng thái script → scheduled
-    await supabase.from('cc_scripts').update({ status: 'scheduled', posted_account: account, posted_time_slot: scheduled_at }).eq('id', script_id);
+    // Cập nhật script: status + scheduled_at + posted_account
+    await supabase.from('cc_scripts').update({
+      status: 'scheduled',
+      posted_account: account,
+      scheduled_at: dt.toISOString(),
+    }).eq('id', script_id);
 
     res.json({ success: true, event: data });
   } catch (err: any) {
@@ -711,6 +724,302 @@ router.post('/workflows/:id/run', async (req, res) => {
   }).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(run);
+});
+
+// ═══════════════════════════════════════════════════════
+// PHASE 5: PLANNER BOARD ENDPOINTS
+// ═══════════════════════════════════════════════════════
+
+// GET /content-pipeline/planner?start=YYYY-MM-DD&end=YYYY-MM-DD
+router.get('/content-pipeline/planner', async (req, res) => {
+  const { start, end, plan_id } = req.query as Record<string, string>;
+
+  let assignedQuery = supabase
+    .from('cc_scripts')
+    .select('id, title, body, pillar, status, word_count, content_type, metadata, created_at')
+    .not('metadata->plan_id', 'is', null);
+
+  if (start) assignedQuery = assignedQuery.gte('metadata->>scheduled_date', start);
+  if (end)   assignedQuery = assignedQuery.lte('metadata->>scheduled_date', end);
+  if (plan_id) assignedQuery = assignedQuery.eq('metadata->>plan_id', plan_id);
+
+  const { data, error } = await assignedQuery.order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+
+  let unassignedQuery = supabase
+    .from('cc_scripts')
+    .select('id, title, body, pillar, status, word_count, content_type, metadata, created_at')
+    .not('metadata->plan_id', 'is', null)
+    .is('metadata->>scheduled_date', null)
+    .order('created_at', { ascending: false });
+
+  if (plan_id) unassignedQuery = unassignedQuery.eq('metadata->>plan_id', plan_id);
+
+  const { data: unassigned } = await unassignedQuery;
+
+  // Group assigned by date → account → time
+  const calendar: Record<string, Record<string, Record<string, any>>> = {};
+  for (const script of (data || [])) {
+    const meta = (script.metadata as any) || {};
+    const d = meta.scheduled_date, t = meta.scheduled_time, a = meta.target_account;
+    if (d && a) {
+      if (!calendar[d]) calendar[d] = {};
+      if (!calendar[d][a]) calendar[d][a] = {};
+      calendar[d][a][t || '10:00'] = script;
+    }
+  }
+
+  res.json({
+    calendar,
+    unassigned: unassigned || [],
+    total_assigned: data?.length || 0,
+    total_unassigned: unassigned?.length || 0,
+  });
+});
+
+// GET /content-pipeline/planner/plans — list content_planner scripts
+router.get('/content-pipeline/planner/plans', async (_req, res) => {
+  const { data, error } = await supabase
+    .from('cc_scripts')
+    .select('id, title, created_at, metadata')
+    .eq('content_type', 'content_planner')
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// PUT /content-pipeline/planner/assign
+router.put('/content-pipeline/planner/assign', async (req, res) => {
+  const { script_id, date, time, account } = req.body;
+  if (!script_id || !date || !account) return res.status(400).json({ error: 'Thiếu script_id, date hoặc account' });
+
+  const { data: script } = await supabase.from('cc_scripts').select('metadata').eq('id', script_id).single();
+  const metadata = { ...((script?.metadata as any) || {}), scheduled_date: date, scheduled_time: time || '10:00', target_account: account };
+
+  const { error } = await supabase.from('cc_scripts').update({ metadata }).eq('id', script_id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true, message: `Đã gán vào ${account} ${date} ${time || '10:00'}` });
+});
+
+// PUT /content-pipeline/planner/unassign
+router.put('/content-pipeline/planner/unassign', async (req, res) => {
+  const { script_id } = req.body;
+  if (!script_id) return res.status(400).json({ error: 'Thiếu script_id' });
+
+  const { data: script } = await supabase.from('cc_scripts').select('metadata').eq('id', script_id).single();
+  const metadata = { ...((script?.metadata as any) || {}) };
+  delete metadata.scheduled_date;
+  delete metadata.scheduled_time;
+  delete metadata.target_account;
+
+  const { error } = await supabase.from('cc_scripts').update({ metadata }).eq('id', script_id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true, message: 'Đã bỏ gán' });
+});
+
+// POST /content-pipeline/planner/parse-plan
+router.post('/content-pipeline/planner/parse-plan', async (req, res) => {
+  const { planner_script_id } = req.body;
+  if (!planner_script_id) return res.status(400).json({ error: 'Thiếu planner_script_id' });
+
+  const { data: planner } = await supabase.from('cc_scripts').select('id, body').eq('id', planner_script_id).single();
+  if (!planner?.body) return res.status(404).json({ error: 'Không tìm thấy plan hoặc body trống' });
+
+  // Parse markdown table
+  const lines = (planner.body as string).split('\n').filter((l: string) => l.includes('|') && !l.includes(':---') && !l.includes('---'));
+  if (lines.length < 2) return res.status(400).json({ error: 'Không parse được bảng markdown — cần ít nhất header + 1 data row' });
+
+  const headers = lines[0].split('|').map((h: string) => h.trim()).filter(Boolean);
+  const rows = lines.slice(1).map((line: string) => {
+    const cells = line.split('|').map((c: string) => c.trim()).filter(Boolean);
+    const row: Record<string, string> = {};
+    headers.forEach((h: string, i: number) => { row[h] = cells[i] || ''; });
+    return row;
+  }).filter((r: Record<string, string>) => Object.values(r).some(v => v.length > 0));
+
+  const scripts = rows.map((row: Record<string, string>) => {
+    const topic = ((row['Chủ đề'] || row['Chu de'] || '')).toLowerCase();
+    let account = 'page_jennie';
+    if (/trading|kỹ thuật|scanner|app|sản phẩm|education|gemral/.test(topic)) account = 'page_gemral';
+    else if (/tình yêu|ritual|crystal|spiritual|7 ngày|vision/.test(topic)) account = 'profile_jennie';
+
+    return {
+      title: row['Tiêu đề'] || row['Tieu de'] || row['Chủ đề'] || 'Không có tiêu đề',
+      content_type: 'social_post',
+      pillar: row['Chủ đề'] || row['Pillar'] || 'integration',
+      persona: 'jennie_mentor',
+      status: 'topic',
+      body: null,
+      metadata: {
+        scheduled_date: row['Ngày'] || row['Ngay'] || null,
+        scheduled_time: row['Giờ đăng'] || row['Gio dang'] || '10:00',
+        target_account: row['Account'] || account,
+        topic_summary: row['Tóm tắt'] || row['Tom tat'] || '',
+        hashtags: row['Hashtags'] || '',
+        plan_id: planner_script_id,
+        source: 'content_planner',
+        brand_voice: account === 'page_gemral' ? 'generic' : 'jennie',
+      },
+    };
+  });
+
+  const { data: inserted, error } = await supabase.from('cc_scripts').insert(scripts).select('id');
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ success: true, message: `Đã parse ${inserted?.length || 0} chủ đề`, count: inserted?.length || 0 });
+});
+
+// POST /content-pipeline/planner/generate
+router.post('/content-pipeline/planner/generate', async (req, res) => {
+  const { plan_id, script_ids } = req.body;
+  if (!plan_id && !script_ids?.length) return res.status(400).json({ error: 'Thiếu plan_id hoặc script_ids' });
+
+  let query = supabase
+    .from('cc_scripts')
+    .select('id, title, pillar, content_type, metadata')
+    .is('body', null)
+    .eq('status', 'topic');
+
+  if (script_ids?.length) query = query.in('id', script_ids);
+  else query = query.eq('metadata->>plan_id', plan_id);
+
+  const { data: topics } = await query;
+  if (!topics?.length) return res.json({ success: true, message: 'Không có chủ đề nào cần generate', count: 0 });
+
+  const jobs = topics.map((t: any) => {
+    const meta = t.metadata || {};
+    return {
+      job_type: 'script',
+      content_type: t.content_type || 'social_post',
+      status: 'queued',
+      input_params: {
+        contentType: t.content_type || 'social_post',
+        brandVoice: meta.brand_voice || 'jennie',
+        userPrompt: [
+          `LOẠI: ${t.content_type || 'social_post'}`,
+          `CHỦ ĐỀ: ${t.title}`,
+          meta.topic_summary ? `TÓM TẮT: ${meta.topic_summary}` : '',
+          meta.hashtags ? `HASHTAGS GỢI Ý: ${meta.hashtags}` : '',
+          meta.target_account ? `ACCOUNT: ${meta.target_account}` : '',
+          '',
+          'Viết bài đăng MXH đầy đủ. Tuân thủ brand voice, compliance.',
+        ].filter(Boolean).join('\n'),
+        maxTokens: 16384,
+        model: 'claude-sonnet-4-6',
+        provider: 'claude',
+        target_script_id: t.id,
+      },
+      created_by: 'board',
+    };
+  });
+
+  const { data: inserted, error } = await supabase.from('cc_generation_jobs').insert(jobs).select('id');
+  if (error) return res.status(500).json({ error: error.message });
+
+  await supabase.from('cc_scripts').update({ status: 'generating' }).in('id', topics.map((t: any) => t.id));
+
+  res.json({
+    success: true,
+    message: `Đã tạo ${inserted?.length || 0} jobs. Chạy batch_processor.py batch để generate.`,
+    count: inserted?.length || 0,
+    instruction: 'cd "D:/Claude Projects/App Content Jennie/gem-content-center" && PYTHONUTF8=1 python scripts/batch_processor.py batch',
+  });
+});
+
+// GET /content-pipeline/planner/progress?plan_id=xxx
+router.get('/content-pipeline/planner/progress', async (req, res) => {
+  const { plan_id } = req.query as Record<string, string>;
+  if (!plan_id) return res.status(400).json({ error: 'Thiếu plan_id' });
+
+  const { data } = await supabase
+    .from('cc_scripts')
+    .select('status')
+    .eq('metadata->>plan_id', plan_id);
+
+  const counts: Record<string, number> = { topic: 0, generating: 0, draft: 0, review: 0, approved: 0, scheduled: 0, published: 0, failed: 0 };
+  for (const s of (data || [])) { counts[s.status] = (counts[s.status] || 0) + 1; }
+
+  res.json({ total: data?.length || 0, ...counts });
+});
+
+// POST /content-pipeline/planner/bulk-approve
+router.post('/content-pipeline/planner/bulk-approve', async (req, res) => {
+  const { plan_id, script_ids } = req.body;
+  if (!plan_id && !script_ids?.length) return res.status(400).json({ error: 'Thiếu plan_id hoặc script_ids' });
+
+  let query = supabase
+    .from('cc_scripts')
+    .select('id')
+    .eq('status', 'draft')
+    .not('body', 'is', null);
+
+  if (script_ids?.length) query = query.in('id', script_ids);
+  else query = query.eq('metadata->>plan_id', plan_id);
+
+  const { data: drafts } = await query;
+  if (!drafts?.length) return res.json({ success: true, message: 'Không có bài nào cần duyệt', count: 0 });
+
+  const ids = drafts.map((d: any) => d.id);
+  const { error } = await supabase
+    .from('cc_scripts')
+    .update({ status: 'approved', approved_by: 'board', approved_at: new Date().toISOString() })
+    .in('id', ids);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true, message: `Đã duyệt ${ids.length} bài`, count: ids.length });
+});
+
+// POST /content-pipeline/planner/delegate-ceo (SSE stream)
+router.post('/content-pipeline/planner/delegate-ceo', async (req, res) => {
+  const { plan_id } = req.body;
+  if (!plan_id) return res.status(400).json({ error: 'Thiếu plan_id' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const task = [
+    `Plan ID: ${plan_id} đã được Board duyệt chủ đề.`,
+    ``,
+    `Nhiệm vụ (CHỈ TRIGGER SCRIPTS — KHÔNG TỰ VIẾT CONTENT):`,
+    `1. Gọi POST http://localhost:3101/api/ops/content-pipeline/planner/generate với body {"plan_id":"${plan_id}"}`,
+    `2. Chạy: cd "D:/Claude Projects/App Content Jennie/gem-content-center" && PYTHONUTF8=1 python scripts/batch_processor.py batch`,
+    `3. Poll GET http://localhost:3101/api/ops/content-pipeline/planner/progress?plan_id=${plan_id} cho đến khi generating=0`,
+    `4. Gọi POST http://localhost:3101/api/ops/content-pipeline/planner/bulk-approve với body {"plan_id":"${plan_id}"}`,
+    `5. Chạy: cd "D:/Claude Projects/App Content Jennie/gem-content-center/scripts" && python schedule_meta_business_suite.py --weeks 2`,
+    `6. Báo cáo kết quả qua Telegram`,
+    ``,
+    `⚠️ KHÔNG TỰ VIẾT NỘI DUNG. batch_processor.py batch đọc 28+ knowledge files và generate content.`,
+  ].join('\n');
+
+  const send = (obj: Record<string, unknown>) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  try {
+    const { execSync } = await import('child_process');
+    const claudeBin = execSync('where claude 2>nul || which claude 2>/dev/null', { encoding: 'utf-8', shell: 'cmd.exe' }).trim().split('\n')[0].trim();
+
+    const agentCwd = path.resolve(PAPERCLIP_ROOT, 'agents/ceo');
+    const agentCwdExists = fs.existsSync(agentCwd);
+
+    const proc = spawn(claudeBin, [
+      '--dangerously-skip-permissions',
+      '-p', task,
+    ], {
+      cwd: agentCwdExists ? agentCwd : process.cwd(),
+      shell: true,
+      env: { ...process.env },
+    });
+
+    proc.stdout?.on('data', (d: Buffer) => send({ type: 'stdout', text: d.toString() }));
+    proc.stderr?.on('data', (d: Buffer) => send({ type: 'stderr', text: d.toString() }));
+    proc.on('close', (code: number) => { send({ type: 'exit', code }); res.end(); });
+    req.on('close', () => { if (!proc.killed) proc.kill(); });
+  } catch (err: any) {
+    send({ type: 'error', text: `Không tìm thấy claude CLI: ${err.message}` });
+    res.end();
+  }
 });
 
 export default router;
