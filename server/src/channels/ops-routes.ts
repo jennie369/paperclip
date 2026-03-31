@@ -414,6 +414,91 @@ router.post('/content-pipeline/schedule/bulk', async (req, res) => {
   res.json({ success: true, message: `Lên lịch ${test_one ? '1 bài test' : `${weeks} tuần`}${account ? ` cho ${account}` : ' tất cả'}` });
 });
 
+// POST /content-pipeline/schedule — lên lịch 1 bài
+router.post('/content-pipeline/schedule', async (req, res) => {
+  try {
+    const { script_id, scheduled_at, account } = req.body;
+    if (!script_id || !scheduled_at) return res.status(400).json({ error: 'script_id và scheduled_at là bắt buộc' });
+
+    // Lấy script để lấy caption/body
+    const { data: script } = await supabase.from('cc_scripts').select('title, body, caption, image_urls').eq('id', script_id).single();
+
+    // Tạo calendar event
+    const { data, error } = await supabase.from('cc_calendar_events').insert({
+      script_id,
+      title: script?.title || 'Bài đăng',
+      caption: script?.body || script?.caption || '',
+      image_urls: script?.image_urls || [],
+      scheduled_at,
+      account: account || 'profile_jennie',
+      status: 'scheduled',
+      created_at: new Date().toISOString(),
+    }).select().single();
+
+    if (error) throw error;
+
+    // Cập nhật trạng thái script → scheduled
+    await supabase.from('cc_scripts').update({ status: 'scheduled', posted_account: account, posted_time_slot: scheduled_at }).eq('id', script_id);
+
+    res.json({ success: true, event: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi lên lịch' });
+  }
+});
+
+// POST /content-pipeline/agent-review — giao review cho agent qua War Room
+router.post('/content-pipeline/agent-review', async (req, res) => {
+  try {
+    const { script_id, agent, task } = req.body;
+    if (!script_id || !task) return res.status(400).json({ error: 'script_id và task là bắt buộc' });
+
+    // Tìm channel #general hoặc #learning-room
+    const { data: channel } = await supabase
+      .from('war_room_channels')
+      .select('id')
+      .or('slug.eq.general,name.ilike.%general%')
+      .limit(1)
+      .single();
+
+    if (!channel) return res.status(404).json({ error: 'Không tìm thấy War Room channel' });
+
+    // Gửi message vào channel với @mention agent
+    const { error } = await supabase.from('war_room_messages').insert({
+      channel_id: channel.id,
+      sender: 'ops-pipeline',
+      content: `@${agent} ${task}`,
+      metadata: { script_id, type: 'agent_review_request', agent },
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
+    res.json({ success: true, message: `Đã giao review cho ${agent} qua War Room` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi giao review' });
+  }
+});
+
+// POST /content-pipeline/scripts/:id/images — upload hình ảnh (multipart)
+// Dùng Supabase Storage bucket 'cc-content' (public)
+router.post('/content-pipeline/scripts/:id/images', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { image_url } = req.body; // Client gửi URL sau khi upload trực tiếp lên Supabase
+    if (!image_url) return res.status(400).json({ error: 'image_url required' });
+
+    const { data: script } = await supabase.from('cc_scripts').select('image_urls').eq('id', id).single();
+    const existing: string[] = script?.image_urls || [];
+    const newUrls = [...existing, image_url];
+
+    const { error } = await supabase.from('cc_scripts').update({ image_urls: newUrls }).eq('id', id);
+    if (error) throw error;
+
+    res.json({ success: true, image_urls: newUrls });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Compliance check — REAL banned words
 const BANNED_WORDS = ['giàu nhanh', 'kiếm tiền dễ dàng', 'thu nhập thụ động', 'bí mật làm giàu', 'đảm bảo lợi nhuận', 'get rich quick', 'bói toán', 'phán số mệnh', 'ma quỷ'];
 router.post('/content-pipeline/compliance-check', async (req, res) => {

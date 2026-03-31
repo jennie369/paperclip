@@ -117,11 +117,34 @@ function ScriptExpandedPanel({ script }: { script: any }) {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
+      // Try Supabase storage first (bucket 'cc-content' or 'content')
       const path = `cc-images/${script.id}/${Date.now()}-${file.name}`;
-      const { error } = await supabase.storage.from('content').upload(path, file);
-      if (error) throw error;
-      const url = supabase.storage.from('content').getPublicUrl(path).data.publicUrl;
-      const newUrls = [...(script.image_urls || []), url];
+      let imageUrl: string | null = null;
+
+      for (const bucket of ['cc-content', 'content', 'public']) {
+        const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
+        if (!error) {
+          imageUrl = supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+          break;
+        }
+      }
+
+      if (!imageUrl) {
+        // Fallback: convert to data URL and save inline (max ~1MB)
+        if (file.size > 1_000_000) {
+          pushToast({ title: 'Ảnh quá lớn (>1MB), bucket storage chưa được tạo trên Supabase', tone: 'error' });
+          e.target.value = '';
+          return;
+        }
+        imageUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+
+      const newUrls = [...(script.image_urls || []), imageUrl];
       await opsApi.updateScript(script.id, { image_urls: newUrls });
       inv();
       pushToast({ title: 'Đã thêm hình ảnh', tone: 'success' });

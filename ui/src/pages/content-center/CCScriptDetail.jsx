@@ -1554,12 +1554,12 @@ function ScriptDetailContent() {
               {uploadedImages.map((img, i) => (
                 <div
                   key={i}
-                  className={`relative group rounded-lg overflow-hidden border border-border bg-glass-bg ${uploadedImages.length === 1 ? 'aspect-video' : 'aspect-square'}`}
+                  className={`relative group rounded-lg overflow-hidden border border-border bg-glass-bg ${uploadedImages.length === 1 ? '' : 'aspect-square'}`}
                 >
                   <img
                     src={img.preview}
                     alt={`Preview ${i + 1}`}
-                    className="w-full h-full object-cover"
+                    className={uploadedImages.length === 1 ? 'w-full h-auto max-h-[600px] object-contain' : 'w-full h-full object-cover'}
                   />
                   <button
                     className="absolute top-1 right-1 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"
