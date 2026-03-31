@@ -847,10 +847,11 @@ router.post('/content-pipeline/planner/parse-plan', async (req, res) => {
     return {
       title: row['Tiêu đề'] || row['Tieu de'] || row['Chủ đề'] || 'Không có tiêu đề',
       content_type: 'social_post',
+      track: 'wealth',
       pillar: row['Chủ đề'] || row['Pillar'] || 'integration',
       persona: 'jennie_mentor',
+      writing_mode: 'mode_1_calm',
       status: 'topic',
-      body: null,
       metadata: {
         scheduled_date: row['Ngày'] || row['Ngay'] || null,
         scheduled_time: row['Giờ đăng'] || row['Gio dang'] || '10:00',
@@ -963,11 +964,95 @@ router.post('/content-pipeline/planner/bulk-approve', async (req, res) => {
   const ids = drafts.map((d: any) => d.id);
   const { error } = await supabase
     .from('cc_scripts')
-    .update({ status: 'approved', approved_by: 'board', approved_at: new Date().toISOString() })
+    .update({ status: 'approved', approved_at: new Date().toISOString() })
     .in('id', ids);
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true, message: `Đã duyệt ${ids.length} bài`, count: ids.length });
+});
+
+// POST /content-pipeline/planner/import — import từ markdown/CSV paste
+router.post('/content-pipeline/planner/import', async (req, res) => {
+  const { content, format } = req.body;
+  if (!content) return res.status(400).json({ error: 'Thiếu content' });
+
+  let rows: Record<string, string>[] = [];
+  if (format === 'csv') {
+    const lines = (content as string).split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',').map((h: string) => h.trim());
+    rows = lines.slice(1).map((line: string) => {
+      const cells = line.split(',').map((c: string) => c.trim());
+      const row: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { row[h] = cells[i] || ''; });
+      return row;
+    }).filter((r: Record<string, string>) => Object.values(r).some(v => v.length > 0));
+  } else {
+    const lines = (content as string).split('\n').filter((l: string) => l.includes('|') && !l.includes(':---') && !l.match(/^[\s|:-]+$/));
+    if (lines.length >= 2) {
+      const headers = lines[0].split('|').map((h: string) => h.trim()).filter(Boolean);
+      rows = lines.slice(1).map((line: string) => {
+        const cells = line.split('|').map((c: string) => c.trim()).filter(Boolean);
+        const row: Record<string, string> = {};
+        headers.forEach((h: string, i: number) => { row[h] = cells[i] || ''; });
+        return row;
+      }).filter((r: Record<string, string>) => Object.values(r).some(v => v.length > 0));
+    }
+  }
+
+  if (!rows.length) return res.status(400).json({ error: 'Không parse được dữ liệu — kiểm tra định dạng markdown/CSV' });
+
+  // Tạo plan parent script
+  const { data: planScript, error: planError } = await supabase.from('cc_scripts').insert({
+    title: `Imported Plan ${new Date().toLocaleDateString('vi')}`,
+    content_type: 'social_post',
+    track: 'wealth',
+    pillar: 'integration',
+    persona: 'jennie_mentor',
+    writing_mode: 'mode_1_calm',
+    status: 'completed',
+    body: content,
+    metadata: { source: 'import', import_count: rows.length },
+  }).select('id').single();
+
+  if (planError) return res.status(500).json({ error: planError.message });
+
+  // Tạo topic entries
+  const scripts = rows.map((row: Record<string, string>) => {
+    const topic = (row['Chủ đề'] || row['Chu de'] || '').toLowerCase();
+    let account = 'page_jennie';
+    if (/trading|kỹ thuật|scanner|app|sản phẩm|education|gemral/.test(topic)) account = 'page_gemral';
+    else if (/tình yêu|ritual|crystal|spiritual|7 ngày|vision/.test(topic)) account = 'profile_jennie';
+
+    return {
+      title: row['Tiêu đề'] || row['Chủ đề'] || 'Không tiêu đề',
+      content_type: 'social_post',
+      track: 'wealth',
+      pillar: row['Chủ đề'] || 'integration',
+      persona: 'jennie_mentor',
+      writing_mode: 'mode_1_calm',
+      status: 'topic',
+      metadata: {
+        scheduled_date: row['Ngày'] || null,
+        scheduled_time: row['Giờ đăng'] || '10:00',
+        target_account: row['Account'] || account,
+        topic_summary: row['Tóm tắt'] || '',
+        hashtags: row['Hashtags'] || '',
+        plan_id: planScript?.id,
+        source: 'import',
+        brand_voice: account === 'page_gemral' ? 'generic' : 'jennie',
+      },
+    };
+  });
+
+  const { data: inserted, error: insertError } = await supabase.from('cc_scripts').insert(scripts).select('id');
+  if (insertError) return res.status(500).json({ error: insertError.message });
+
+  res.json({
+    success: true,
+    message: `Đã import ${inserted?.length || 0} chủ đề`,
+    plan_id: planScript?.id,
+    count: inserted?.length || 0,
+  });
 });
 
 // POST /content-pipeline/planner/delegate-ceo (SSE stream)
