@@ -1,0 +1,195 @@
+/**
+ * GEM Content Control Center — Type Definitions
+ *
+ * Barrel export for all types. Import from '@gem/types'.
+ *
+ * @example
+ * import type { Script, ContentType, Database } from '@gem/types';
+ */
+
+// ── Common enums, shared types, API types ──────────────────
+export type {
+  ContentType,
+  Track,
+  Pillar,
+  PersonaType,
+  WritingMode,
+  UserRole,
+  PermissionAction,
+  Permission,
+  ScriptStatus,
+  SocialPostStatus,
+  CalendarEventStatus,
+  GenerationJobStatus,
+  VideoPublishStatus,
+  ImagePromptStatus,
+  Severity,
+  Priority,
+  NotificationChannel,
+  NotificationCategory,
+  SocialPlatform,
+  PaginationParams,
+  PaginationMeta,
+  ApiResponse,
+  ApiErrorResponse,
+  AppError,
+  Result,
+  ISODateString,
+  DateRange,
+  ContentFilter,
+  SearchResult,
+  SearchHighlight,
+  ActivityAction,
+  ActivityEntityType,
+  Json,
+  JsonMutable,
+} from './common.types';
+
+export { PILLAR_TRACK_MAP } from './common.types';
+
+// ── Database / Supabase types ──────────────────────────────
+export type {
+  Database,
+  CcScriptsRow,
+  CcScriptsInsert,
+  CcScriptsUpdate,
+  CcTitlesRow,
+  CcTitlesInsert,
+  CcTitlesUpdate,
+  CcSocialPostsRow,
+  CcSocialPostsInsert,
+  CcSocialPostsUpdate,
+  CcImagePromptsRow,
+  CcImagePromptsInsert,
+  CcImagePromptsUpdate,
+  CcYtVideosRow,
+  CcYtVideosInsert,
+  CcYtVideosUpdate,
+  CcYtInsightsRow,
+  CcYtInsightsInsert,
+  CcYtInsightsUpdate,
+  CcCalendarEventsRow,
+  CcCalendarEventsInsert,
+  CcCalendarEventsUpdate,
+  CcBrandVoiceRulesRow,
+  CcBrandVoiceRulesInsert,
+  CcBrandVoiceRulesUpdate,
+  CcPromptTemplatesRow,
+  CcPromptTemplatesInsert,
+  CcPromptTemplatesUpdate,
+  CcNotificationsRow,
+  CcNotificationsInsert,
+  CcNotificationsUpdate,
+  CcGenerationJobsRow,
+  CcGenerationJobsInsert,
+  CcGenerationJobsUpdate,
+  CcActivityLogRow,
+  CcActivityLogInsert,
+  CcActivityLogUpdate,
+  TableRow,
+  TableInsert,
+  TableUpdate,
+  TableName,
+} from './database.types';
+
+// ── Script types ───────────────────────────────────────────
+export type {
+  Script,
+  ScriptSection,
+  ScriptSectionType,
+  EmotionalArc,
+  EnergyLevel,
+  EmotionalBeat,
+  ScriptGenerationParams,
+  CtaType,
+  GeneratedScript,
+  TokenCount,
+  ParsedScript,
+  ComplianceResult,
+  Violation,
+  ViolationLocation,
+  ComplianceCategory,
+  BrandVoiceResult,
+  ScriptDiff,
+  ScriptChange,
+  TitleGenerationParams,
+  TitleVariant,
+} from './script.types';
+
+// ── Calendar types ─────────────────────────────────────────
+export type {
+  CalendarEvent,
+  RecurrenceRule,
+  RecurrenceFrequency,
+  DayOfWeek,
+  CalendarViewMode,
+  CalendarFilter,
+  CalendarQuery,
+  CalendarViewState,
+  CalendarSlot,
+  ContentPlan,
+  TrackDistribution,
+  PillarDistribution,
+  CalendarSummary,
+  OptimalPublishTime,
+} from './calendar.types';
+
+// ── Analytics types ────────────────────────────────────────
+export type {
+  YtVideo,
+  VideoMetrics,
+  VideoMetricsWithDelta,
+  VideoMetricsDelta,
+  YtInsight,
+  InsightType,
+  ChannelAnalytics,
+  VideoPerformance,
+  ChannelMetricsSnapshot,
+  AudienceDemographics,
+  AgeGroup,
+  GenderSplit,
+  GeoEntry,
+  LanguageEntry,
+  DeviceTypes,
+  TrafficSource,
+  TrafficSourceType,
+  ContentPerformanceByTaxonomy,
+  TaxonomyMetric,
+  TimeSeriesPoint,
+  TimeSeries,
+  KpiCard,
+  AnalyticsQuery,
+  AnalyticsMetricKey,
+} from './analytics.types';
+
+// ── Notification types ─────────────────────────────────────
+export type {
+  Notification,
+  CreateNotificationParams,
+  NotificationPreferences,
+  NotificationChannelPreferences,
+  NotificationCategoryPreferences,
+  CategoryPreference,
+  QuietHours,
+  DigestFrequency,
+  NotificationGroup,
+  NotificationBadge,
+  NotificationQuery,
+  ActivityLogEntry,
+  FieldChange,
+  ActivityLogQuery,
+} from './notification.types';
+
+// ── Service types (used by @gem/services) ─────────────────
+export type {
+  ServiceResponse,
+  Profile,
+  ProfileInsert,
+  ProfileUpdate,
+  SignUpParams,
+  ActivityLogParams,
+  NotificationType,
+  NotificationRow,
+  NotificationInsert,
+  NotificationUpdate,
+} from './service.types';

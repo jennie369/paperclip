@@ -18,6 +18,8 @@ import { initPluginBridge } from "./plugins/bridge-init";
 import { PluginLauncherProvider } from "./plugins/launchers";
 import "@mdxeditor/editor/style.css";
 import "./index.css";
+import "./gem/tailwind.css";
+import "./gem/cc-scope-styles.css";
 
 initPluginBridge(React, ReactDOM);
 

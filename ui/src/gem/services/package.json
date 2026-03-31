@@ -1,0 +1,23 @@
+{
+  "name": "@gem/services",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist node_modules"
+  },
+  "dependencies": {
+    "@gem/types": "workspace:*",
+    "@supabase/supabase-js": "^2.47.12"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "zustand": "^5.0.2"
+  }
+}

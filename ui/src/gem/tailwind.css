@@ -1,0 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap');
+
+/* Content Center scoped component classes + CSS variables */
+@import './cc-scope-styles.css';
+
+/* NOTE: No @tailwind base — preflight disabled to avoid breaking Gemral's existing styles */
+@tailwind components;
+@tailwind utilities;

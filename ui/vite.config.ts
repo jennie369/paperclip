@@ -8,6 +8,17 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // GEM CC packages
+      "@gem/ui": path.resolve(__dirname, "src/gem/ui"),
+      "@gem/types": path.resolve(__dirname, "src/gem/types"),
+      "@gem/services": path.resolve(__dirname, "src/gem/services"),
+      "@gem/hooks": path.resolve(__dirname, "src/gem/hooks"),
+      // Next.js shims
+      "next/navigation": path.resolve(__dirname, "src/gem/adapters/next-compat.jsx"),
+      "next/link": path.resolve(__dirname, "src/gem/adapters/next-compat.jsx"),
+      "next/font/google": path.resolve(__dirname, "src/gem/adapters/next-font-compat.js"),
+      // Supabase shim
+      "@supabase/ssr": path.resolve(__dirname, "src/gem/adapters/supabase-compat.js"),
     },
   },
   server: {

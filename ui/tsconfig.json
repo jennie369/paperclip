@@ -13,8 +13,17 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@gem/ui": ["./src/gem/ui"],
+      "@gem/ui/*": ["./src/gem/ui/*"],
+      "@gem/types": ["./src/gem/types"],
+      "@gem/types/*": ["./src/gem/types/*"],
+      "@gem/services": ["./src/gem/services"],
+      "@gem/services/*": ["./src/gem/services/*"],
+      "@gem/hooks": ["./src/gem/hooks"],
+      "@gem/hooks/*": ["./src/gem/hooks/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/gem", "node_modules"]
 }
