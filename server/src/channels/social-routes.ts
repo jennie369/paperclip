@@ -10,10 +10,17 @@ import { createClient } from '@supabase/supabase-js';
 
 const router = Router();
 
-// Supabase client (service role) — dùng Main Supabase
-const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Supabase client (service role) — lazy init to avoid crash when env vars not set at module load
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
+let _supabase: ReturnType<typeof createClient> | null = null;
+function getSupabase() {
+  if (!_supabase) {
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.GEMRAL_SUPABASE_SERVICE_KEY || '';
+    if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
+    _supabase = createClient(SUPABASE_URL, key);
+  }
+  return _supabase;
+}
 
 const GEMRAL_ADMIN_USER_ID = '64f7f068-506e-463e-a5e4-c5a35ec176b6';
 const GEMRAL_NEWS_CATEGORY_ID = 'cac0b844-da54-40fe-b822-6763487a5263';
@@ -224,7 +231,7 @@ router.post('/social/publish', async (req, res) => {
     }
 
     // Lưu vào cc_social_posts
-    await supabase.from('cc_social_posts').insert({
+    await getSupabase().from('cc_social_posts').insert({
       script_id: scriptId || null,
       platform,
       content,
@@ -301,7 +308,7 @@ router.post('/news/publish', async (req, res) => {
       reading_time_minutes: readingTime,
     };
 
-    const { data: ccArticle, error: ccError } = await supabase
+    const { data: ccArticle, error: ccError } = await getSupabase()
       .from('cc_news_articles').insert(article).select().single();
     if (ccError) throw ccError;
 
@@ -332,7 +339,7 @@ router.post('/news/publish', async (req, res) => {
         if (!forumError && forumPost) {
           forumPostId = forumPost.id;
           publishUrl = `https://gemral.com/forum/thread/${forumPost.id}`;
-          await supabase.from('cc_news_articles').update({ metadata: { forum_post_id: forumPost.id } }).eq('id', ccArticle.id);
+          await getSupabase().from('cc_news_articles').update({ metadata: { forum_post_id: forumPost.id } }).eq('id', ccArticle.id);
         }
       } catch (e) {
         console.error('[/news/publish] cross-post error:', e);
@@ -357,7 +364,7 @@ router.post('/news/publish', async (req, res) => {
 router.get('/news/articles', async (req, res) => {
   try {
     const { status = 'published', category, limit = '20' } = req.query as Record<string, string>;
-    let query = supabase.from('cc_news_articles').select('*').eq('status', status)
+    let query = getSupabase().from('cc_news_articles').select('*').eq('status', status)
       .order('published_at', { ascending: false }).limit(parseInt(limit));
     if (category) query = query.eq('category', category);
     const { data, error } = await query;
