@@ -9,15 +9,15 @@ import { opsApi } from "@/api/ops";
 import { useToast } from "@/context/ToastContext";
 import { PipelineTab } from "./tabs/PipelineTab";
 import { ContentTab } from "./tabs/ContentTab";
-import { ScheduleTab } from "./tabs/ScheduleTab";
 import { EmailPushTab } from "./tabs/EmailPushTab";
 import { LinksTab } from "./tabs/LinksTab";
 import { SkillsMemoryTab } from "./tabs/SkillsMemoryTab";
+import { PlannerBoard } from "@/components/ops/PlannerBoard";
 
 const TABS = [
   { key: "pipeline", label: "Pipeline" },
   { key: "content", label: "Nội Dung" },
-  { key: "schedule", label: "Lịch Đăng" },
+  { key: "schedule", label: "Lịch Nội Dung" },
   { key: "email", label: "Email & Push" },
   { key: "links", label: "Links" },
   { key: "skills", label: "Skills & Memory" },
@@ -202,7 +202,7 @@ export function ContentPipelinePage() {
       {/* Tab content */}
       {activeTab === "pipeline" && <PipelineTab onSwitchTab={(tab) => setActiveTab(tab as TabKey)} />}
       {activeTab === "content" && <ContentTab />}
-      {activeTab === "schedule" && <ScheduleTab />}
+      {activeTab === "schedule" && <PlannerBoard />}
       {activeTab === "email" && <EmailPushTab />}
       {activeTab === "links" && <LinksTab />}
       {activeTab === "skills" && <SkillsMemoryTab />}
