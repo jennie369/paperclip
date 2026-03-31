@@ -3596,16 +3596,16 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             </h4>
 
             {/* Brand Voice Toggle */}
-            <div className="flex items-center gap-3">
-              <span className="text-[13px] font-semibold text-white/70 shrink-0">Thương hiệu:</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[13px] font-semibold text-txt-2 shrink-0">Thương hiệu:</span>
               <button
                 type="button"
                 onClick={() => setBrandVoice('jennie')}
                 disabled={generating}
-                className={`px-4 py-2 rounded-lg text-[13px] font-bold transition-all ${
+                className={`px-4 py-2 rounded-lg text-[13px] font-bold transition-colors ${
                   brandVoice === 'jennie'
-                    ? 'bg-[#FFBD59]/15 text-[#FFBD59] border-2 border-[#FFBD59]/40'
-                    : 'bg-white/[0.03] text-white/30 border border-white/[0.06] hover:text-white/50'
+                    ? 'bg-gold/15 text-gold border-2 border-gold/40'
+                    : 'bg-bg-4 text-txt-3 border border-border hover:text-txt'
                 }`}
               >
                 Jennie (Cá nhân)
@@ -3614,15 +3614,15 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                 type="button"
                 onClick={() => setBrandVoice('generic')}
                 disabled={generating}
-                className={`px-4 py-2 rounded-lg text-[13px] font-bold transition-all ${
+                className={`px-4 py-2 rounded-lg text-[13px] font-bold transition-colors ${
                   brandVoice === 'generic'
-                    ? 'bg-[#6A5BFF]/15 text-[#6A5BFF] border-2 border-[#6A5BFF]/40'
-                    : 'bg-white/[0.03] text-white/30 border border-white/[0.06] hover:text-white/50'
+                    ? 'bg-purple/15 text-purple border-2 border-purple/40'
+                    : 'bg-bg-4 text-txt-3 border border-border hover:text-txt'
                 }`}
               >
                 Thương hiệu chung
               </button>
-              <span className="text-[11px] text-white/25 ml-auto">
+              <span className="text-[11px] text-txt-3 ml-auto">
                 {brandVoice === 'jennie' ? 'Viết với phong cách Jennie Uyên Chu' : 'Không nhắc Jennie — cho fanpage/brand khác'}
               </span>
             </div>

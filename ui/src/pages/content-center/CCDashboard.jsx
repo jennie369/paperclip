@@ -82,14 +82,14 @@ function DashboardStatCard({ stat }) {
 // ============================================================================
 
 const quickActions = [
-  { label: 'Tạo Kịch Bản AI', icon: Sparkles, href: '/admin/cc/ai-gen', color: 'text-gold' },
-  { label: 'Kịch Bản LATC', icon: BookOpen, href: '/admin/cc/ai-gen', color: 'text-gold' },
-  { label: 'Kịch Bản TMT', icon: Users, href: '/admin/cc/ai-gen', color: 'text-purple' },
-  { label: 'Clip Ngắn', icon: Film, href: '/admin/cc/ai-gen', color: 'text-rose' },
-  { label: 'Bài Đăng MXH', icon: Share2, href: '/admin/cc/ai-gen', color: 'text-blue' },
-  { label: 'Tiêu Đề', icon: Type, href: '/admin/cc/ai-gen', color: 'text-amber' },
-  { label: 'Tạo Hình Ảnh', icon: Image, href: '/admin/cc/image-gen', color: 'text-cyan' },
-  { label: 'Lịch Nội Dung', icon: Calendar, href: '/admin/cc/calendar', color: 'text-emerald' },
+  { label: 'Tạo Kịch Bản AI', icon: Sparkles, href: '/admin/cc/ai-gen', color: 'text-gold', iconBg: 'bg-gold/10' },
+  { label: 'Kịch Bản LATC', icon: BookOpen, href: '/admin/cc/ai-gen', color: 'text-gold', iconBg: 'bg-gold/10' },
+  { label: 'Kịch Bản TMT', icon: Users, href: '/admin/cc/ai-gen', color: 'text-purple', iconBg: 'bg-purple/10' },
+  { label: 'Clip Ngắn', icon: Film, href: '/admin/cc/ai-gen', color: 'text-rose', iconBg: 'bg-rose/10' },
+  { label: 'Bài Đăng MXH', icon: Share2, href: '/admin/cc/ai-gen', color: 'text-blue', iconBg: 'bg-blue/10' },
+  { label: 'Tiêu Đề', icon: Type, href: '/admin/cc/ai-gen', color: 'text-amber', iconBg: 'bg-amber/10' },
+  { label: 'Tạo Hình Ảnh', icon: Image, href: '/admin/cc/image-gen', color: 'text-cyan', iconBg: 'bg-cyan/10' },
+  { label: 'Lịch Nội Dung', icon: Calendar, href: '/admin/cc/calendar', color: 'text-emerald', iconBg: 'bg-emerald/10' },
 ];
 
 // ============================================================================
@@ -226,7 +226,7 @@ export default function DashboardPage() {
                 href={action.href}
                 className="card p-4 flex items-center gap-4 hover:shadow-glass-hover transition-all duration-normal group"
               >
-                <div className="w-10 h-10 rounded-card flex items-center justify-center group-hover:scale-110 transition-all duration-normal" style={{ background: 'rgba(15, 16, 48, 0.7)' }}>
+                <div className={`w-10 h-10 rounded-card flex items-center justify-center ${action.iconBg}`}>
                   <Icon size={20} className={action.color} />
                 </div>
                 <span className="text-sm text-txt-2 group-hover:text-txt transition-button flex-1">

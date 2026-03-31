@@ -592,7 +592,6 @@
   }
 
   .glass-card:hover {
-    transform: translateY(-3px);
     box-shadow: 0 15px 30px rgba(0, 0, 0, 0.8), 0 10px 40px rgba(140, 100, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
@@ -648,7 +647,6 @@
   }
   .btn-g:hover:not(:disabled) {
     filter: brightness(1.1);
-    transform: translateY(-1px);
   }
   .btn-o {
     background: transparent;
@@ -666,7 +664,6 @@
     box-shadow: 0 4px 15px rgba(156, 6, 18, 0.4);
   }
   .btn-primary:hover:not(:disabled) {
-    transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(156, 6, 18, 0.6), 0 0 20px rgba(255, 189, 89, 0.3);
   }
   .btn-danger {
