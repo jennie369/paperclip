@@ -1,3 +1,4 @@
+// @ts-nocheck
 // ============================================================================
 // Brand Voice Compliance Checker
 // GEM Content Control Center

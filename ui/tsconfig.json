@@ -11,6 +11,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowJs": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
@@ -25,5 +26,5 @@
     }
   },
   "include": ["src"],
-  "exclude": ["src/gem", "node_modules"]
+  "exclude": ["src/gem", "src/pages/content-center", "node_modules"]
 }

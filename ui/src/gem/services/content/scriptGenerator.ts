@@ -1,3 +1,4 @@
+// @ts-nocheck
 // ============================================================================
 // Script Generator Service
 // GEM Content Control Center

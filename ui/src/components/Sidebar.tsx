@@ -9,6 +9,24 @@ import {
   SquarePen,
   Network,
   Settings,
+  MessageCircle,
+  Zap,
+  Activity,
+  BarChart3,
+  UserCircle,
+  Ticket,
+  ShoppingBag,
+  Mail,
+  BookOpen,
+  Terminal,
+  Database,
+  Sparkles,
+  FileText,
+  Calendar,
+  RefreshCw,
+  Image,
+  Video,
+  Filter,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -20,6 +38,8 @@ import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { useUnreadCount } from "../hooks/useUnreadCount";
+import { useNotificationSound } from "../hooks/useNotificationSound";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
@@ -27,6 +47,9 @@ export function Sidebar() {
   const { openNewIssue } = useDialog();
   const { selectedCompanyId, selectedCompany } = useCompany();
   const inboxBadge = useInboxBadge(selectedCompanyId);
+  const { totalUnread } = useUnreadCount();
+  // Activate notification sound globally
+  useNotificationSound();
   const { data: liveRuns } = useQuery({
     queryKey: queryKeys.liveRuns(selectedCompanyId!),
     queryFn: () => heartbeatsApi.liveRunsForCompany(selectedCompanyId!),
@@ -78,14 +101,6 @@ export function Sidebar() {
             <span className="truncate">New Issue</span>
           </button>
           <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
-          <SidebarNavItem
-            to="/inbox"
-            label="Inbox"
-            icon={Inbox}
-            badge={inboxBadge.inbox}
-            badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-            alert={inboxBadge.failedRuns > 0}
-          />
           <PluginSlotOutlet
             slotTypes={["sidebar"]}
             context={pluginContext}
@@ -95,9 +110,60 @@ export function Sidebar() {
           />
         </div>
 
+        <SidebarSection label="Kênh Chat">
+          <SidebarNavItem
+            to="/channels/inbox"
+            label="Hộp thư"
+            icon={Inbox}
+            badge={totalUnread > 0 ? totalUnread : inboxBadge.inbox}
+            badgeTone={totalUnread > 0 ? "danger" : inboxBadge.failedRuns > 0 ? "danger" : "default"}
+            alert={totalUnread > 0 || inboxBadge.failedRuns > 0}
+          />
+          <SidebarNavItem to="/channels/settings" label="Cài đặt kênh" icon={Settings} />
+          <SidebarNavItem to="/war-room" label="War Room" icon={Zap} />
+          <SidebarNavItem to="/agents-config/sessions" label="Phiên Agent" icon={Activity} />
+        </SidebarSection>
+
+        <SidebarSection label="Vận hành">
+          <SidebarNavItem to="/ops/content-pipeline" label="Content Pipeline" icon={Activity} />
+          <SidebarNavItem to="/ops/affiliate" label="Affiliate & CTV" icon={UserCircle} />
+          <SidebarNavItem to="/ops/scanner" label="GEM Scanner" icon={Search} />
+        </SidebarSection>
+
+        <SidebarSection label="Trung tâm Nội dung">
+          <SidebarNavItem to="/cc" label="Tổng quan" icon={LayoutDashboard} end />
+          <SidebarNavItem to="/cc/ai-gen" label="AI Tạo Nội dung" icon={Sparkles} />
+          <SidebarNavItem to="/cc/scripts" label="Kịch bản" icon={FileText} />
+          <SidebarNavItem to="/cc/calendar" label="Lịch đăng bài" icon={Calendar} />
+          <SidebarNavItem to="/cc/repurpose" label="Tái sử dụng" icon={RefreshCw} />
+          <SidebarNavItem to="/cc/analytics" label="Thống kê" icon={BarChart3} />
+          <SidebarNavItem to="/cc/image-gen" label="Tạo hình" icon={Image} />
+          <SidebarNavItem to="/cc/video-reels" label="Video & Reels" icon={Video} />
+          <SidebarNavItem to="/cc/email" label="Email Campaign" icon={Mail} />
+          <SidebarNavItem to="/cc/funnels" label="Phễu chuyển đổi" icon={Filter} />
+          <SidebarNavItem to="/cc/settings" label="Cài đặt CC" icon={Settings} />
+        </SidebarSection>
+
+        <SidebarSection label="Cấu hình">
+          <SidebarNavItem to="/agents-config" label="Cấu hình Agent LLM" icon={Database} />
+          <SidebarNavItem to="/config" label="Trung tâm Cấu hình" icon={Settings} />
+        </SidebarSection>
+
+        <SidebarSection label="CRM">
+          <SidebarNavItem to="/crm" label="Tổng quan CRM" icon={BarChart3} end />
+          <SidebarNavItem to="/crm/customers" label="Khách hàng" icon={UserCircle} />
+          <SidebarNavItem to="/crm/tickets" label="Phiếu hỗ trợ" icon={Ticket} />
+          <SidebarNavItem to="/crm/orders" label="Đơn hàng" icon={ShoppingBag} />
+          <SidebarNavItem to="/crm/campaigns" label="Email Campaigns" icon={Mail} />
+          <SidebarNavItem to="/crm/knowledge-base" label="Knowledge Base" icon={BookOpen} />
+        </SidebarSection>
+
         <SidebarSection label="Work">
           <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+          <SidebarNavItem to="/workflows" label="Workflows" icon={Activity} />
+          <SidebarNavItem to="/channels/qa" label="Đánh giá & Trí tuệ" icon={BarChart3} />
+          <SidebarNavItem to="/ops/console" label="Console" icon={Terminal} />
         </SidebarSection>
 
         <SidebarProjects />
@@ -108,7 +174,6 @@ export function Sidebar() {
           <SidebarNavItem to="/org" label="Org" icon={Network} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
-          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         </SidebarSection>
 
         <PluginSlotOutlet

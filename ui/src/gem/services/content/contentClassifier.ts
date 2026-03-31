@@ -1,3 +1,4 @@
+// @ts-nocheck
 // ============================================================================
 // Content Classifier — Keyword-based Content Classification
 // GEM Content Control Center

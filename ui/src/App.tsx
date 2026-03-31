@@ -1,5 +1,23 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, lazy, Suspense } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
+
+// Content Center — lazy load
+const CCLayout = lazy(() => import("./pages/content-center/CCLayout"));
+const CCDashboard = lazy(() => import("./pages/content-center/CCDashboard"));
+const CCAIGen = lazy(() => import("./pages/content-center/CCAIGen"));
+const CCScripts = lazy(() => import("./pages/content-center/CCScripts"));
+const CCScriptDetail = lazy(() => import("./pages/content-center/CCScriptDetail"));
+const CCCalendar = lazy(() => import("./pages/content-center/CCCalendar"));
+const CCRepurpose = lazy(() => import("./pages/content-center/CCRepurpose"));
+const CCAnalytics = lazy(() => import("./pages/content-center/CCAnalytics"));
+const CCImageGen = lazy(() => import("./pages/content-center/CCImageGen"));
+const CCVideoReels = lazy(() => import("./pages/content-center/CCVideoReels"));
+const CCBrand = lazy(() => import("./pages/content-center/CCBrand"));
+const CCFunnels = lazy(() => import("./pages/content-center/CCFunnels"));
+const CCOptim = lazy(() => import("./pages/content-center/CCOptim"));
+const CCSettings = lazy(() => import("./pages/content-center/CCSettings"));
+const CCEmailCampaigns = lazy(() => import("./pages/content-center/CCEmailCampaigns"));
+const CCEmailCampaignDetail = lazy(() => import("./pages/content-center/CCEmailCampaignDetail"));
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
@@ -7,6 +25,10 @@ import { OnboardingWizard } from "./components/OnboardingWizard";
 import { authApi } from "./api/auth";
 import { healthApi } from "./api/health";
 import { Dashboard } from "./pages/Dashboard";
+import { OperationsCenter } from "./pages/OperationsCenter";
+import { ContentPipelinePage } from "./pages/ops/ContentPipelinePage";
+import { AffiliatePage } from "./pages/ops/AffiliatePage";
+import { ScannerPage } from "./pages/ops/ScannerPage";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
 import { AgentDetail } from "./pages/AgentDetail";
@@ -24,12 +46,40 @@ import { Activity } from "./pages/Activity";
 import { Inbox } from "./pages/Inbox";
 import { CompanySettings } from "./pages/CompanySettings";
 import { DesignGuide } from "./pages/DesignGuide";
+import { ZaloPersonalPage } from "./pages/channels/ZaloPersonalPage";
+import { ZaloPersonalChat } from "./pages/channels/ZaloPersonalChat";
+import { ChannelsOverview } from "./pages/channels/ChannelsOverview";
+import { ConversationsPage } from "./pages/channels/ConversationsPage";
+import { ConversationChat } from "./pages/channels/ConversationChat";
+import { ChannelSettingsPage } from "./pages/channels/ChannelSettingsPage";
+
+import { AgentListPage } from "./pages/agents/AgentListPage";
+import { AgentEditPage } from "./pages/agents/AgentEditPage";
+import { AgentTestPage } from "./pages/agents/AgentTestPage";
+import { AgentSessionsPage } from "./pages/agents/AgentSessionsPage";
+import { QAEvaluationPage } from "./pages/channels/QAEvaluationPage";
+import { WorkflowListPage } from "./pages/workflows/WorkflowListPage";
+import { WorkflowBuilderPage } from "./pages/workflows/WorkflowBuilderPage";
+import { UnifiedInbox } from "./pages/channels/UnifiedInbox";
 import { InstanceSettings } from "./pages/InstanceSettings";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
 import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
 import { PluginPage } from "./pages/PluginPage";
 import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
+import { WarRoom } from "./pages/WarRoom";
+import { CRMOverview } from "./pages/crm/CRMOverview";
+import { CustomerListPage } from "./pages/crm/CustomerListPage";
+import { CustomerDetailPage } from "./pages/crm/CustomerDetailPage";
+import { TicketListPage } from "./pages/crm/TicketListPage";
+// TicketBoardPage merged into TicketListPage as view toggle
+import { OrderListPage } from "./pages/crm/OrderListPage";
+import { ImportPage } from "./pages/crm/ImportPage";
+import { EmailCampaignsPage } from "./pages/crm/EmailCampaignsPage";
+import { KnowledgeBasePage } from "./pages/crm/KnowledgeBasePage";
+import { CommandConsolePage } from "./pages/ops/CommandConsolePage";
+
+import { ConfigHubPage } from "./pages/config/ConfigHubPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
 import { AuthPage } from "./pages/Auth";
@@ -113,6 +163,16 @@ function boardRoutes() {
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
+      <Route path="ops" element={<Navigate to="/dashboard" replace />} />
+      <Route path="ops/content-pipeline" element={<ContentPipelinePage />} />
+      <Route path="ops/affiliate" element={<AffiliatePage />} />
+      <Route path="ops/scanner" element={<ScannerPage />} />
+      <Route path="ops/console" element={<CommandConsolePage />} />
+      <Route path="ops/roster" element={<Navigate to="/config" replace />} />
+      <Route path="config" element={<ConfigHubPage />} />
+      <Route path="workflows" element={<WorkflowListPage />} />
+      <Route path="workflows/new" element={<WorkflowBuilderPage />} />
+      <Route path="workflows/:id" element={<WorkflowBuilderPage />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
@@ -157,6 +217,58 @@ function boardRoutes() {
       <Route path="inbox/unread" element={<Inbox />} />
       <Route path="inbox/all" element={<Inbox />} />
       <Route path="inbox/new" element={<Navigate to="/inbox/recent" replace />} />
+      <Route path="war-room" element={<WarRoom />} />
+      <Route path="crm" element={<CRMOverview />} />
+      <Route path="crm/customers" element={<CustomerListPage />} />
+      <Route path="crm/customers/:id" element={<CustomerDetailPage />} />
+      <Route path="crm/tickets" element={<TicketListPage />} />
+      {/* Kanban view merged into TicketListPage via toggle */}
+      <Route path="crm/tickets/:id" element={<TicketListPage />} />
+      <Route path="crm/orders" element={<OrderListPage />} />
+      <Route path="crm/orders/:id" element={<OrderListPage />} />
+      <Route path="crm/import" element={<ImportPage />} />
+      <Route path="crm/campaigns" element={<EmailCampaignsPage />} />
+      <Route path="crm/knowledge-base" element={<KnowledgeBasePage />} />
+      <Route path="channels/inbox" element={<UnifiedInbox />} />
+      <Route path="channels" element={<ChannelsOverview />} />
+      <Route path="channels/zalo-personal" element={<ZaloPersonalPage />} />
+      <Route path="channels/zalo-personal/:channelName" element={<Navigate to="../channels/inbox" replace />} />
+      <Route path="channels/zalo-personal/:channelName/:threadId" element={<Navigate to="../../channels/inbox" replace />} />
+      <Route path="channels/conversations" element={<ConversationsPage />} />
+      <Route path="channels/conversations/:sessionKey" element={<ConversationChat />} />
+      <Route path="channels/settings" element={<ChannelSettingsPage />} />
+      <Route path="channels/settings/:channelName" element={<ChannelSettingsPage />} />
+      <Route path="agents-config" element={<AgentListPage />} />
+      <Route path="agents-config/new" element={<AgentEditPage />} />
+      <Route path="agents-config/:slug/edit" element={<AgentEditPage />} />
+      <Route path="agents-config/:slug/test" element={<AgentTestPage />} />
+      <Route path="agents-config/sessions" element={<AgentSessionsPage />} />
+      <Route path="channels/qa" element={<QAEvaluationPage />} />
+      {/* ═══ TRUNG TÂM NỘI DUNG (Content Center) ═══ */}
+      <Route
+        path="cc"
+        element={
+          <Suspense fallback={<div className="p-8 text-center text-sm text-muted-foreground">Đang tải Trung tâm Nội dung...</div>}>
+            <CCLayout />
+          </Suspense>
+        }
+      >
+        <Route index element={<Suspense fallback={null}><CCDashboard /></Suspense>} />
+        <Route path="ai-gen" element={<Suspense fallback={null}><CCAIGen /></Suspense>} />
+        <Route path="scripts" element={<Suspense fallback={null}><CCScripts /></Suspense>} />
+        <Route path="scripts/:id" element={<Suspense fallback={null}><CCScriptDetail /></Suspense>} />
+        <Route path="calendar" element={<Suspense fallback={null}><CCCalendar /></Suspense>} />
+        <Route path="repurpose" element={<Suspense fallback={null}><CCRepurpose /></Suspense>} />
+        <Route path="analytics" element={<Suspense fallback={null}><CCAnalytics /></Suspense>} />
+        <Route path="image-gen" element={<Suspense fallback={null}><CCImageGen /></Suspense>} />
+        <Route path="video-reels" element={<Suspense fallback={null}><CCVideoReels /></Suspense>} />
+        <Route path="brand" element={<Suspense fallback={null}><CCBrand /></Suspense>} />
+        <Route path="funnels" element={<Suspense fallback={null}><CCFunnels /></Suspense>} />
+        <Route path="optim" element={<Suspense fallback={null}><CCOptim /></Suspense>} />
+        <Route path="settings" element={<Suspense fallback={null}><CCSettings /></Suspense>} />
+        <Route path="email" element={<Suspense fallback={null}><CCEmailCampaigns /></Suspense>} />
+        <Route path="email/:id" element={<Suspense fallback={null}><CCEmailCampaignDetail /></Suspense>} />
+      </Route>
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="tests/ux/runs" element={<RunTranscriptUxLab />} />
       <Route path=":pluginRoutePath" element={<PluginPage />} />
@@ -329,6 +441,9 @@ export function App() {
           <Route path="projects/:projectId/issues/:filter" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="tests/ux/runs" element={<UnprefixedBoardRedirect />} />
+          <Route path="war-room" element={<UnprefixedBoardRedirect />} />
+          <Route path="crm" element={<UnprefixedBoardRedirect />} />
+          <Route path="crm/*" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}
           </Route>

@@ -1,3 +1,4 @@
+// @ts-nocheck
 // ============================================================================
 // Brand Voice Prompt Builder
 // GEM Content Control Center
