@@ -32,6 +32,7 @@ import {
   Zap,
   Newspaper,
   CalendarPlus,
+  Mail,
 } from 'lucide-react';
 import { Button } from '@gem/ui';
 import { Badge } from '@gem/ui';
@@ -194,6 +195,25 @@ function tryParseJsonContent(text) {
   } catch {
     return null;
   }
+}
+
+// --- Detect if content is full HTML (email template etc.) ---
+function isHtmlContent(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  const stripped = trimmed.startsWith('```')
+    ? trimmed.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim()
+    : trimmed;
+  return /^<!DOCTYPE html>/i.test(stripped) || /^<html/i.test(stripped) || (stripped.includes('<body') && stripped.includes('</body>'));
+}
+
+// --- Strip markdown code fences ---
+function stripCodeFence(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('```')) {
+    return trimmed.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim();
+  }
+  return trimmed;
 }
 
 // --- Check if an array is tabular (all items are objects with same keys) ---
@@ -523,6 +543,13 @@ function ScriptDetailContent() {
   const [newsScheduleDate, setNewsScheduleDate] = useState('');
   const [newsScheduleTime, setNewsScheduleTime] = useState('08:00');
 
+  // --- Email Send State ---
+  const [emailTo, setEmailTo] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailSending, setEmailSending] = useState(false);
+  const [showEmailPanel, setShowEmailPanel] = useState(false);
+  const emailIframeRef = useRef(null);
+
   // --- Load Facebook Pages ---
   useEffect(() => {
     fetch('/api/social/publish')
@@ -543,6 +570,10 @@ function ScriptDetailContent() {
         ?? script.content
         ?? '';
       if (text) setBody(text);
+    }
+    // Pre-fill email subject from script title
+    if (script?.title && !emailSubject) {
+      setEmailSubject(script.title);
     }
   }, [script, isDirty]);
 
@@ -1256,6 +1287,23 @@ function ScriptDetailContent() {
             placeholder="Bắt đầu viết kịch bản tại đây..."
             spellCheck={false}
           />
+        ) : isHtmlContent(mainContent) ? (
+          <div className="overflow-hidden" style={{ minHeight: 300 }}>
+            <iframe
+              ref={emailIframeRef}
+              srcDoc={stripCodeFence(mainContent)}
+              style={{ width: '100%', minHeight: 500, border: 'none', display: 'block' }}
+              title="HTML Email Preview"
+              sandbox="allow-same-origin"
+              onLoad={(e) => {
+                const iframe = e.currentTarget;
+                try {
+                  const h = iframe.contentDocument?.documentElement?.scrollHeight;
+                  if (h) iframe.style.height = (h + 20) + 'px';
+                } catch {}
+              }}
+            />
+          </div>
         ) : (
           <div className="p-5">
             {renderMarkdownContent(mainContent)}
@@ -1653,6 +1701,102 @@ function ScriptDetailContent() {
             );
           })}
         </div>
+      </Card>
+
+      {/* ===== Gửi Email qua Resend ===== */}
+      <Card variant="glass" padding="md">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-xs font-semibold text-violet-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Mail size={14} />
+            Gửi Email (Resend)
+          </h4>
+          <button
+            onClick={() => setShowEmailPanel(!showEmailPanel)}
+            className="text-xxs text-txt-3 hover:text-txt transition-colors"
+          >
+            {showEmailPanel ? 'Thu gọn' : 'Mở rộng'}
+          </button>
+        </div>
+
+        {showEmailPanel && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-2">
+              <div>
+                <label className="text-xxs text-txt-3 block mb-1">Email người nhận *</label>
+                <input
+                  type="text"
+                  value={emailTo}
+                  onChange={(e) => setEmailTo(e.target.value)}
+                  placeholder="email@example.com (cách nhau bằng dấu phẩy nếu nhiều người)"
+                  className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-xxs text-txt-3 block mb-1">Tiêu đề email *</label>
+                <input
+                  type="text"
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  placeholder="Tiêu đề email..."
+                  className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
+                />
+              </div>
+            </div>
+
+            {isHtmlContent(mainContent) ? (
+              <div className="p-2 rounded-card bg-violet-500/5 border border-violet-500/20">
+                <p className="text-xxs text-violet-400 flex items-center gap-1">
+                  <CheckCircle2 size={11} />
+                  Nội dung HTML email sẽ được gửi định dạng đẹp.
+                </p>
+              </div>
+            ) : (
+              <div className="p-2 rounded-card bg-amber/5 border border-amber/20">
+                <p className="text-xxs text-amber flex items-center gap-1">
+                  <AlertTriangle size={11} />
+                  Nội dung plain text sẽ được wrap trong thẻ pre khi gửi.
+                </p>
+              </div>
+            )}
+
+            <button
+              disabled={emailSending || !emailTo.trim() || !emailSubject.trim()}
+              onClick={async () => {
+                if (!mainContent.trim()) {
+                  addToast({ type: 'error', message: 'Không có nội dung để gửi.' });
+                  return;
+                }
+                setEmailSending(true);
+                try {
+                  const recipients = emailTo.split(',').map(e => e.trim()).filter(Boolean);
+                  const htmlContent = isHtmlContent(mainContent)
+                    ? stripCodeFence(mainContent)
+                    : `<pre style="font-family:sans-serif;white-space:pre-wrap;line-height:1.6">${mainContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+                  const res = await fetch('/api/email/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent }),
+                  });
+                  const data = await res.json();
+                  if (data.success) {
+                    addToast({ type: 'success', title: '✅ Đã gửi email!', message: `Gửi đến ${recipients.length} người nhận.` });
+                    setEmailTo('');
+                  } else {
+                    addToast({ type: 'error', title: 'Lỗi gửi email', message: data.error || 'Không xác định' });
+                  }
+                } catch (err) {
+                  addToast({ type: 'error', message: `Lỗi: ${err.message}` });
+                } finally {
+                  setEmailSending(false);
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-card border border-violet-400/30 bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 text-xs font-semibold transition-all disabled:opacity-50"
+            >
+              {emailSending ? <Loader2 size={14} className="animate-spin" /> : <Mail size={14} />}
+              {emailSending ? 'Đang gửi...' : 'Gửi Email'}
+            </button>
+          </div>
+        )}
       </Card>
 
       {/* ===== News Publish Section ===== */}

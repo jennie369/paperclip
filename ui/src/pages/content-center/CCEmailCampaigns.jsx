@@ -138,17 +138,19 @@ export default function CCEmailCampaigns() {
     async function fetchKPIs() {
       setKpiLoading(true);
       try {
-        // Aggregate KPIs directly from cc_email_campaigns
-        const { data, error: fetchErr } = await supabase
-          .from('cc_email_campaigns')
-          .select('sent_count, open_rate, click_rate, revenue_attributed')
-          .eq('status', 'sent');
-        if (fetchErr) throw fetchErr;
-        const rows = data || [];
-        const total_sent = rows.reduce((s, r) => s + (r.sent_count || 0), 0);
-        const avg_open_rate = rows.length ? rows.reduce((s, r) => s + (r.open_rate || 0), 0) / rows.length : 0;
-        const avg_click_rate = rows.length ? rows.reduce((s, r) => s + (r.click_rate || 0), 0) / rows.length : 0;
-        const total_revenue = rows.reduce((s, r) => s + (r.revenue_attributed || 0), 0);
+        // Compute real stats directly from cc_email_sends
+        const [sentRes, openedRes, clickedRes, revenueRes] = await Promise.all([
+          supabase.from('cc_email_sends').select('*', { count: 'exact', head: true }),
+          supabase.from('cc_email_sends').select('*', { count: 'exact', head: true }).not('first_opened_at', 'is', null),
+          supabase.from('cc_email_sends').select('*', { count: 'exact', head: true }).not('first_clicked_at', 'is', null),
+          supabase.from('cc_email_campaigns').select('revenue_attributed').eq('status', 'sent'),
+        ]);
+        const total_sent = sentRes.count || 0;
+        const total_opened = openedRes.count || 0;
+        const total_clicked = clickedRes.count || 0;
+        const avg_open_rate = total_sent > 0 ? (total_opened / total_sent) * 100 : 0;
+        const avg_click_rate = total_sent > 0 ? (total_clicked / total_sent) * 100 : 0;
+        const total_revenue = (revenueRes.data || []).reduce((s, r) => s + (r.revenue_attributed || 0), 0);
         if (!cancelled) {
           setKpis({ total_sent, avg_open_rate, avg_click_rate, total_revenue });
         }
@@ -189,8 +191,39 @@ export default function CCEmailCampaigns() {
 
         const { data, count, error: fetchErr } = await query;
         if (fetchErr) throw fetchErr;
+        const rows = data ?? [];
+
+        // Enrich with real stats from cc_email_sends
+        let enriched = rows;
+        if (rows.length > 0) {
+          const ids = rows.map((c) => c.id);
+          const { data: sends } = await supabase
+            .from('cc_email_sends')
+            .select('campaign_id, first_opened_at, first_clicked_at')
+            .in('campaign_id', ids);
+          if (sends?.length) {
+            const statsMap = {};
+            sends.forEach((s) => {
+              if (!statsMap[s.campaign_id]) statsMap[s.campaign_id] = { sent: 0, opened: 0, clicked: 0 };
+              statsMap[s.campaign_id].sent++;
+              if (s.first_opened_at) statsMap[s.campaign_id].opened++;
+              if (s.first_clicked_at) statsMap[s.campaign_id].clicked++;
+            });
+            enriched = rows.map((c) => {
+              const st = statsMap[c.id];
+              if (!st) return c;
+              return {
+                ...c,
+                sent_count: st.sent,
+                open_rate: st.sent > 0 ? (st.opened / st.sent) * 100 : 0,
+                click_rate: st.sent > 0 ? (st.clicked / st.sent) * 100 : 0,
+              };
+            });
+          }
+        }
+
         if (!cancelled) {
-          setCampaigns(data ?? []);
+          setCampaigns(enriched);
           setTotalCount(count ?? 0);
         }
       } catch (err) {
@@ -526,30 +559,30 @@ export default function CCEmailCampaigns() {
       {/* Delete Confirmation Dialog */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-bg-3 border border-border rounded-xl p-5 w-full max-w-[380px] shadow-2xl">
+          <div className="bg-card border border-border rounded-xl p-5 w-full max-w-[380px] shadow-2xl">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-[#FF6B6B]/12 flex items-center justify-center">
-                  <AlertTriangle size={16} className="text-[#FF6B6B]" />
+                <div className="w-8 h-8 rounded-lg bg-destructive/12 flex items-center justify-center">
+                  <AlertTriangle size={16} className="text-destructive" />
                 </div>
-                <h3 className="text-[14px] font-bold text-white">Xác nhận xóa</h3>
+                <h3 className="text-[14px] font-bold text-foreground">Xác nhận xóa</h3>
               </div>
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="w-7 h-7 rounded-md bg-transparent border-none text-txt-3 hover:text-white hover:bg-bg-3 transition-colors cursor-pointer flex items-center justify-center"
+                className="w-7 h-7 rounded-md bg-transparent border-none text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer flex items-center justify-center"
               >
                 <X size={14} />
               </button>
             </div>
-            <p className="text-[12px] text-white/50 mb-1">Bạn có chắc muốn xóa chiến dịch này?</p>
-            <p className="text-[12px] font-semibold text-white mb-4 truncate">
+            <p className="text-[12px] text-muted-foreground mb-1">Bạn có chắc muốn xóa chiến dịch này?</p>
+            <p className="text-[12px] font-semibold text-foreground mb-4 truncate">
               {deleteTarget.name || 'Chiến dịch không tên'}
             </p>
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setDeleteTarget(null)}
                 disabled={deleting}
-                className="h-8 px-3.5 text-[12px] font-semibold rounded-lg border border-border bg-transparent text-txt-2 hover:bg-bg-3 hover:text-txt transition-colors cursor-pointer"
+                className="h-8 px-3.5 text-[12px] font-semibold rounded-lg border border-border bg-transparent text-foreground/70 hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
               >
                 Hủy
               </button>

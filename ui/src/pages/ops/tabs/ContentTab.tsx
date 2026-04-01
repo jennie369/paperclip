@@ -1,10 +1,10 @@
 // Tab 2: Nội Dung — cc_scripts CRUD + expand panel + editor + images + schedule + agent review
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check, X, Calendar, Copy, Trash2, Plus, ChevronDown, ChevronUp,
-  Shield, Loader2, ExternalLink, Image, Send,
+  Shield, Loader2, ExternalLink, Image, Send, Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,24 @@ function timeAgo(d?: string): string {
   if (ms < 3600000) return Math.round(ms / 60000) + ' phút trước';
   if (ms < 86400000) return Math.round(ms / 3600000) + ' giờ trước';
   return Math.round(ms / 86400000) + ' ngày trước';
+}
+
+// Detect if content is HTML (email template etc.)
+function isHtmlContent(content: string): boolean {
+  if (!content) return false;
+  const trimmed = content.trim();
+  const stripped = trimmed.startsWith('```')
+    ? trimmed.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim()
+    : trimmed;
+  return /^<!DOCTYPE html>/i.test(stripped) || /^<html/i.test(stripped) || (stripped.includes('<body') && stripped.includes('</body>'));
+}
+
+function stripCodeFence(content: string): string {
+  const trimmed = content.trim();
+  if (trimmed.startsWith('```')) {
+    return trimmed.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim();
+  }
+  return trimmed;
 }
 
 function renderMarkdown(md: string): string {
@@ -86,10 +104,15 @@ function ScriptExpandedPanel({ script }: { script: any }) {
   const [saving, setSaving] = useState(false);
   const [reviewAgent, setReviewAgent] = useState('ceo');
   const [scheduleForm, setScheduleForm] = useState({ date: '', time: '10:00', account: 'profile_jennie' });
+  const [emailTo, setEmailTo] = useState('');
+  const [emailSubject, setEmailSubject] = useState(script.title || '');
+  const [emailSending, setEmailSending] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Sync body when script id changes (e.g. different row expanded)
   useEffect(() => {
     setBody(script.body || script.caption || script.content || '');
+    setEmailSubject(script.title || '');
   }, [script.id]);
 
   const inv = () => qc.invalidateQueries({ queryKey: ['ops'] });
@@ -263,10 +286,29 @@ function ScriptExpandedPanel({ script }: { script: any }) {
 
       {/* Body content */}
       {mode === 'preview' ? (
-        <div
-          className="bg-white p-4 rounded-lg border text-sm min-h-[200px] max-h-[500px] overflow-y-auto leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(body) || '<span class="text-gray-400">(Không có nội dung)</span>' }}
-        />
+        isHtmlContent(body) ? (
+          <div className="rounded-lg border overflow-hidden bg-white" style={{ minHeight: 300 }}>
+            <iframe
+              ref={iframeRef}
+              srcDoc={stripCodeFence(body)}
+              style={{ width: '100%', minHeight: 400, border: 'none', display: 'block' }}
+              title="HTML Preview"
+              sandbox="allow-same-origin"
+              onLoad={(e) => {
+                const iframe = e.currentTarget;
+                try {
+                  const h = iframe.contentDocument?.documentElement?.scrollHeight;
+                  if (h) iframe.style.height = h + 'px';
+                } catch {}
+              }}
+            />
+          </div>
+        ) : (
+          <div
+            className="bg-white p-4 rounded-lg border text-sm min-h-[200px] max-h-[500px] overflow-y-auto leading-relaxed"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(body) || '<span class="text-gray-400">(Không có nội dung)</span>' }}
+          />
+        )
       ) : (
         <textarea
           value={body}
@@ -324,6 +366,63 @@ function ScriptExpandedPanel({ script }: { script: any }) {
           />
           <Button size="sm" onClick={handleSchedule} className="bg-blue-600 hover:bg-blue-700 text-white">
             <Calendar className="h-3 w-3 mr-1" />Lên lịch
+          </Button>
+        </div>
+      </div>
+
+      {/* Gửi Email qua Resend */}
+      <div className="p-3 bg-violet-50/80 rounded-lg space-y-2 border border-violet-100">
+        <p className="text-[11px] font-semibold text-violet-700 uppercase tracking-wider flex items-center gap-1">
+          <Mail className="h-3 w-3" />Gửi Email (Resend)
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="text"
+            value={emailTo}
+            onChange={e => setEmailTo(e.target.value)}
+            placeholder="Email người nhận (cách nhau bằng dấu phẩy)"
+            className="flex-1 min-w-[180px] text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-300"
+          />
+          <input
+            type="text"
+            value={emailSubject}
+            onChange={e => setEmailSubject(e.target.value)}
+            placeholder="Tiêu đề email"
+            className="flex-1 min-w-[140px] text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-300"
+          />
+          <Button
+            size="sm"
+            disabled={emailSending || !emailTo.trim() || !emailSubject.trim()}
+            onClick={async () => {
+              if (!body.trim()) { pushToast({ title: 'Không có nội dung để gửi', tone: 'error' }); return; }
+              setEmailSending(true);
+              try {
+                const recipients = emailTo.split(',').map((e: string) => e.trim()).filter(Boolean);
+                const htmlContent = isHtmlContent(body)
+                  ? stripCodeFence(body)
+                  : `<pre style="font-family:sans-serif;white-space:pre-wrap">${body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+                const res = await fetch('/api/email/send', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                  pushToast({ title: `✅ Đã gửi email đến ${recipients.length} người nhận`, tone: 'success' });
+                  setEmailTo('');
+                } else {
+                  pushToast({ title: data.error || 'Lỗi gửi email', tone: 'error' });
+                }
+              } catch {
+                pushToast({ title: 'Lỗi kết nối API email', tone: 'error' });
+              } finally {
+                setEmailSending(false);
+              }
+            }}
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+          >
+            {emailSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Mail className="h-3 w-3 mr-1" />}
+            {emailSending ? 'Đang gửi...' : 'Gửi Email'}
           </Button>
         </div>
       </div>

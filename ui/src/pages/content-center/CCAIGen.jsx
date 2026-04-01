@@ -2516,7 +2516,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
         } catch {}
         const campaignName = emailSubject.slice(0, 80) || `Email ${new Date().toLocaleDateString('vi-VN')}`;
         {
-          const { data: campaign } = await gemralSupa.from('cc_email_campaigns').insert({
+          const { data: campaign, error: insertErr } = await gemralSupa.from('cc_email_campaigns').insert({
             created_by: userId,
             name: campaignName,
             subject: emailSubject,
@@ -2533,6 +2533,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             resend_batch_id: data.id || null,
           }).select('id').single();
 
+          if (insertErr) console.error('[CCAIGen] INSERT cc_email_campaigns error:', insertErr);
           // 3. Tạo cc_email_sends cho từng recipient
           if (campaign?.id) {
             const sends = recipients.map((email) => ({
@@ -2546,7 +2547,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
           }
         }
       } catch (trackErr) {
-        console.warn('[CCAIGen] Email campaign tracking failed:', trackErr);
+        console.error('[CCAIGen] Email campaign tracking failed:', trackErr);
         // Không fail toàn bộ flow nếu tracking thất bại
       }
 
