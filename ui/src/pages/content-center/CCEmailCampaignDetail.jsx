@@ -24,7 +24,6 @@ import {
   FileText,
   X,
 } from 'lucide-react';
-import { useAuth } from '../../lib/authCompat';
 import { supabase } from '../../lib/supabaseClient';
 import {
   AreaChart,
@@ -170,7 +169,6 @@ const SENDS_PER_PAGE = 15;
 export default function CCEmailCampaignDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
 
   // Data state
   const [campaign, setCampaign] = useState(null);
@@ -381,7 +379,7 @@ export default function CCEmailCampaignDetail() {
       <div className="flex items-start justify-between gap-3 mb-5 max-md:flex-col">
         <div className="flex items-start gap-3 min-w-0">
           <button
-            onClick={() => navigate('/admin/cc/emails')}
+            onClick={() => navigate('/GEM/cc/email')}
             className="h-8 px-3 text-[12px] font-semibold rounded-lg border border-border bg-transparent text-txt-2 cursor-pointer inline-flex items-center gap-1.5 hover:bg-bg-3 hover:text-txt transition-colors flex-shrink-0 mt-0.5"
           >
             <ArrowLeft size={14} />

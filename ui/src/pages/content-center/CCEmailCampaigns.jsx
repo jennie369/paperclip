@@ -17,8 +17,6 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
-import { useAuth } from '../../lib/authCompat';
-import CCSelect from './CCSelect';
 
 // ============================================================================
 // Constants
@@ -74,12 +72,12 @@ function formatDate(dateStr) {
 
 function KPICard({ icon: Icon, label, value, iconColor, iconBg }) {
   return (
-    <div className="bg-[rgba(15,16,48,0.35)] rounded-xl p-3.5 text-center">
+    <div className="bg-card border border-border rounded-xl p-3.5 text-center shadow-sm">
       <div className={`w-9 h-9 rounded-lg ${iconBg} flex items-center justify-center mx-auto mb-2`}>
-        <Icon size={20} className={`${iconColor} opacity-70`} />
+        <Icon size={20} className={iconColor} />
       </div>
-      <div className="text-[22px] font-bold text-white">{value}</div>
-      <div className="text-[11px] text-txt-3 mt-0.5">{label}</div>
+      <div className="text-[22px] font-bold text-foreground">{value}</div>
+      <div className="text-[11px] text-muted-foreground mt-0.5">{label}</div>
     </div>
   );
 }
@@ -92,13 +90,13 @@ function MiniProgressBar({ value, color }) {
   const clampedValue = Math.min(Math.max(value || 0, 0), 100);
   return (
     <div className="flex items-center gap-1.5">
-      <div className="flex-1 h-1.5 rounded-full bg-bg-4 overflow-hidden">
+      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
         <div
           className={`h-full rounded-full ${color}`}
           style={{ width: `${clampedValue}%` }}
         />
       </div>
-      <span className="text-[11px] text-[#B8B8D0] w-[36px] text-right">{formatPercent(value)}</span>
+      <span className="text-[11px] text-muted-foreground w-[36px] text-right">{formatPercent(value)}</span>
     </div>
   );
 }
@@ -109,7 +107,6 @@ function MiniProgressBar({ value, color }) {
 
 export default function CCEmailCampaigns() {
   const navigate = useNavigate();
-  const { user } = useAuth();
 
   // --- State ---
   const [campaigns, setCampaigns] = useState([]);
@@ -136,24 +133,24 @@ export default function CCEmailCampaigns() {
 
   // --- Fetch KPIs ---
   useEffect(() => {
-    if (!user?.id) return;
     let cancelled = false;
 
     async function fetchKPIs() {
       setKpiLoading(true);
       try {
-        const { data, error: rpcErr } = await supabase.rpc('get_email_dashboard_kpis', {
-          p_user_id: user.id,
-          p_days: 30,
-        });
-        if (rpcErr) throw rpcErr;
-        if (!cancelled && data) {
-          setKpis({
-            total_sent: data.total_sent ?? data[0]?.total_sent ?? 0,
-            avg_open_rate: data.avg_open_rate ?? data[0]?.avg_open_rate ?? 0,
-            avg_click_rate: data.avg_click_rate ?? data[0]?.avg_click_rate ?? 0,
-            total_revenue: data.total_revenue ?? data[0]?.total_revenue ?? 0,
-          });
+        // Aggregate KPIs directly from cc_email_campaigns
+        const { data, error: fetchErr } = await supabase
+          .from('cc_email_campaigns')
+          .select('sent_count, open_rate, click_rate, revenue_attributed')
+          .eq('status', 'sent');
+        if (fetchErr) throw fetchErr;
+        const rows = data || [];
+        const total_sent = rows.reduce((s, r) => s + (r.sent_count || 0), 0);
+        const avg_open_rate = rows.length ? rows.reduce((s, r) => s + (r.open_rate || 0), 0) / rows.length : 0;
+        const avg_click_rate = rows.length ? rows.reduce((s, r) => s + (r.click_rate || 0), 0) / rows.length : 0;
+        const total_revenue = rows.reduce((s, r) => s + (r.revenue_attributed || 0), 0);
+        if (!cancelled) {
+          setKpis({ total_sent, avg_open_rate, avg_click_rate, total_revenue });
         }
       } catch (err) {
         console.error('KPI fetch error:', err);
@@ -164,11 +161,10 @@ export default function CCEmailCampaigns() {
 
     fetchKPIs();
     return () => { cancelled = true; };
-  }, [user?.id]);
+  }, []);
 
   // --- Fetch Campaigns ---
   useEffect(() => {
-    if (!user?.id) return;
     let cancelled = false;
 
     async function fetchCampaigns() {
@@ -207,7 +203,7 @@ export default function CCEmailCampaigns() {
 
     fetchCampaigns();
     return () => { cancelled = true; };
-  }, [user?.id, search, statusFilter, trackFilter, page]);
+  }, [search, statusFilter, trackFilter, page]);
 
   // Reset page when filters change
   useEffect(() => {
@@ -216,7 +212,7 @@ export default function CCEmailCampaigns() {
 
   // --- Handlers ---
   const handleRowClick = useCallback((id) => {
-    navigate(`/admin/cc/emails/${id}`);
+    navigate(`/GEM/cc/email/${id}`);
   }, [navigate]);
 
   const handleClone = useCallback(async (e, campaign) => {
@@ -271,8 +267,8 @@ export default function CCEmailCampaigns() {
     <div className="space-y-5">
       {/* Page Title */}
       <div>
-        <h1 className="text-[20px] font-bold text-white mb-1">Email Campaigns</h1>
-        <p className="text-[12px] text-txt-3">Quản lý và theo dõi các chiến dịch email marketing</p>
+        <h1 className="text-[20px] font-bold text-foreground mb-1">Email Campaigns</h1>
+        <p className="text-[12px] text-muted-foreground">Quản lý và theo dõi các chiến dịch email marketing</p>
       </div>
 
       {/* KPI Cards */}
@@ -313,7 +309,7 @@ export default function CCEmailCampaigns() {
         <div className="relative flex-1 min-w-[200px] max-w-[320px]">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-3" />
           <input
-            className="h-8 w-full pl-8 pr-3 text-[12px] bg-bg-4 border border-border rounded-lg text-white placeholder:text-txt-3 focus:border-purple/40 focus:outline-none transition-colors"
+            className="h-8 w-full pl-8 pr-3 text-[12px] bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none transition-colors"
             placeholder="Tìm tên campaign..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -321,31 +317,33 @@ export default function CCEmailCampaigns() {
         </div>
 
         {/* Status Filter */}
-        <CCSelect
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="w-[140px]"
-          placeholder="Trạng thái"
-        >
-          <option value="">Tất cả</option>
-          <option value="draft">Bản nháp</option>
-          <option value="sending">Đang gửi</option>
-          <option value="sent">Đã gửi</option>
-          <option value="failed">Thất bại</option>
-        </CCSelect>
+        <div className="w-[150px] shrink-0">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="h-8 w-full px-2.5 text-[12px] bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-primary/40 transition-colors"
+          >
+            <option value="">Tất cả trạng thái</option>
+            <option value="draft">Bản nháp</option>
+            <option value="sending">Đang gửi</option>
+            <option value="sent">Đã gửi</option>
+            <option value="failed">Thất bại</option>
+          </select>
+        </div>
 
         {/* Track Filter */}
-        <CCSelect
-          value={trackFilter}
-          onChange={(e) => setTrackFilter(e.target.value)}
-          className="w-[140px]"
-          placeholder="Track"
-        >
-          <option value="">Tất cả</option>
-          <option value="wealth">Wealth</option>
-          <option value="wellness">Wellness</option>
-          <option value="integration">Integration</option>
-        </CCSelect>
+        <div className="w-[140px] shrink-0">
+          <select
+            value={trackFilter}
+            onChange={(e) => setTrackFilter(e.target.value)}
+            className="h-8 w-full px-2.5 text-[12px] bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-primary/40 transition-colors"
+          >
+            <option value="">Tất cả track</option>
+            <option value="wealth">Wealth</option>
+            <option value="wellness">Wellness</option>
+            <option value="integration">Integration</option>
+          </select>
+        </div>
       </div>
 
       {/* Campaigns Table */}
@@ -377,26 +375,26 @@ export default function CCEmailCampaigns() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-xl bg-[rgba(15,16,48,0.2)]">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full border-collapse text-[12px]">
               <thead>
-                <tr>
-                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-white/35 border-b border-white/[0.04] whitespace-nowrap">
+                <tr className="bg-muted/50">
+                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap">
                     Chiến dịch
                   </th>
-                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-white/35 border-b border-white/[0.04] whitespace-nowrap">
+                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap">
                     Gửi
                   </th>
-                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-white/35 border-b border-white/[0.04] whitespace-nowrap min-w-[120px]">
+                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap min-w-[120px]">
                     Mở
                   </th>
-                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-white/35 border-b border-white/[0.04] whitespace-nowrap min-w-[120px]">
+                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap min-w-[120px]">
                     Click
                   </th>
-                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-white/35 border-b border-white/[0.04] whitespace-nowrap">
+                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap">
                     ROI
                   </th>
-                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-white/35 border-b border-white/[0.04] whitespace-nowrap">
+                  <th className="text-left p-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border whitespace-nowrap">
                     Thao tác
                   </th>
                 </tr>
@@ -410,24 +408,24 @@ export default function CCEmailCampaigns() {
                     <tr
                       key={c.id}
                       onClick={() => handleRowClick(c.id)}
-                      className="cursor-pointer hover:[&>td]:bg-bg-3 transition-colors"
+                      className="cursor-pointer hover:[&>td]:bg-muted/50 transition-colors"
                     >
                       {/* Campaign name + subject + date + track */}
-                      <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle max-w-[300px]">
+                      <td className="p-2.5 border-b border-border align-middle max-w-[300px]">
                         <div className="flex flex-col gap-0.5">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-[12px] font-semibold text-white truncate">
+                            <span className="text-[12px] font-semibold text-foreground truncate">
                               {c.name || 'Chiến dịch không tên'}
                             </span>
                             <span className={`inline-flex items-center h-[22px] px-2 text-[10px] font-semibold rounded ${statusCfg.bg} ${statusCfg.color}`}>
                               {statusCfg.label}
                             </span>
                           </div>
-                          <div className="text-[11px] text-txt-3 truncate">
+                          <div className="text-[11px] text-muted-foreground truncate">
                             {c.subject || '\u2014'}
                           </div>
                           <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[10px] text-txt-3">{formatDate(c.created_at)}</span>
+                            <span className="text-[10px] text-muted-foreground">{formatDate(c.created_at)}</span>
                             {trackCfg && (
                               <span className={`text-[10px] font-medium ${trackCfg.color}`}>
                                 {trackCfg.label}
@@ -438,24 +436,24 @@ export default function CCEmailCampaigns() {
                       </td>
 
                       {/* Sent count */}
-                      <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle whitespace-nowrap">
-                        <span className="text-[12px] font-medium text-white">
+                      <td className="p-2.5 border-b border-border align-middle whitespace-nowrap">
+                        <span className="text-[12px] font-medium text-foreground">
                           {formatNumber(c.sent_count)}
                         </span>
                       </td>
 
                       {/* Open rate with progress bar */}
-                      <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle">
+                      <td className="p-2.5 border-b border-border align-middle">
                         <MiniProgressBar value={c.open_rate} color="bg-[#FFBD59]" />
                       </td>
 
                       {/* Click rate with progress bar */}
-                      <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle">
+                      <td className="p-2.5 border-b border-border align-middle">
                         <MiniProgressBar value={c.click_rate} color="bg-[#6A5BFF]" />
                       </td>
 
                       {/* ROI */}
-                      <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle whitespace-nowrap">
+                      <td className="p-2.5 border-b border-border align-middle whitespace-nowrap">
                         <span className={`text-[12px] font-medium ${
                           (c.roi ?? 0) > 0 ? 'text-[#3AF7A6]' : (c.roi ?? 0) < 0 ? 'text-[#FF6B6B]' : 'text-txt-3'
                         }`}>
@@ -464,7 +462,7 @@ export default function CCEmailCampaigns() {
                       </td>
 
                       {/* Actions */}
-                      <td className="p-2.5 border-b border-white/[0.02] align-middle">
+                      <td className="p-2.5 border-b border-border align-middle">
                         <div className="flex gap-1">
                           <button
                             onClick={(e) => { e.stopPropagation(); handleRowClick(c.id); }}

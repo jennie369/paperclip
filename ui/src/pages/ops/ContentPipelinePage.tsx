@@ -13,9 +13,11 @@ import { EmailPushTab } from "./tabs/EmailPushTab";
 import { LinksTab } from "./tabs/LinksTab";
 import { SkillsMemoryTab } from "./tabs/SkillsMemoryTab";
 import { PlannerBoard } from "@/components/ops/PlannerBoard";
+import AiGenPage from "../content-center/CCAIGen";
 
 const TABS = [
   { key: "pipeline", label: "Pipeline" },
+  { key: "aigen", label: "✨ AI Tạo Nội Dung" },
   { key: "content", label: "Nội Dung" },
   { key: "schedule", label: "Lịch Nội Dung" },
   { key: "email", label: "Email & Push" },
@@ -201,6 +203,7 @@ export function ContentPipelinePage() {
 
       {/* Tab content */}
       {activeTab === "pipeline" && <PipelineTab onSwitchTab={(tab) => setActiveTab(tab as TabKey)} />}
+      {activeTab === "aigen" && <div className="cc-scope"><AiGenPage /></div>}
       {activeTab === "content" && <ContentTab />}
       {activeTab === "schedule" && <PlannerBoard />}
       {activeTab === "email" && <EmailPushTab />}

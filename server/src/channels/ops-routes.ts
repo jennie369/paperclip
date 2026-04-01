@@ -139,7 +139,7 @@ router.put('/content-pipeline/scripts/:key/schedule', async (req, res) => {
 // Generation Jobs — REAL DB + actions
 router.get('/content-pipeline/jobs', async (req, res) => {
   try {
-    const { status, limit = '50' } = req.query;
+    const { status, limit = '200' } = req.query;
     let query = supabase
       .from('cc_generation_jobs')
       .select('*')
@@ -152,10 +152,25 @@ router.get('/content-pipeline/jobs', async (req, res) => {
     const { data, error } = await query;
     if (error) throw error;
 
-    const jobs = (data || []).map(job => {
+    const jobs = (data || []).map((job: any) => {
       let params: any = {};
       try { params = typeof job.input_params === 'string' ? JSON.parse(job.input_params) : (job.input_params || {}); } catch {}
-      return { ...job, pillar: params.pillar || params.track || '', topic: params.userPrompt?.slice(0, 80) || params.topic || '', brand_voice: params.brandVoice || 'jennie' };
+      let outData: any = {};
+      try { outData = typeof job.output_data === 'string' ? JSON.parse(job.output_data) : (job.output_data || {}); } catch {}
+      return {
+        ...job,
+        // Prefer DB columns, fall back to input_params only when DB is empty
+        pillar: (job.pillar || params.pillar || params.track || ''),
+        content_type: (job.content_type || params.contentType || params.content_type || ''),
+        topic: params.userPrompt?.slice(0, 120) || params.topic || job.topic || '',
+        brand_voice: job.brand_voice || params.brandVoice || 'jennie',
+        // Expose provider/model from input_params for display
+        _provider: params.provider || '',
+        _model: params.model || '',
+        // Flatten output_data for easy frontend access
+        output_content: outData.content || (typeof outData === 'string' ? outData : ''),
+        script_id: outData.script_id || null,
+      };
     });
     res.json({ jobs });
   } catch (err: any) {
@@ -180,6 +195,16 @@ router.post('/content-pipeline/jobs/:id/cancel', async (req, res) => {
     res.json({ message: 'Job đã hủy' });
   } catch (err: any) {
     res.status(500).json({ error: 'Lỗi hủy job' });
+  }
+});
+
+router.delete('/content-pipeline/jobs/:id', async (req, res) => {
+  try {
+    const { error } = await supabase.from('cc_generation_jobs').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ message: 'Job đã xóa' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Lỗi xóa job' });
   }
 });
 
@@ -563,6 +588,50 @@ router.put('/content-pipeline/skills/:name', (req, res) => {
 });
 
 // Sync CC → Main — REMOVED (Phase 1: batch_processor now writes directly to Main Supabase)
+
+// ═══════════════════════════════════════════════════════
+// EMAIL SEND — RESEND API
+// ═══════════════════════════════════════════════════════
+
+router.post('/email/send', async (req, res) => {
+  try {
+    const { from, to, subject, html } = req.body;
+    if (!to || !subject || !html) {
+      return res.status(400).json({ success: false, error: 'Thiếu to, subject hoặc html' });
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ success: false, error: 'RESEND_API_KEY chưa được cấu hình' });
+    }
+
+    const payload = {
+      from: from || 'GEM <noreply@gemral.com>',
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+    };
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json() as any;
+    if (!response.ok) {
+      return res.status(response.status).json({ success: false, error: data.message || data.error || 'Lỗi Resend API' });
+    }
+
+    res.json({ success: true, id: data.id, data });
+  } catch (err: any) {
+    console.error('[Email Send]', err.message);
+    res.status(500).json({ success: false, error: err.message || 'Lỗi gửi email' });
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // AFFILIATE — REAL DB

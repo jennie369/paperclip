@@ -1148,6 +1148,7 @@ export default function AiGenPage() {
   const [newsScheduleTime, setNewsScheduleTime] = useState('08:00');
   const [newsMetadata, setNewsMetadata] = useState(null);
   // -- Email state --
+  const [manualEmailHtml, setManualEmailHtml] = useState('');
   const [emailType, setEmailType] = useState('newsletter');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailRecipients, setEmailRecipients] = useState('');
@@ -1427,7 +1428,7 @@ export default function AiGenPage() {
           const scheduledTime = new Date(`${date}T${item.time || '00:00'}`);
           if (now >= scheduledTime) {
             const { from, to, subject, html } = item.scheduledContent.emailData;
-            fetch('/api/email/send', {
+            fetch('/api/ops/email/send', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ from, to, subject, html }),
@@ -2476,8 +2477,9 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
 
   // -- Send email via Resend + track in cc_email_campaigns --
   const handleSendEmail = useCallback(async () => {
-    if (!output || !emailRecipients.trim()) {
-      addToast({ type: 'error', message: 'Vui lòng nhập địa chỉ email người nhận.' });
+    const htmlContent = output || manualEmailHtml;
+    if (!htmlContent || !emailRecipients.trim()) {
+      addToast({ type: 'error', message: 'Vui lòng nhập HTML email và địa chỉ người nhận.' });
       return;
     }
     if (!emailSubject.trim()) {
@@ -2490,14 +2492,14 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
       const recipients = emailRecipients.split(',').map(e => e.trim()).filter(Boolean);
 
       // 1. Gửi email qua API
-      const res = await fetch('/api/email/send', {
+      const res = await fetch('/api/ops/email/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           from: emailSender,
           to: recipients,
           subject: emailSubject,
-          html: output,
+          html: htmlContent,
         }),
       });
       const data = await res.json();
@@ -2505,15 +2507,20 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
 
       // 2. Track campaign trong cc_email_campaigns
       try {
+        const OWNER_UUID = '01fe99b8-ef1b-4cdd-892a-3e976d6b1881';
         const { supabase: gemralSupa } = await import('../../lib/supabaseClient');
-        const { data: { user } } = await gemralSupa.auth.getUser();
-        if (user) {
-          const campaignName = emailSubject.slice(0, 80) || `Email ${new Date().toLocaleDateString('vi-VN')}`;
+        let userId = OWNER_UUID;
+        try {
+          const { data: { user } } = await gemralSupa.auth.getUser();
+          if (user?.id) userId = user.id;
+        } catch {}
+        const campaignName = emailSubject.slice(0, 80) || `Email ${new Date().toLocaleDateString('vi-VN')}`;
+        {
           const { data: campaign } = await gemralSupa.from('cc_email_campaigns').insert({
-            created_by: user.id,
+            created_by: userId,
             name: campaignName,
             subject: emailSubject,
-            html_body: output,
+            html_body: htmlContent,
             from_name: emailSender.split('<')[0]?.trim() || 'Jennie Uyen Chu',
             from_email: emailSender.match(/<(.+)>/)?.[1] || emailSender,
             campaign_type: 'one_time',
@@ -5304,8 +5311,8 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             </div>
           )}
 
-          {/* ── Email: Gửi qua Resend ── */}
-          {generationDone && isEmail && (
+          {/* ── Email: Gửi qua Resend — luôn hiển thị khi chọn email type ── */}
+          {isEmail && (
             <div className="p-4 rounded-card border border-gold/20 bg-gold/5 space-y-4">
               <h4 className="text-xs font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
                 <Mail size={14} />
@@ -5347,6 +5354,30 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                     className="fi text-sm w-full"
                   />
                 </div>
+                {/* Manual HTML — chỉ hiển thị khi chưa có output từ AI */}
+                {!output && (
+                  <div>
+                    <label className="block text-xxs font-medium text-txt-2 mb-1">
+                      HTML Email * <span className="text-txt-3 font-normal">(dán code HTML vào đây nếu không dùng AI tạo nội dung)</span>
+                    </label>
+                    <textarea
+                      value={manualEmailHtml}
+                      onChange={(e) => setManualEmailHtml(e.target.value)}
+                      placeholder="<!DOCTYPE html><html>...</html>"
+                      rows={10}
+                      className="fi text-xs w-full font-mono resize-y"
+                    />
+                    {manualEmailHtml && (
+                      <div className="mt-1 text-xxs text-txt-3">{manualEmailHtml.length.toLocaleString()} ký tự</div>
+                    )}
+                  </div>
+                )}
+                {output && (
+                  <div className="p-2 rounded bg-success/10 border border-success/20 text-xxs text-success flex items-center gap-1.5">
+                    <CheckCircle2 size={11} />
+                    Sẽ gửi nội dung AI đã tạo ({output.length.toLocaleString()} ký tự)
+                  </div>
+                )}
               </div>
 
               {/* Send result */}
