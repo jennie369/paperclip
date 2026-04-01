@@ -106,7 +106,7 @@ function statusIcon(status) {
     case 'bounced':
       return <X size={12} className="text-[#FF6B6B]" />;
     default:
-      return <Clock size={12} className="text-white/40" />;
+      return <Clock size={12} className="text-txt-3" />;
   }
 }
 
@@ -132,7 +132,7 @@ function statusBadgeClasses(status) {
     case 'bounced':
       return 'bg-[#FF6B6B]/10 text-[#FF6B6B]';
     default:
-      return 'bg-white/[0.04] text-white/40';
+      return 'bg-bg-4 text-txt-3';
   }
 }
 
@@ -143,15 +143,15 @@ function statusBadgeClasses(status) {
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-[rgba(15,16,48,0.95)] border border-white/[0.06] rounded-lg p-2.5 text-[11px]">
-      <div className="text-white/60 mb-1">{label}</div>
+    <div className="bg-[rgba(15,16,48,0.95)] border border-border rounded-lg p-2.5 text-[11px]">
+      <div className="text-txt-2 mb-1">{label}</div>
       {payload.map((entry) => (
         <div key={entry.dataKey} className="flex items-center gap-2">
           <span
             className="w-2 h-2 rounded-full"
             style={{ backgroundColor: entry.color }}
           />
-          <span className="text-white/60">
+          <span className="text-txt-2">
             {entry.dataKey === 'opens' ? 'Lượt mở' : 'Lượt click'}:
           </span>
           <span className="text-white font-semibold">{entry.value}</span>
@@ -339,7 +339,7 @@ export default function CCEmailCampaignDetail() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 size={24} className="animate-spin text-white/40" />
+        <Loader2 size={24} className="animate-spin text-txt-3" />
       </div>
     );
   }
@@ -382,7 +382,7 @@ export default function CCEmailCampaignDetail() {
         <div className="flex items-start gap-3 min-w-0">
           <button
             onClick={() => navigate('/admin/cc/emails')}
-            className="h-8 px-3 text-[12px] font-semibold rounded-lg border border-white/10 bg-transparent text-white/60 cursor-pointer inline-flex items-center gap-1.5 hover:bg-white/5 hover:text-white transition-colors flex-shrink-0 mt-0.5"
+            className="h-8 px-3 text-[12px] font-semibold rounded-lg border border-border bg-transparent text-txt-2 cursor-pointer inline-flex items-center gap-1.5 hover:bg-bg-3 hover:text-txt transition-colors flex-shrink-0 mt-0.5"
           >
             <ArrowLeft size={14} />
             Quay lại
@@ -391,7 +391,7 @@ export default function CCEmailCampaignDetail() {
             <h1 className="text-[20px] font-bold text-white mb-0.5 truncate">
               {campaign.name || 'Chiến dịch email'}
             </h1>
-            <p className="text-[12px] text-white/40 truncate">{campaign.subject}</p>
+            <p className="text-[12px] text-txt-3 truncate">{campaign.subject}</p>
           </div>
         </div>
         <div className="flex gap-2 flex-shrink-0">
@@ -509,7 +509,7 @@ export default function CCEmailCampaignDetail() {
               className={`h-7 px-3.5 text-[11px] font-semibold rounded-md border-none cursor-pointer transition-colors ${
                 chartTab === 'hourly'
                   ? 'bg-[#FFBD59]/15 text-[#FFBD59]'
-                  : 'bg-transparent text-white/40 hover:text-white/60'
+                  : 'bg-transparent text-txt-3 hover:text-txt-2'
               }`}
             >
               Theo Giờ
@@ -519,7 +519,7 @@ export default function CCEmailCampaignDetail() {
               className={`h-7 px-3.5 text-[11px] font-semibold rounded-md border-none cursor-pointer transition-colors ${
                 chartTab === 'daily'
                   ? 'bg-[#FFBD59]/15 text-[#FFBD59]'
-                  : 'bg-transparent text-white/40 hover:text-white/60'
+                  : 'bg-transparent text-txt-3 hover:text-txt-2'
               }`}
             >
               Theo Ngày
@@ -595,22 +595,22 @@ export default function CCEmailCampaignDetail() {
           <div className="bg-[rgba(15,16,48,0.35)] rounded-xl p-3.5 text-center">
             <DollarSign size={20} className="mx-auto mb-1.5 text-[#FF6B6B] opacity-70" />
             <div className="text-[18px] font-bold text-white">{formatVND(roi.cost)}</div>
-            <div className="text-[11px] text-white/40 mt-0.5">Chi phí gửi</div>
+            <div className="text-[11px] text-txt-3 mt-0.5">Chi phí gửi</div>
           </div>
           <div className="bg-[rgba(15,16,48,0.35)] rounded-xl p-3.5 text-center">
             <DollarSign size={20} className="mx-auto mb-1.5 text-[#3AF7A6] opacity-70" />
             <div className="text-[18px] font-bold text-white">{formatVND(roi.revenue)}</div>
-            <div className="text-[11px] text-white/40 mt-0.5">Doanh thu gán</div>
+            <div className="text-[11px] text-txt-3 mt-0.5">Doanh thu gán</div>
           </div>
           <div className="bg-[rgba(15,16,48,0.35)] rounded-xl p-3.5 text-center">
             <Target size={20} className="mx-auto mb-1.5 text-[#FFBD59] opacity-70" />
             <div className="text-[18px] font-bold text-white">{roi.roiPct}%</div>
-            <div className="text-[11px] text-white/40 mt-0.5">ROI</div>
+            <div className="text-[11px] text-txt-3 mt-0.5">ROI</div>
           </div>
           <div className="bg-[rgba(15,16,48,0.35)] rounded-xl p-3.5 text-center">
             <ShoppingCart size={20} className="mx-auto mb-1.5 text-[#6A5BFF] opacity-70" />
             <div className="text-[18px] font-bold text-white">{roi.conversions}</div>
-            <div className="text-[11px] text-white/40 mt-0.5">Số đơn chuyển đổi</div>
+            <div className="text-[11px] text-txt-3 mt-0.5">Số đơn chuyển đổi</div>
           </div>
         </div>
 
@@ -633,7 +633,7 @@ export default function CCEmailCampaignDetail() {
               </thead>
               <tbody>
                 {roi.conversionSends.map((s) => (
-                  <tr key={s.id} className="hover:[&>td]:bg-white/[0.02]">
+                  <tr key={s.id} className="hover:[&>td]:bg-bg-3">
                     <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle">
                       {s.email || '—'}
                     </td>
@@ -642,7 +642,7 @@ export default function CCEmailCampaignDetail() {
                         {s.conversion_event}
                       </span>
                     </td>
-                    <td className="p-2.5 text-white/40 border-b border-white/[0.02] align-middle">
+                    <td className="p-2.5 text-txt-3 border-b border-white/[0.02] align-middle">
                       {formatDate(s.converted_at || s.created_at)}
                     </td>
                   </tr>
@@ -653,7 +653,7 @@ export default function CCEmailCampaignDetail() {
         ) : (
           <div className="text-center py-6">
             <ShoppingCart size={24} className="mx-auto mb-1.5 text-white/10" />
-            <div className="text-[12px] text-white/25">Chưa có chuyển đổi nào</div>
+            <div className="text-[12px] text-txt-3">Chưa có chuyển đổi nào</div>
           </div>
         )}
       </div>
@@ -680,7 +680,7 @@ export default function CCEmailCampaignDetail() {
           <div className="relative flex-1 max-w-[280px] max-md:max-w-none">
             <Search
               size={14}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30"
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-3"
             />
             <input
               value={searchQuery}
@@ -688,7 +688,7 @@ export default function CCEmailCampaignDetail() {
                 setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              className="h-8 w-full pl-8 pr-3 text-[12px] bg-white/[0.04] border border-white/[0.06] rounded-lg text-white placeholder:text-white/25 focus:border-[#6A5BFF]/40 focus:outline-none transition-colors"
+              className="h-8 w-full pl-8 pr-3 text-[12px] bg-bg-4 border border-border rounded-lg text-white placeholder:text-txt-3 focus:border-purple/40 focus:outline-none transition-colors"
               placeholder="Tìm theo email..."
             />
           </div>
@@ -698,7 +698,7 @@ export default function CCEmailCampaignDetail() {
               setStatusFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="h-8 px-2.5 text-[12px] bg-white/[0.04] border border-white/[0.06] rounded-lg text-white/60 focus:border-[#6A5BFF]/40 focus:outline-none transition-colors cursor-pointer appearance-none"
+            className="h-8 px-2.5 text-[12px] bg-bg-4 border border-border rounded-lg text-txt-2 focus:border-purple/40 focus:outline-none transition-colors cursor-pointer appearance-none"
             style={{ paddingRight: '28px' }}
           >
             <option value="all">Tất cả trạng thái</option>
@@ -733,7 +733,7 @@ export default function CCEmailCampaignDetail() {
               </thead>
               <tbody>
                 {paginatedSends.map((send) => (
-                  <tr key={send.id} className="hover:[&>td]:bg-white/[0.02]">
+                  <tr key={send.id} className="hover:[&>td]:bg-bg-3">
                     <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle">
                       <div className="text-[12px] font-medium text-white">{send.email || '—'}</div>
                     </td>
@@ -783,14 +783,14 @@ export default function CCEmailCampaignDetail() {
               <button
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage <= 1}
-                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 cursor-pointer hover:bg-white/5 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 cursor-pointer hover:bg-bg-3 hover:text-txt transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 Trước
               </button>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage >= totalPages}
-                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 cursor-pointer hover:bg-white/5 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 cursor-pointer hover:bg-bg-3 hover:text-txt transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 Sau
               </button>
@@ -809,9 +809,9 @@ export default function CCEmailCampaignDetail() {
         >
           <h3 className="text-[16px] font-bold text-[#FFBD59]">Xem Trước Email</h3>
           {previewOpen ? (
-            <ChevronUp size={18} className="text-white/40" />
+            <ChevronUp size={18} className="text-txt-3" />
           ) : (
-            <ChevronDown size={18} className="text-white/40" />
+            <ChevronDown size={18} className="text-txt-3" />
           )}
         </button>
 
@@ -821,14 +821,14 @@ export default function CCEmailCampaignDetail() {
             <div className="flex gap-2 mb-3">
               <button
                 onClick={handleCopyHTML}
-                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 cursor-pointer inline-flex items-center gap-1 hover:bg-white/5 hover:text-white transition-colors"
+                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 cursor-pointer inline-flex items-center gap-1 hover:bg-bg-3 hover:text-txt transition-colors"
               >
                 {copied ? <Check size={14} className="text-[#3AF7A6]" /> : <Copy size={14} />}
                 {copied ? 'Đã copy' : 'Copy HTML'}
               </button>
               <button
                 onClick={handleDownloadHTML}
-                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 cursor-pointer inline-flex items-center gap-1 hover:bg-white/5 hover:text-white transition-colors"
+                className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 cursor-pointer inline-flex items-center gap-1 hover:bg-bg-3 hover:text-txt transition-colors"
               >
                 <Download size={14} />
                 Tải Xuống
@@ -844,7 +844,7 @@ export default function CCEmailCampaignDetail() {
             ) : (
               <div className="text-center py-8">
                 <FileText size={24} className="mx-auto mb-1.5 text-white/10" />
-                <div className="text-[12px] text-white/25">Không có nội dung HTML</div>
+                <div className="text-[12px] text-txt-3">Không có nội dung HTML</div>
               </div>
             )}
           </div>
@@ -861,7 +861,7 @@ export default function CCEmailCampaignDetail() {
 function InfoRow({ label, value }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-[12px] text-white/40 min-w-[80px] flex-shrink-0">{label}:</span>
+      <span className="text-[12px] text-txt-3 min-w-[80px] flex-shrink-0">{label}:</span>
       <span className="text-[12px] text-[#E0E0F0] break-all">
         {typeof value === 'string' || typeof value === 'number' ? value : value}
       </span>
@@ -874,7 +874,7 @@ function KPICard({ icon: Icon, label, value, sub, color }) {
     <div className="bg-[rgba(15,16,48,0.35)] rounded-xl p-3.5 text-center">
       <Icon size={20} className="mx-auto mb-1.5 opacity-70" style={{ color }} />
       <div className="text-[18px] font-bold text-white">{value}</div>
-      <div className="text-[11px] text-white/40 mt-0.5">{label}</div>
+      <div className="text-[11px] text-txt-3 mt-0.5">{label}</div>
       {sub && <div className="text-[10px] font-semibold mt-0.5" style={{ color }}>{sub}</div>}
     </div>
   );

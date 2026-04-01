@@ -3530,7 +3530,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                       onClick={() => setBrief(tpl.brief)}
                       className={`px-3.5 py-2 text-[13px] font-medium rounded-lg border transition-all cursor-pointer ${brief === tpl.brief
                         ? 'border-gold/40 bg-gold/10 text-gold'
-                        : 'border-white/10 bg-white/[0.04] text-white/70 hover:border-white/20 hover:text-white/90'
+                        : 'border-border bg-bg-4 text-txt-2 hover:border-border-2 hover:text-txt'
                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
                       {tpl.label}
@@ -3769,8 +3769,8 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                       disabled={generating}
                       onClick={() => setEmailSubject(subj)}
                       className={`px-3.5 py-2 text-[13px] font-medium rounded-lg border transition-all cursor-pointer ${emailSubject === subj
-                        ? 'border-[#00F0FF]/40 bg-[#00F0FF]/10 text-[#00F0FF]'
-                        : 'border-white/10 bg-white/[0.04] text-white/70 hover:border-white/20 hover:text-white/90'
+                        ? 'border-blue/40 bg-blue/10 text-blue'
+                        : 'border-border bg-bg-4 text-txt-2 hover:border-border-2 hover:text-txt'
                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
                       {subj}
@@ -3832,7 +3832,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                       }}
                       className={`px-3.5 py-2 text-[13px] font-medium rounded-lg border transition-all cursor-pointer ${brief === tpl.brief
                         ? 'border-gold/40 bg-gold/10 text-gold'
-                        : 'border-white/10 bg-white/[0.04] text-white/70 hover:border-white/20 hover:text-white/90'
+                        : 'border-border bg-bg-4 text-txt-2 hover:border-border-2 hover:text-txt'
                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
                       {tpl.label}
@@ -4030,7 +4030,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                 <div key={category.id} className="mb-2">
                   <button
                     onClick={() => setEmailToolboxCategories(prev => ({ ...prev, [category.id]: !prev[category.id] }))}
-                    className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left rounded bg-glass-bg hover:bg-white/5 transition-colors"
+                    className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left rounded bg-glass-bg hover:bg-bg-3 transition-colors"
                   >
                     {emailToolboxCategories[category.id] ? <ChevronDown size={12} className="text-txt-3" /> : <ChevronRight size={12} className="text-txt-3" />}
                     <category.icon size={12} className="text-gold" />
@@ -4122,11 +4122,11 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
 
           {/* ═══ Iterate Chat Panel (Persistent Session) ═══ */}
           {sessionId && (
-            <div className="mb-4 p-3 rounded-xl bg-[rgba(15,16,48,0.25)] border border-white/[0.06]">
+            <div className="mb-4 p-3 rounded-xl bg-bg-3 border border-border">
               <div className="flex items-center gap-2 mb-2">
-                <Sparkles size={14} className="text-[#6A5BFF]" />
-                <span className="text-[12px] font-semibold text-[#6A5BFF]">Chat Với AI</span>
-                <span className="text-[10px] text-white/30 ml-auto">Session: {sessionId}</span>
+                <Sparkles size={14} className="text-purple" />
+                <span className="text-[12px] font-semibold text-purple">Chat Với AI</span>
+                <span className="text-[10px] text-txt-3 ml-auto">Session: {sessionId}</span>
               </div>
 
               {/* Quick iterate shortcuts */}
@@ -4136,7 +4136,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                     key={s.label}
                     disabled={iterating}
                     onClick={() => handleIterate(s.instruction)}
-                    className="h-[22px] px-2 text-[10px] font-semibold rounded bg-[#6A5BFF]/12 text-[#6A5BFF] border-none cursor-pointer hover:bg-[#6A5BFF]/20 transition-colors disabled:opacity-50"
+                    className="h-[22px] px-2 text-[10px] font-semibold rounded bg-purple/10 text-purple border border-purple/20 cursor-pointer hover:bg-purple/20 transition-colors disabled:opacity-50"
                   >
                     {s.label}
                   </button>
@@ -4145,9 +4145,9 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
 
               {/* Chat history */}
               {iterateHistory.length > 0 && (
-                <div className="max-h-[200px] overflow-y-auto space-y-1.5 mb-2 p-2 rounded-lg bg-white/[0.02]">
+                <div className="max-h-[200px] overflow-y-auto space-y-1.5 mb-2 p-2 rounded-lg bg-bg-4">
                   {iterateHistory.map((msg, i) => (
-                    <div key={i} className={`text-[11px] ${msg.role === 'user' ? 'text-[#FFBD59]' : 'text-[#B8B8D0]'}`}>
+                    <div key={i} className={`text-[11px] ${msg.role === 'user' ? 'text-gold' : 'text-txt-2'}`}>
                       <span className="font-semibold">{msg.role === 'user' ? 'Bạn' : 'AI'}:</span> {msg.text}
                     </div>
                   ))}
@@ -4162,12 +4162,12 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleIterate(iterateInput)}
                   placeholder="Sửa phần 3, thêm ví dụ, làm mềm CTA..."
                   disabled={iterating}
-                  className="flex-1 h-8 px-3 text-[12px] bg-white/[0.04] border border-white/[0.06] rounded-lg text-white placeholder:text-white/25 focus:border-[#6A5BFF]/40 focus:outline-none transition-colors disabled:opacity-50"
+                  className="flex-1 h-8 px-3 text-[12px] bg-bg-4 border border-border rounded-lg text-txt placeholder:text-txt-3 focus:border-purple/40 focus:outline-none transition-colors disabled:opacity-50"
                 />
                 <button
                   onClick={() => handleIterate(iterateInput)}
                   disabled={iterating || !iterateInput.trim()}
-                  className="h-8 px-3 text-[11px] font-semibold rounded-lg bg-[#6A5BFF]/15 text-[#6A5BFF] border-none cursor-pointer hover:bg-[#6A5BFF]/25 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="h-8 px-3 text-[11px] font-semibold rounded-lg bg-purple/15 text-purple border border-purple/20 cursor-pointer hover:bg-purple/25 transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   {iterating ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
                   Gửi
@@ -4287,7 +4287,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                         <button
                           disabled={!canUndo}
                           onClick={() => emailIframeRef.current?.contentWindow?.postMessage({ type: 'email-undo' }, '*')}
-                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
+                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-4 hover:text-txt transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
                           title="Hoàn tác (Ctrl+Z)"
                         >
                           <RefreshCw size={12} className="scale-x-[-1]" />
@@ -4296,7 +4296,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                         <button
                           disabled={!canRedo}
                           onClick={() => emailIframeRef.current?.contentWindow?.postMessage({ type: 'email-redo' }, '*')}
-                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
+                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-4 hover:text-txt transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
                           title="Làm lại (Ctrl+Y)"
                         >
                           <RefreshCw size={12} />

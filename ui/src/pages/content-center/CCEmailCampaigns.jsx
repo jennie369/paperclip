@@ -27,7 +27,7 @@ import CCSelect from './CCSelect';
 const PAGE_SIZE = 15;
 
 const STATUS_CONFIG = {
-  draft: { label: 'Bản nháp', color: 'text-white/50', bg: 'bg-white/[0.06]' },
+  draft: { label: 'Bản nháp', color: 'text-white/50', bg: 'bg-bg-4' },
   sending: { label: 'Đang gửi', color: 'text-[#00F0FF]', bg: 'bg-[#00F0FF]/12' },
   sent: { label: 'Đã gửi', color: 'text-[#3AF7A6]', bg: 'bg-[#3AF7A6]/12' },
   failed: { label: 'Thất bại', color: 'text-[#FF6B6B]', bg: 'bg-[#FF6B6B]/10' },
@@ -79,7 +79,7 @@ function KPICard({ icon: Icon, label, value, iconColor, iconBg }) {
         <Icon size={20} className={`${iconColor} opacity-70`} />
       </div>
       <div className="text-[22px] font-bold text-white">{value}</div>
-      <div className="text-[11px] text-white/40 mt-0.5">{label}</div>
+      <div className="text-[11px] text-txt-3 mt-0.5">{label}</div>
     </div>
   );
 }
@@ -92,7 +92,7 @@ function MiniProgressBar({ value, color }) {
   const clampedValue = Math.min(Math.max(value || 0, 0), 100);
   return (
     <div className="flex items-center gap-1.5">
-      <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+      <div className="flex-1 h-1.5 rounded-full bg-bg-4 overflow-hidden">
         <div
           className={`h-full rounded-full ${color}`}
           style={{ width: `${clampedValue}%` }}
@@ -272,7 +272,7 @@ export default function CCEmailCampaigns() {
       {/* Page Title */}
       <div>
         <h1 className="text-[20px] font-bold text-white mb-1">Email Campaigns</h1>
-        <p className="text-[12px] text-white/40">Quản lý và theo dõi các chiến dịch email marketing</p>
+        <p className="text-[12px] text-txt-3">Quản lý và theo dõi các chiến dịch email marketing</p>
       </div>
 
       {/* KPI Cards */}
@@ -311,9 +311,9 @@ export default function CCEmailCampaigns() {
       <div className="flex items-center gap-2.5 flex-wrap">
         {/* Search */}
         <div className="relative flex-1 min-w-[200px] max-w-[320px]">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30" />
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-txt-3" />
           <input
-            className="h-8 w-full pl-8 pr-3 text-[12px] bg-white/[0.04] border border-white/[0.06] rounded-lg text-white placeholder:text-white/25 focus:border-[#6A5BFF]/40 focus:outline-none transition-colors"
+            className="h-8 w-full pl-8 pr-3 text-[12px] bg-bg-4 border border-border rounded-lg text-white placeholder:text-txt-3 focus:border-purple/40 focus:outline-none transition-colors"
             placeholder="Tìm tên campaign..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -351,7 +351,7 @@ export default function CCEmailCampaigns() {
       {/* Campaigns Table */}
       {loading ? (
         <div className="flex items-center justify-center py-16">
-          <Loader2 size={24} className="animate-spin text-white/30" />
+          <Loader2 size={24} className="animate-spin text-txt-3" />
         </div>
       ) : error ? (
         <div className="text-center py-10 px-5">
@@ -410,7 +410,7 @@ export default function CCEmailCampaigns() {
                     <tr
                       key={c.id}
                       onClick={() => handleRowClick(c.id)}
-                      className="cursor-pointer hover:[&>td]:bg-white/[0.02] transition-colors"
+                      className="cursor-pointer hover:[&>td]:bg-bg-3 transition-colors"
                     >
                       {/* Campaign name + subject + date + track */}
                       <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle max-w-[300px]">
@@ -423,11 +423,11 @@ export default function CCEmailCampaigns() {
                               {statusCfg.label}
                             </span>
                           </div>
-                          <div className="text-[11px] text-white/40 truncate">
+                          <div className="text-[11px] text-txt-3 truncate">
                             {c.subject || '\u2014'}
                           </div>
                           <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[10px] text-white/25">{formatDate(c.created_at)}</span>
+                            <span className="text-[10px] text-txt-3">{formatDate(c.created_at)}</span>
                             {trackCfg && (
                               <span className={`text-[10px] font-medium ${trackCfg.color}`}>
                                 {trackCfg.label}
@@ -457,7 +457,7 @@ export default function CCEmailCampaigns() {
                       {/* ROI */}
                       <td className="p-2.5 text-[#E0E0F0] border-b border-white/[0.02] align-middle whitespace-nowrap">
                         <span className={`text-[12px] font-medium ${
-                          (c.roi ?? 0) > 0 ? 'text-[#3AF7A6]' : (c.roi ?? 0) < 0 ? 'text-[#FF6B6B]' : 'text-white/40'
+                          (c.roi ?? 0) > 0 ? 'text-[#3AF7A6]' : (c.roi ?? 0) < 0 ? 'text-[#FF6B6B]' : 'text-txt-3'
                         }`}>
                           {c.roi != null ? `${Number(c.roi).toFixed(1)}%` : '\u2014'}
                         </span>
@@ -468,14 +468,14 @@ export default function CCEmailCampaigns() {
                         <div className="flex gap-1">
                           <button
                             onClick={(e) => { e.stopPropagation(); handleRowClick(c.id); }}
-                            className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer inline-flex items-center gap-1"
+                            className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-3 hover:text-txt transition-colors cursor-pointer inline-flex items-center gap-1"
                           >
                             <Eye size={12} />
                             Xem
                           </button>
                           <button
                             onClick={(e) => handleClone(e, c)}
-                            className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer inline-flex items-center gap-1"
+                            className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-3 hover:text-txt transition-colors cursor-pointer inline-flex items-center gap-1"
                           >
                             <Copy size={12} />
                             Clone
@@ -499,14 +499,14 @@ export default function CCEmailCampaigns() {
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between pt-1">
-              <span className="text-[11px] text-white/30">
+              <span className="text-[11px] text-txt-3">
                 Trang {page + 1} / {totalPages} ({formatNumber(totalCount)} chiến dịch)
               </span>
               <div className="flex items-center gap-1">
                 <button
                   disabled={page === 0}
                   onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  className="h-7 px-2 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="h-7 px-2 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-3 hover:text-txt transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   <ChevronLeft size={14} />
                   Trước
@@ -514,7 +514,7 @@ export default function CCEmailCampaigns() {
                 <button
                   disabled={page >= totalPages - 1}
                   onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                  className="h-7 px-2 text-[11px] font-semibold rounded-md border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="h-7 px-2 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-3 hover:text-txt transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   Sau
                   <ChevronRight size={14} />
@@ -528,7 +528,7 @@ export default function CCEmailCampaigns() {
       {/* Delete Confirmation Dialog */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#0f1030] border border-white/10 rounded-xl p-5 w-full max-w-[380px] shadow-2xl">
+          <div className="bg-bg-3 border border-border rounded-xl p-5 w-full max-w-[380px] shadow-2xl">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-[#FF6B6B]/12 flex items-center justify-center">
@@ -538,7 +538,7 @@ export default function CCEmailCampaigns() {
               </div>
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="w-7 h-7 rounded-md bg-transparent border-none text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer flex items-center justify-center"
+                className="w-7 h-7 rounded-md bg-transparent border-none text-txt-3 hover:text-white hover:bg-bg-3 transition-colors cursor-pointer flex items-center justify-center"
               >
                 <X size={14} />
               </button>
@@ -551,7 +551,7 @@ export default function CCEmailCampaigns() {
               <button
                 onClick={() => setDeleteTarget(null)}
                 disabled={deleting}
-                className="h-8 px-3.5 text-[12px] font-semibold rounded-lg border border-white/10 bg-transparent text-white/60 hover:bg-white/5 hover:text-white transition-colors cursor-pointer"
+                className="h-8 px-3.5 text-[12px] font-semibold rounded-lg border border-border bg-transparent text-txt-2 hover:bg-bg-3 hover:text-txt transition-colors cursor-pointer"
               >
                 Hủy
               </button>
