@@ -46,6 +46,25 @@ function stripCodeFence(content: string): string {
   return trimmed;
 }
 
+// Tách phần IMAGE_PROMPT ra khỏi nội dung email trước khi gửi
+function stripImagePrompt(html: string): string {
+  // Dạng comment HTML: <!-- IMAGE_PROMPT: ... -->
+  let result = html.replace(/<!--\s*IMAGE_PROMPT[\s\S]*?-->/gi, '');
+  // Dạng text thô trong body: ===IMAGE_PROMPT=== hoặc —IMAGE_PROMPT—
+  result = result.replace(/={2,}\s*IMAGE_PROMPT\s*={2,}[\s\S]*/gi, '');
+  result = result.replace(/\u2014{1,}\s*IMAGE_PROMPT[\s\S]*/gi, '');
+  // Dạng trong thẻ <p> hoặc <div> có chứa IMAGE_PROMPT
+  result = result.replace(/<[^>]+>[^<]*IMAGE_PROMPT[\s\S]*?<\/(?:p|div|td|span)>/gi, '');
+  return result.trim();
+}
+
+// Lấy phần IMAGE_PROMPT để hiển thị riêng
+function extractImagePrompt(content: string): string {
+  const match = content.match(/={2,}\s*IMAGE_PROMPT\s*={2,}([\s\S]*)/i)
+    || content.match(/\u2014+\s*IMAGE_PROMPT([\s\S]*)/i);
+  return match ? match[1].trim() : '';
+}
+
 function renderMarkdown(md: string): string {
   if (!md) return '';
   // escape HTML first
@@ -104,6 +123,7 @@ function ScriptExpandedPanel({ script }: { script: any }) {
   const [saving, setSaving] = useState(false);
   const [reviewAgent, setReviewAgent] = useState('ceo');
   const [scheduleForm, setScheduleForm] = useState({ date: '', time: '10:00', account: 'profile_jennie' });
+  const [emailFrom, setEmailFrom] = useState('Gemral <support@gemral.com>');
   const [emailTo, setEmailTo] = useState('');
   const [emailSubject, setEmailSubject] = useState(script.title || '');
   const [emailSending, setEmailSending] = useState(false);
@@ -371,61 +391,122 @@ function ScriptExpandedPanel({ script }: { script: any }) {
       </div>
 
       {/* Gửi Email qua Resend */}
-      <div className="p-3 bg-violet-50/80 rounded-lg space-y-2 border border-violet-100">
-        <p className="text-[11px] font-semibold text-violet-700 uppercase tracking-wider flex items-center gap-1">
-          <Mail className="h-3 w-3" />Gửi Email (Resend)
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <input
-            type="text"
-            value={emailTo}
-            onChange={e => setEmailTo(e.target.value)}
-            placeholder="Email người nhận (cách nhau bằng dấu phẩy)"
-            className="flex-1 min-w-[180px] text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-300"
-          />
-          <input
-            type="text"
-            value={emailSubject}
-            onChange={e => setEmailSubject(e.target.value)}
-            placeholder="Tiêu đề email"
-            className="flex-1 min-w-[140px] text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-300"
-          />
-          <Button
-            size="sm"
-            disabled={emailSending || !emailTo.trim() || !emailSubject.trim()}
-            onClick={async () => {
-              if (!body.trim()) { pushToast({ title: 'Không có nội dung để gửi', tone: 'error' }); return; }
-              setEmailSending(true);
-              try {
-                const recipients = emailTo.split(',').map((e: string) => e.trim()).filter(Boolean);
-                const htmlContent = isHtmlContent(body)
-                  ? stripCodeFence(body)
-                  : `<pre style="font-family:sans-serif;white-space:pre-wrap">${body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
-                const res = await fetch('/api/email/send', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent }),
-                });
-                const data = await res.json();
-                if (data.success) {
-                  pushToast({ title: `✅ Đã gửi email đến ${recipients.length} người nhận`, tone: 'success' });
-                  setEmailTo('');
-                } else {
-                  pushToast({ title: data.error || 'Lỗi gửi email', tone: 'error' });
-                }
-              } catch {
-                pushToast({ title: 'Lỗi kết nối API email', tone: 'error' });
-              } finally {
-                setEmailSending(false);
-              }
-            }}
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-          >
-            {emailSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Mail className="h-3 w-3 mr-1" />}
-            {emailSending ? 'Đang gửi...' : 'Gửi Email'}
-          </Button>
-        </div>
-      </div>
+      {(() => {
+        const rawHtml = isHtmlContent(body) ? stripCodeFence(body) : '';
+        const cleanHtml = rawHtml ? stripImagePrompt(rawHtml) : '';
+        const imgPrompt = rawHtml ? extractImagePrompt(rawHtml) : '';
+        const charCount = cleanHtml.length || body.length;
+        const handleSendEmail = async () => {
+          if (!body.trim()) { pushToast({ title: 'Không có nội dung để gửi', tone: 'error' }); return; }
+          if (!emailTo.trim()) { pushToast({ title: 'Vui lòng nhập email người nhận', tone: 'error' }); return; }
+          if (!emailSubject.trim()) { pushToast({ title: 'Vui lòng nhập tiêu đề email', tone: 'error' }); return; }
+          setEmailSending(true);
+          try {
+            const recipients = emailTo.split(',').map((e: string) => e.trim()).filter(Boolean);
+            const htmlContent = cleanHtml
+              || `<pre style="font-family:sans-serif;white-space:pre-wrap">${body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+            const res = await fetch('/api/email/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent, from: emailFrom }),
+            });
+            const data = await res.json();
+            if (data.success) {
+              pushToast({ title: `✅ Đã gửi email đến ${recipients.length} người nhận`, tone: 'success' });
+              setEmailTo('');
+            } else {
+              pushToast({ title: data.error || 'Lỗi gửi email', tone: 'error' });
+            }
+          } catch {
+            pushToast({ title: 'Lỗi kết nối API email', tone: 'error' });
+          } finally {
+            setEmailSending(false);
+          }
+        };
+        return (
+          <div className="rounded-lg border border-violet-200 bg-violet-50/60 overflow-hidden">
+            <div className="px-3 py-2 border-b border-violet-100 flex items-center gap-1.5">
+              <Mail className="h-3.5 w-3.5 text-violet-600" />
+              <span className="text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Gửi Email qua Resend</span>
+            </div>
+            <div className="p-3 space-y-2">
+              {/* Sender */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Gửi từ (Sender) *</label>
+                <input
+                  type="text"
+                  value={emailFrom}
+                  onChange={e => setEmailFrom(e.target.value)}
+                  placeholder="Gemral <support@gemral.com>"
+                  className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
+                />
+              </div>
+              {/* Subject */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Tiêu đề email *</label>
+                <input
+                  type="text"
+                  value={emailSubject}
+                  onChange={e => setEmailSubject(e.target.value)}
+                  placeholder="Nhập tiêu đề email..."
+                  className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
+                />
+              </div>
+              {/* Recipients */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Người nhận * (dấu phẩy phân cách)</label>
+                <input
+                  type="text"
+                  value={emailTo}
+                  onChange={e => setEmailTo(e.target.value)}
+                  placeholder="email1@gmail.com, email2@gmail.com"
+                  className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
+                />
+              </div>
+              {/* Info + IMAGE_PROMPT notice */}
+              <div className="flex flex-wrap items-center gap-2 text-[10px] text-violet-600">
+                <span>📄 Sẽ gửi nội dung đã tạo ({charCount.toLocaleString()} ký tự)</span>
+                {imgPrompt && (
+                  <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium">
+                    ✂️ Đã tách IMAGE_PROMPT ra — sẽ không gửi kèm
+                  </span>
+                )}
+              </div>
+              {/* IMAGE_PROMPT preview (collapsed) */}
+              {imgPrompt && (
+                <details className="text-[10px]">
+                  <summary className="cursor-pointer text-amber-600 hover:text-amber-700 font-medium">Xem prompt hình ảnh đã tách...</summary>
+                  <pre className="mt-1 p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 whitespace-pre-wrap max-h-24 overflow-y-auto">{imgPrompt}</pre>
+                </details>
+              )}
+              {/* Buttons */}
+              <div className="flex gap-2 pt-1">
+                <Button
+                  size="sm"
+                  disabled={emailSending || !emailTo.trim() || !emailSubject.trim() || !emailFrom.trim()}
+                  onClick={handleSendEmail}
+                  className="bg-violet-600 hover:bg-violet-700 text-white"
+                >
+                  {emailSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Mail className="h-3 w-3 mr-1" />}
+                  {emailSending ? 'Đang gửi...' : 'Gửi Email'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const toCopy = cleanHtml || body;
+                    navigator.clipboard.writeText(toCopy)
+                      .then(() => pushToast({ title: 'Đã sao chép HTML', tone: 'success' }))
+                      .catch(() => {});
+                  }}
+                >
+                  <Copy className="h-3 w-3 mr-1" />Sao Chép HTML
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Agent review */}
       <div className="p-3 bg-zinc-50 rounded-lg flex items-center gap-2 flex-wrap border border-zinc-100">
