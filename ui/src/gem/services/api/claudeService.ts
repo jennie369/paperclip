@@ -113,14 +113,20 @@ export const claudeService = {
     const jobType = params.jobType ?? 'script';
     const timeoutMs = params.timeoutMs ?? JOB_TIMEOUT_MS[jobType] ?? DEFAULT_TIMEOUT_MS;
 
-    // Lấy user ID từ Gemral auth (CC Supabase là project riêng, user auth ở Gemral)
+    // Lấy user ID — thử Gemral auth trước, fallback về owner UUID
+    // Paperclip dashboard là internal admin tool, không yêu cầu Gemral login
+    const PAPERCLIP_OWNER_UUID = '01fe99b8-ef1b-4cdd-892a-3e976d6b1881';
     let userId = params.userId;
     if (!userId) {
-      const { data: { user } } = await gemralSupabase.auth.getUser();
-      userId = user?.id;
+      try {
+        const { data: { user } } = await gemralSupabase.auth.getUser();
+        userId = user?.id;
+      } catch {
+        // ignore auth errors — Paperclip doesn't require Gemral session
+      }
     }
     if (!userId) {
-      throw new Error('Không xác định được người dùng. Vui lòng đăng nhập lại.');
+      userId = PAPERCLIP_OWNER_UUID;
     }
 
     // 1. Tạo job trong cc_generation_jobs (RLS disabled — admin-only access)
