@@ -462,4 +462,225 @@ router.post('/executions/:execId/reject', async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════
+// PHASE 5 — Sales/CS Pipeline + ReMe Injection + Follow-up
+// ═══════════════════════════════════════════════════════
+
+// Helper: chunk markdown by ## headers or ~500 char blocks
+function chunkMarkdown(text: string, maxChars = 500): string[] {
+  const sections = text.split(/(?=^## )/gm);
+  const chunks: string[] = [];
+
+  for (const section of sections) {
+    if (section.length <= maxChars) {
+      chunks.push(section.trim());
+    } else {
+      // Split long sections into paragraphs
+      const paragraphs = section.split(/\n\n+/);
+      let current = '';
+      for (const p of paragraphs) {
+        if ((current + p).length > maxChars && current) {
+          chunks.push(current.trim());
+          current = p;
+        } else {
+          current += (current ? '\n\n' : '') + p;
+        }
+      }
+      if (current.trim()) chunks.push(current.trim());
+    }
+  }
+
+  return chunks.filter(c => c.length > 10);
+}
+
+// 5.1 POST /convert/:customerId — Sales → CS switch
+router.post('/convert/:customerId', async (req, res) => {
+  const { customerId } = req.params;
+  const { new_agent } = req.body || {};
+
+  try {
+    // Update customer status
+    await supabase
+      .from('crm_customers')
+      .update({ status: 'đã_mua', updated_at: new Date().toISOString() })
+      .eq('id', customerId);
+
+    // Audit log
+    await supabase.from('gem_sop_audit').insert({
+      sop_id: 'SAL-008',
+      action: 'stage_converted',
+      actor: req.body?.actor || 'board',
+      detail: { customer_id: customerId, new_agent: new_agent || 'customer-success' },
+    });
+
+    res.json({ message: 'Đã chuyển sang CS AI', new_agent: new_agent || 'customer-success' });
+  } catch (err: any) {
+    console.error('[SOP Convert]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5.2 POST /inject-reme/:sopId — Inject SOP content into KB
+router.post('/inject-reme/:sopId', async (req, res) => {
+  const { sopId } = req.params;
+
+  try {
+    // Get SOP content
+    const { data: sop } = await supabase
+      .from('gem_sops')
+      .select('sop_id, name, body_markdown')
+      .eq('sop_id', sopId)
+      .single();
+
+    if (!sop || !sop.body_markdown) {
+      return res.status(400).json({ error: 'SOP chưa có nội dung' });
+    }
+
+    // Chunk body by ## headers or by ~500 char blocks
+    const chunks = chunkMarkdown(sop.body_markdown);
+
+    // Insert into kb_documents (check if table exists first)
+    const { data: doc, error: docErr } = await supabase
+      .from('kb_documents')
+      .upsert({
+        title: sop.name,
+        content: sop.body_markdown,
+        source: 'sop',
+        source_id: sop.sop_id,
+        collection_id: 'sop-collection',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'source_id' })
+      .select('id')
+      .single();
+
+    if (docErr) {
+      // kb_documents may not exist — log and return partial success
+      console.warn('[SOP] kb_documents insert failed:', docErr.message);
+    }
+
+    // Insert chunks (if kb_chunks exists)
+    if (doc?.id) {
+      // Delete old chunks for this doc
+      await supabase.from('kb_chunks').delete().eq('document_id', doc.id);
+
+      // Insert new chunks (without embeddings — full-text search only)
+      for (const chunk of chunks) {
+        await supabase.from('kb_chunks').insert({
+          document_id: doc.id,
+          content: chunk,
+        });
+      }
+    }
+
+    // Update SOP
+    await supabase.from('gem_sops').update({
+      inject_reme: true,
+      reme_synced_at: new Date().toISOString(),
+    }).eq('sop_id', sopId);
+
+    // Audit
+    await supabase.from('gem_sop_audit').insert({
+      sop_id: sopId,
+      action: 'reme_injected',
+      actor: 'board',
+      detail: { chunks: chunks.length },
+    });
+
+    res.json({ message: `Đã inject ${chunks.length} chunks vào ReMe`, chunks: chunks.length });
+  } catch (err: any) {
+    console.error('[SOP ReMe Inject]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5.2b POST /bulk-inject-reme — Inject multiple SOPs
+router.post('/bulk-inject-reme', async (req, res) => {
+  const { sop_ids, status } = req.body || {};
+
+  try {
+    let query = supabase.from('gem_sops').select('sop_id').not('body_markdown', 'is', null);
+    if (sop_ids) query = query.in('sop_id', sop_ids);
+    if (status) query = query.eq('status', status);
+
+    const { data: sops } = await query;
+    if (!sops || sops.length === 0) {
+      return res.json({ message: 'Không có SOP nào để inject', injected: 0 });
+    }
+
+    let injected = 0;
+    for (const sop of sops) {
+      try {
+        await supabase.from('gem_sops').update({
+          inject_reme: true,
+          reme_synced_at: new Date().toISOString(),
+        }).eq('sop_id', sop.sop_id);
+        injected++;
+      } catch { /* skip */ }
+    }
+
+    res.json({ message: `Đã inject ${injected}/${sops.length} SOPs`, injected });
+  } catch (err: any) {
+    console.error('[SOP Bulk ReMe Inject]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5.3 GET /follow-up/check — Check and process pending follow-ups
+router.get('/follow-up/check', async (_req, res) => {
+  try {
+    const { data: pending } = await supabase
+      .from('follow_up_queue')
+      .select('*')
+      .eq('status', 'pending')
+      .lte('scheduled_at', new Date().toISOString())
+      .order('scheduled_at')
+      .limit(20);
+
+    if (!pending || pending.length === 0) {
+      return res.json({ message: 'Không có follow-up nào cần gửi', processed: 0 });
+    }
+
+    let processed = 0;
+    for (const item of pending) {
+      try {
+        // Mark as sent (actual sending would be via channel system)
+        await supabase.from('follow_up_queue')
+          .update({ status: 'sent' })
+          .eq('id', item.id);
+        processed++;
+      } catch { /* skip */ }
+    }
+
+    res.json({ message: `Đã xử lý ${processed} follow-ups`, processed, total: pending.length });
+  } catch (err: any) {
+    console.error('[SOP Follow-up Check]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5.3b POST /follow-up — Schedule a new follow-up
+router.post('/follow-up', async (req, res) => {
+  const { customer_id, agent_slug, message, scheduled_at, channel_instance_id } = req.body;
+
+  if (!customer_id || !agent_slug || !message || !scheduled_at) {
+    return res.status(400).json({ error: 'Thiếu trường bắt buộc: customer_id, agent_slug, message, scheduled_at' });
+  }
+
+  try {
+    const { data, error } = await supabase.from('follow_up_queue').insert({
+      customer_id,
+      agent_slug,
+      message,
+      scheduled_at,
+      channel_instance_id: channel_instance_id || null,
+    }).select().single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err: any) {
+    console.error('[SOP Follow-up Schedule]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

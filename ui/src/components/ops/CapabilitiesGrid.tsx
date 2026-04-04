@@ -7,7 +7,7 @@ import {
   MessageSquare, Package, BarChart3, Mail, Ticket, BookOpen,
   Target, TrendingUp, Zap, FileText, Users, Search,
   Inbox, RefreshCw, Settings, Plus, AlertTriangle, LayoutGrid,
-  Upload, Flame, ArrowDown, Send, Eye, Bell, Pencil,
+  Upload, Flame, ArrowDown, Send, Eye, Bell, Pencil, ClipboardList,
 } from "lucide-react";
 import { PulseDot } from "./PulseDot";
 import { channelsApi } from "@/api/channels";
@@ -114,6 +114,16 @@ export function CapabilitiesGrid() {
   const { data: orderStats } = useQuery({
     queryKey: ["crm", "order-stats"],
     queryFn: () => crmApi.getOrderStats(),
+    staleTime: 30_000,
+  });
+
+  const { data: sopStats } = useQuery({
+    queryKey: ["sop-engine-stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/ops/sop-engine/stats");
+      if (!res.ok) return null;
+      return res.json();
+    },
     staleTime: 30_000,
   });
 
@@ -277,7 +287,23 @@ export function CapabilitiesGrid() {
           onClick={() => navigate("/ops/affiliate")}
         />
 
-        {/* 12. Scanner */}
+        {/* 12. SOP Engine */}
+        <CapCard
+          icon={ClipboardList}
+          title="SOP Engine"
+          badge={(sopStats?.p0 || 0) > 0 ? `${sopStats.p0} P0` : undefined}
+          statusDot={sopStats ? ((sopStats.needed || 0) > 0 ? "yellow" : "green") : null}
+          stats={[
+            `${sopStats?.total || 0} SOPs · ${sopStats?.done || 0} hoàn thành`,
+            `${sopStats?.needed || 0} cần tạo · ${sopStats?.p0 || 0} P0`,
+          ]}
+          actions={[
+            { label: "Mở SOP Engine", icon: ClipboardList, onClick: () => navigate("/ops/sop-engine") },
+          ]}
+          onClick={() => navigate("/ops/sop-engine")}
+        />
+
+        {/* 13. Scanner */}
         <CapCard
           icon={Search}
           title="GEM Scanner"

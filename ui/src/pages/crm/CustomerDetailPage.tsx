@@ -112,6 +112,23 @@ export function CustomerDetailPage() {
           </select>
         </div>
 
+        {/* Giai đoạn */}
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Giai đoạn</label>
+          <select
+            value={(c as any).stage || 'new'}
+            onChange={e => updateMut.mutate({ stage: e.target.value })}
+            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
+          >
+            <option value="new">Mới</option>
+            <option value="dang_tu_van">Đang tư vấn</option>
+            <option value="cho_chot">Chờ chốt</option>
+            <option value="da_mua">Đã mua</option>
+            <option value="active">Active</option>
+            <option value="loyal">Loyal</option>
+          </select>
+        </div>
+
         {/* Stats */}
         <div className="grid grid-cols-2 gap-2 text-center text-xs">
           <div className="rounded-md bg-muted/30 p-2">

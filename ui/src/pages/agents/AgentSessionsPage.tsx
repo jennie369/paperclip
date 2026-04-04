@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
+import { ClipboardList } from "lucide-react";
 
 type StatusFilter = "all" | "running" | "idle" | "stopped";
 
@@ -319,6 +320,20 @@ export function AgentSessionsPage() {
 
   const activeCount = sessions.filter((s) => s.status === "running").length;
 
+  // ── SOP stats per agent ──
+  const { data: sopStats } = useQuery({
+    queryKey: ["sop-engine-stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/ops/sop-engine/stats");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  // Count unique agent slugs from sessions
+  const agentSlugs = [...new Set(sessions.map((s) => s.agent_slug))];
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       {/* Header */}
@@ -383,6 +398,41 @@ export function AgentSessionsPage() {
           </button>
         ))}
       </div>
+
+      {/* SOP Quick View */}
+      {sopStats && (
+        <div className="border rounded-lg p-4 bg-muted/20">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-semibold flex items-center gap-1.5">
+              <ClipboardList className="h-3.5 w-3.5 text-violet-500" />
+              SOP Engine
+            </h3>
+            <button
+              onClick={() => navigate("/ops/sop-engine")}
+              className="text-[10px] text-primary hover:underline"
+            >
+              Xem tất cả →
+            </button>
+          </div>
+          <div className="text-xs text-muted-foreground mb-2">
+            {sopStats.total} SOPs &middot; {sopStats.done} hoàn thành &middot; {sopStats.needed} cần tạo
+          </div>
+          {agentSlugs.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {agentSlugs.slice(0, 6).map((slug) => (
+                <button
+                  key={slug}
+                  onClick={() => navigate(`/ops/sop-engine?assigned_agent=${slug}`)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-md bg-violet-500/10 text-violet-600 hover:bg-violet-500/20 transition-colors"
+                >
+                  {slug}
+                  <span className="text-muted-foreground">→ SOPs</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Loading */}
       {isLoading && (

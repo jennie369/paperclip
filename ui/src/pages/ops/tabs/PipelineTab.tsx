@@ -9,6 +9,16 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
 
+// ── Stage → SOP mapping ──
+const STAGE_SOP_MAP: Record<string, string> = {
+  brainstorm: "CNT-001",
+  generate: "CNT-018",
+  review: "CNT-015",
+  publish: "DST-001",
+  email: "DST-004",
+  push: "DST-005",
+};
+
 // ── Stage definitions per INDEX.md ──
 const STAGES = [
   { id: "brainstorm", name: "Brainstorm", color: "bg-red-500", description: "Content Strategist tạo chủ đề (Thứ 3/5)", script: null, defaultAgent: "content-strategist", hasInput: true },
@@ -54,6 +64,17 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
   const [runningScript, setRunningScript] = useState<string | null>(null);
   const [scriptOutput, setScriptOutput] = useState("");
   const [showOutput, setShowOutput] = useState(false);
+  const [runningSopId, setRunningSopId] = useState<string | null>(null);
+
+  const execSop = useCallback(async (sopId: string) => {
+    setRunningSopId(sopId);
+    try {
+      const res = await fetch(`/api/ops/sop-engine/sops/${sopId}/run`, { method: "POST" });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); pushToast({ title: (err as any).error || `Lỗi chạy SOP ${sopId}`, tone: "error" }); return; }
+      pushToast({ title: `Đã trigger SOP ${sopId}`, tone: "success" });
+    } catch { pushToast({ title: "Lỗi kết nối", tone: "error" }); }
+    finally { setRunningSopId(null); }
+  }, [pushToast]);
 
   // 1B: Editable schedule state
   const [editingSchedule, setEditingSchedule] = useState<string | null>(null);
@@ -133,6 +154,9 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
             <div key={stage.id} className="flex items-center gap-1 shrink-0">
               <button onClick={() => setExpandedStage(expandedStage === stage.id ? null : stage.id)}
                 className={`px-3 py-1.5 rounded-full text-[10px] font-medium text-white ${stage.color} hover:opacity-80 ${expandedStage === stage.id ? "ring-2 ring-offset-1 ring-foreground/20" : ""}`}>{stage.name}</button>
+              {STAGE_SOP_MAP[stage.id] && (
+                <span className="text-[9px] font-mono text-violet-500 cursor-pointer hover:underline" onClick={() => navigate(`/ops/sop-engine?sop=${STAGE_SOP_MAP[stage.id]}`)}>{STAGE_SOP_MAP[stage.id]}</span>
+              )}
               {i < STAGES.length - 1 && <span className="text-muted-foreground text-xs">→</span>}
             </div>
           ))}
@@ -146,7 +170,20 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
           if (stage.id === "publish" && stats) statusText = `${stats.posted_today || 0}/${stats.target_today || 9} đã đăng hôm nay`;
           return (
             <div className="mt-3 p-4 border rounded-lg bg-muted/20 space-y-3">
-              <div className="flex items-center gap-2"><div className={`w-3 h-3 rounded-full ${stage.color}`} /><h4 className="text-sm font-semibold">{stage.name}</h4></div>
+              <div className="flex items-center gap-2">
+                <div className={`w-3 h-3 rounded-full ${stage.color}`} />
+                <h4 className="text-sm font-semibold">{stage.name}</h4>
+                {STAGE_SOP_MAP[stage.id] && (
+                  <>
+                    <button onClick={() => navigate(`/ops/sop-engine?sop=${STAGE_SOP_MAP[stage.id]}`)} className="px-1.5 py-0.5 text-[10px] font-mono font-medium rounded bg-violet-500/10 text-violet-600 hover:bg-violet-500/20 transition-colors" title={`Xem SOP ${STAGE_SOP_MAP[stage.id]}`}>
+                      {STAGE_SOP_MAP[stage.id]}
+                    </button>
+                    <button onClick={() => execSop(STAGE_SOP_MAP[stage.id])} disabled={runningSopId === STAGE_SOP_MAP[stage.id]} className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-500/10 text-green-600 hover:bg-green-500/20 transition-colors disabled:opacity-50" title={`Chạy SOP ${STAGE_SOP_MAP[stage.id]}`}>
+                      {runningSopId === STAGE_SOP_MAP[stage.id] ? <Loader2 className="h-2.5 w-2.5 animate-spin inline" /> : "▶"}
+                    </button>
+                  </>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">{stage.description}</p>
               {statusText && <p className="text-xs font-medium">{statusText}</p>}
               {stage.hasInput && <textarea className="w-full border rounded-lg p-2 text-sm bg-background" placeholder="Nhập chủ đề / yêu cầu..." rows={2} />}
