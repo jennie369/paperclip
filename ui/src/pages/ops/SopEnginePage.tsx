@@ -45,7 +45,7 @@ interface Sop {
   sopId: string;
   name: string;
   domain: string;
-  status: "done" | "draft" | "needed" | "in_progress" | "deprecated";
+  status: "done" | "draft" | "needed" | "in_progress" | "deprecated" | "published" | "drafting" | "review" | "needs_creation";
   priority: "P0" | "P1" | "P2" | "P3";
   type?: string;
   description?: string;
@@ -69,7 +69,7 @@ interface Execution {
   triggeredBy?: string;
 }
 
-type StatusFilter = "all" | "done" | "draft" | "needed" | "in_progress" | "deprecated";
+type StatusFilter = "all" | "done" | "draft" | "needed" | "in_progress" | "deprecated" | "published" | "drafting" | "review" | "needs_creation";
 type PriorityFilter = "all" | "P0" | "P1" | "P2" | "P3";
 type TypeFilter = "all" | "automation" | "manual" | "hybrid";
 
@@ -77,22 +77,36 @@ type TypeFilter = "all" | "automation" | "manual" | "hybrid";
 
 const DOMAINS = [
   "ARCH", "BGD", "HR", "FIN", "MKT", "SAL", "CNT", "DST",
-  "OPS", "IT", "AI", "CS", "COM", "ANA", "PRD", "LEG",
+  "OPS", "IT", "AI", "CS", "COM", "ANA", "PRD", "LEG", "DOC", "ENG",
 ] as const;
 
-const STATUS_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  done: { label: "Hoàn thành", variant: "secondary" },
-  draft: { label: "Bản nháp", variant: "outline" },
-  needed: { label: "Cần tạo", variant: "destructive" },
-  in_progress: { label: "Đang làm", variant: "default" },
-  deprecated: { label: "Ngừng dùng", variant: "outline" },
+const STATUS_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
+  needs_creation: { label: "Cần tạo", variant: "destructive", className: "bg-red-100 text-red-700" },
+  drafting: { label: "Đang soạn", variant: "outline", className: "bg-amber-100 text-amber-700" },
+  review: { label: "Chờ duyệt", variant: "default", className: "bg-blue-100 text-blue-700" },
+  published: { label: "Đã hoàn thành", variant: "secondary", className: "bg-green-100 text-green-700" },
+  deprecated: { label: "Ngừng dùng", variant: "outline", className: "bg-zinc-100 text-zinc-500" },
+  // Legacy keys for backward compatibility
+  done: { label: "Hoàn thành", variant: "secondary", className: "bg-green-100 text-green-700" },
+  draft: { label: "Bản nháp", variant: "outline", className: "bg-amber-100 text-amber-700" },
+  needed: { label: "Cần tạo", variant: "destructive", className: "bg-red-100 text-red-700" },
+  in_progress: { label: "Đang làm", variant: "default", className: "bg-blue-100 text-blue-700" },
 };
 
-const PRIORITY_BADGE: Record<string, { label: string; className: string }> = {
-  P0: { label: "P0", className: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30" },
-  P1: { label: "P1", className: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30" },
-  P2: { label: "P2", className: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30" },
-  P3: { label: "P3", className: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/30" },
+const PRIORITY_BADGE: Record<string, { label: string; className: string; tooltip: string }> = {
+  P0: { label: "P0", className: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30", tooltip: "Khẩn — Làm ngay" },
+  P1: { label: "P1", className: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30", tooltip: "Quan trọng — Tháng này" },
+  P2: { label: "P2", className: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30", tooltip: "Bình thường — Quý này" },
+  P3: { label: "P3", className: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/30", tooltip: "Thấp — Khi rảnh" },
+};
+
+const DOMAIN_TOOLTIPS: Record<string, string> = {
+  ARCH: "Standards & Architecture", BGD: "Ban Giám Đốc", HR: "Nhân Sự",
+  FIN: "Tài Chính", MKT: "Marketing", SAL: "Sales / Tư Vấn",
+  CNT: "Content Pipeline", DST: "Distribution", OPS: "Vận Hành",
+  IT: "CNTT / AI", AI: "AI Repository", CS: "Chăm Sóc Khách Hàng",
+  COM: "Commerce / Shopify", ANA: "Analytics", PRD: "Product",
+  LEG: "Pháp Chế", DOC: "Tài Liệu", ENG: "Engineering",
 };
 
 /* ═══ API helpers ═══ */
@@ -169,6 +183,18 @@ async function injectRemeBatch(sopIds: string[]): Promise<void> {
     body: JSON.stringify({ sopIds }),
   });
   if (!res.ok) throw new Error("Không inject batch ReMe được");
+}
+
+/* ═══ Helpers ═══ */
+
+function parseCron(cron?: string): string {
+  if (!cron) return '';
+  const map: Record<string, string> = {
+    '0 20 * * 0': 'Chủ Nhật 20:00', '0 6 * * 1': 'Thứ 2 06:00',
+    '0 7 * * *': 'Hàng ngày 07:00', '0 8 * * *': 'Hàng ngày 08:00',
+    '*/15 * * * *': 'Mỗi 15 phút', '0 14 * * 4': 'Thứ 5 14:00',
+  };
+  return map[cron] || cron;
 }
 
 /* ═══ Query Keys ═══ */
@@ -398,11 +424,15 @@ export function SopEnginePage() {
           onChange={(v) => setStatusFilter(v as StatusFilter)}
           options={[
             { value: "all", label: "Trạng thái" },
-            { value: "done", label: "Hoàn thành" },
-            { value: "draft", label: "Bản nháp" },
-            { value: "needed", label: "Cần tạo" },
-            { value: "in_progress", label: "Đang làm" },
+            { value: "published", label: "Đã hoàn thành" },
+            { value: "drafting", label: "Đang soạn" },
+            { value: "review", label: "Chờ duyệt" },
+            { value: "needs_creation", label: "Cần tạo" },
             { value: "deprecated", label: "Ngừng dùng" },
+            { value: "done", label: "Hoàn thành (cũ)" },
+            { value: "draft", label: "Bản nháp (cũ)" },
+            { value: "needed", label: "Cần tạo (cũ)" },
+            { value: "in_progress", label: "Đang làm (cũ)" },
           ]}
         />
 
@@ -551,8 +581,21 @@ function SopRow({
   const [bodyEdit, setBodyEdit] = useState(false);
   const [bodyDraft, setBodyDraft] = useState(sop.body ?? "");
 
-  const statusCfg = STATUS_BADGE[sop.status] ?? STATUS_BADGE.needed;
+  const statusCfg = STATUS_BADGE[sop.status] ?? STATUS_BADGE.needs_creation;
   const priorityCfg = PRIORITY_BADGE[sop.priority] ?? PRIORITY_BADGE.P2;
+
+  const handleSopUpdate = useCallback(async (sopId: string, updates: Record<string, unknown>) => {
+    try {
+      await fetch(`/api/ops/sop-engine/sops/${sopId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      qc.invalidateQueries({ queryKey: ['sop-engine-sops'] });
+    } catch (err) {
+      console.error('Save failed:', err);
+    }
+  }, [qc]);
 
   // Run SOP mutation
   const runMutation = useMutation({
@@ -674,11 +717,14 @@ function SopRow({
 
           <span className="text-sm font-medium flex-1 truncate">{sop.name}</span>
 
-          <Badge variant={statusCfg.variant} className="text-[10px] px-1.5 py-0">
+          <Badge variant={statusCfg.variant} className={cn("text-[10px] px-1.5 py-0", statusCfg.className)} title={statusCfg.label}>
             {statusCfg.label}
           </Badge>
 
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted shrink-0">
+          <span
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted shrink-0"
+            title={DOMAIN_TOOLTIPS[sop.domain] || sop.domain}
+          >
             {sop.domain}
           </span>
 
@@ -687,6 +733,7 @@ function SopRow({
               "text-[10px] font-medium px-1.5 py-0.5 rounded-full border shrink-0",
               priorityCfg.className,
             )}
+            title={priorityCfg.tooltip}
           >
             {priorityCfg.label}
           </span>
@@ -804,13 +851,13 @@ function SopRow({
                 <div className="text-muted-foreground mb-1">Trạng thái</div>
                 {editMode ? (
                   <NativeSelect
-                    value={(getEditVal("status") as string) ?? "draft"}
+                    value={(getEditVal("status") as string) ?? "needs_creation"}
                     onChange={(v) => setEditDraft((prev) => ({ ...prev, status: v as Sop["status"] }))}
                     options={[
-                      { value: "done", label: "Hoàn thành" },
-                      { value: "draft", label: "Bản nháp" },
-                      { value: "needed", label: "Cần tạo" },
-                      { value: "in_progress", label: "Đang làm" },
+                      { value: "needs_creation", label: "Cần tạo" },
+                      { value: "drafting", label: "Đang soạn" },
+                      { value: "review", label: "Chờ duyệt" },
+                      { value: "published", label: "Đã hoàn thành" },
                       { value: "deprecated", label: "Ngừng dùng" },
                     ]}
                   />
@@ -823,14 +870,28 @@ function SopRow({
               <div>
                 <div className="text-muted-foreground mb-1">Cron</div>
                 {editMode ? (
-                  <Input
-                    className="h-7 text-xs font-mono"
-                    placeholder="0 9 * * 1"
-                    value={(getEditVal("cron") as string) ?? ""}
-                    onChange={(e) => setEditDraft((prev) => ({ ...prev, cron: e.target.value }))}
-                  />
+                  <div className="space-y-1">
+                    <Input
+                      className="h-7 text-xs font-mono"
+                      placeholder="0 9 * * 1"
+                      value={(getEditVal("cron") as string) ?? ""}
+                      onChange={(e) => setEditDraft((prev) => ({ ...prev, cron: e.target.value }))}
+                    />
+                    {parseCron((getEditVal("cron") as string) ?? "") && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {parseCron((getEditVal("cron") as string) ?? "")}
+                      </span>
+                    )}
+                  </div>
                 ) : (
-                  <span className="font-mono text-foreground">{sop.cron || "—"}</span>
+                  <span className="font-mono text-foreground">
+                    {sop.cron || "—"}
+                    {sop.cron && parseCron(sop.cron) !== sop.cron && (
+                      <span className="ml-2 text-[10px] text-muted-foreground font-sans">
+                        ({parseCron(sop.cron)})
+                      </span>
+                    )}
+                  </span>
                 )}
               </div>
               {sop.agents && sop.agents.length > 0 && (
@@ -1154,6 +1215,7 @@ function DomainTab({
   return (
     <button
       onClick={onClick}
+      title={DOMAIN_TOOLTIPS[label] || label}
       className={cn(
         "px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap",
         active

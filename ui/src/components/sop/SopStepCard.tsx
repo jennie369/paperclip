@@ -58,43 +58,81 @@ export interface SopStepCardProps {
   onMoveDown: (stepIndex: number) => void;
 }
 
+/* ─── Helpers ─── */
+
+function parseCron(cron?: string): string {
+  if (!cron) return '';
+  const map: Record<string, string> = {
+    '0 20 * * 0': 'Chủ Nhật 20:00', '0 6 * * 1': 'Thứ 2 06:00',
+    '0 7 * * *': 'Hàng ngày 07:00', '0 8 * * *': 'Hàng ngày 08:00',
+    '*/15 * * * *': 'Mỗi 15 phút', '0 14 * * 4': 'Thứ 5 14:00',
+  };
+  return map[cron] || cron;
+}
+
 /* ─── Type config ─── */
 
 const TYPE_CONFIG: Record<
   StepDefinition["type"],
-  { label: string; icon: typeof Terminal; colorClass: string }
+  { label: string; icon: typeof Terminal; colorClass: string; tooltip: string }
 > = {
   script: {
     label: "Script",
     icon: Terminal,
     colorClass: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    tooltip: "Chạy script tự động",
   },
   approval: {
     label: "Phê duyệt",
     icon: ShieldCheck,
     colorClass: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    tooltip: "Cần phê duyệt thủ công",
   },
   api: {
     label: "API",
     icon: Globe,
     colorClass: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+    tooltip: "Gọi API bên ngoài",
   },
   agent: {
     label: "Agent",
     icon: Bot,
     colorClass: "bg-green-500/10 text-green-600 dark:text-green-400",
+    tooltip: "Agent AI thực hiện",
   },
   manual: {
     label: "Thủ công",
     icon: Wrench,
     colorClass: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+    tooltip: "Thực hiện thủ công bởi người",
   },
   event: {
     label: "Sự kiện",
     icon: Zap,
     colorClass: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+    tooltip: "Kích hoạt bởi sự kiện",
   },
 };
+
+const TYPE_OPTIONS: { value: StepDefinition["type"]; label: string }[] = [
+  { value: "script", label: "Script" },
+  { value: "approval", label: "Phê duyệt" },
+  { value: "api", label: "API" },
+  { value: "agent", label: "Agent" },
+  { value: "manual", label: "Thủ công" },
+  { value: "event", label: "Sự kiện" },
+];
+
+const AGENT_OPTIONS = [
+  { value: "", label: "-- Chọn --" },
+  { value: "ceo", label: "CEO" },
+  { value: "sales-closer", label: "Sales Closer" },
+  { value: "customer-success", label: "Customer Success" },
+  { value: "content-strategist", label: "Content Strategist" },
+  { value: "community-engagement", label: "Community Engagement" },
+  { value: "board", label: "Board" },
+  { value: "any", label: "Bất kỳ" },
+];
 
 const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   pending: { label: "Chờ", variant: "secondary" },
@@ -105,13 +143,28 @@ const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secon
   waiting: { label: "Chờ duyệt", variant: "outline" },
 };
 
-const ON_RESULT_OPTIONS = [
+const ON_SUCCESS_OPTIONS = [
   { value: "", label: "-- Mặc định --" },
-  { value: "continue", label: "Tiếp tục" },
-  { value: "stop", label: "Dừng" },
-  { value: "retry", label: "Thử lại" },
+  { value: "next", label: "Tiếp bước kế" },
+  { value: "end", label: "Kết thúc" },
+  { value: "goto:1", label: "Nhảy đến bước 1" },
+  { value: "goto:2", label: "Nhảy đến bước 2" },
+  { value: "goto:3", label: "Nhảy đến bước 3" },
+  { value: "goto:4", label: "Nhảy đến bước 4" },
+  { value: "goto:5", label: "Nhảy đến bước 5" },
+];
+
+const ON_FAILURE_OPTIONS = [
+  { value: "", label: "-- Mặc định --" },
+  { value: "retry:1", label: "Thử lại 1 lần" },
+  { value: "retry:2", label: "Thử lại 2 lần" },
+  { value: "retry:3", label: "Thử lại 3 lần" },
   { value: "skip", label: "Bỏ qua" },
-  { value: "alert", label: "Cảnh báo" },
+  { value: "abort", label: "Dừng toàn bộ" },
+  { value: "notify:telegram", label: "Thông báo Telegram" },
+  { value: "goto:1", label: "Nhảy đến bước 1" },
+  { value: "goto:2", label: "Nhảy đến bước 2" },
+  { value: "goto:3", label: "Nhảy đến bước 3" },
 ];
 
 /* ─── Component ─── */
@@ -205,15 +258,31 @@ export function SopStepCard({
         <span className="text-sm font-medium flex-1 truncate">{step.name}</span>
 
         {/* Type badge */}
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full",
-            typeCfg.colorClass,
-          )}
-        >
-          <TypeIcon className="h-2.5 w-2.5" />
-          {typeCfg.label}
-        </span>
+        {isEditing ? (
+          <span onClick={(e) => e.stopPropagation()}>
+            <select
+              value={getVal("type") as string}
+              onChange={(e) => setVal("type", e.target.value as StepDefinition["type"])}
+              className="h-5 rounded border border-input bg-background px-1 text-[10px] text-foreground outline-none focus:ring-1 focus:ring-ring/50"
+              title="Loại bước"
+            >
+              {TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </span>
+        ) : (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full",
+              typeCfg.colorClass,
+            )}
+            title={typeCfg.tooltip}
+          >
+            <TypeIcon className="h-2.5 w-2.5" />
+            {typeCfg.label}
+          </span>
+        )}
 
         {/* Status badge */}
         {statusCfg && (
@@ -300,10 +369,10 @@ export function SopStepCard({
                   <NativeSelect
                     value={(getVal("on_success") as string) ?? ""}
                     onChange={(v) => setVal("on_success", v)}
-                    options={ON_RESULT_OPTIONS}
+                    options={ON_SUCCESS_OPTIONS}
                   />
                 ) : (
-                  <span className="text-foreground">{step.on_success || "Tiếp tục"}</span>
+                  <span className="text-foreground">{step.on_success || "next"}</span>
                 )}
               </div>
               <div>
@@ -315,10 +384,10 @@ export function SopStepCard({
                   <NativeSelect
                     value={(getVal("on_failure") as string) ?? ""}
                     onChange={(v) => setVal("on_failure", v)}
-                    options={ON_RESULT_OPTIONS}
+                    options={ON_FAILURE_OPTIONS}
                   />
                 ) : (
-                  <span className="text-foreground">{step.on_failure || "Dừng"}</span>
+                  <span className="text-foreground">{step.on_failure || "abort"}</span>
                 )}
               </div>
             </div>
@@ -437,13 +506,21 @@ function ApprovalBody({
 }: TypeBodyProps & { executionStatus?: string }) {
   return (
     <div className="space-y-2 text-xs">
-      <FieldRow
-        icon={ShieldCheck}
-        label="Người duyệt"
-        value={(getVal("agent") as string) ?? ""}
-        editing={isEditing}
-        onChange={(v) => setVal("agent", v)}
-      />
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground shrink-0 w-24">Người duyệt</span>
+        {isEditing ? (
+          <NativeSelect
+            value={(getVal("agent") as string) ?? ""}
+            onChange={(v) => setVal("agent", v)}
+            options={AGENT_OPTIONS}
+          />
+        ) : (
+          <span className="text-foreground truncate">
+            {(getVal("agent") as string) || "—"}
+          </span>
+        )}
+      </div>
       {executionStatus === "waiting" && (
         <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 p-2">
           <div className="flex items-center gap-1 text-amber-700 dark:text-amber-400 font-medium">
@@ -556,13 +633,21 @@ function AgentBody({
 }: TypeBodyProps) {
   return (
     <div className="space-y-2 text-xs">
-      <FieldRow
-        icon={Bot}
-        label="Agent"
-        value={(getVal("agent") as string) ?? ""}
-        editing={isEditing}
-        onChange={(v) => setVal("agent", v)}
-      />
+      <div className="flex items-center gap-2">
+        <Bot className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground shrink-0 w-24">Agent</span>
+        {isEditing ? (
+          <NativeSelect
+            value={(getVal("agent") as string) ?? ""}
+            onChange={(v) => setVal("agent", v)}
+            options={AGENT_OPTIONS}
+          />
+        ) : (
+          <span className="text-foreground truncate">
+            {(getVal("agent") as string) || "—"}
+          </span>
+        )}
+      </div>
       {/* Task description via executor as description placeholder */}
       <FieldRow
         icon={Terminal}
@@ -591,19 +676,28 @@ function ManualBody({
 
   return (
     <div className="space-y-2 text-xs">
-      <FieldRow
-        icon={Bot}
-        label="Người thực hiện"
-        value={(getVal("agent") as string) ?? ""}
-        editing={isEditing}
-        onChange={(v) => setVal("agent", v)}
-      />
+      <div className="flex items-center gap-2">
+        <Bot className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground shrink-0 w-24">Người thực hiện</span>
+        {isEditing ? (
+          <NativeSelect
+            value={(getVal("agent") as string) ?? ""}
+            onChange={(v) => setVal("agent", v)}
+            options={AGENT_OPTIONS}
+          />
+        ) : (
+          <span className="text-foreground truncate">
+            {(getVal("agent") as string) || "—"}
+          </span>
+        )}
+      </div>
       <div>
         <div className="text-muted-foreground mb-1">Hướng dẫn thực hiện</div>
         {isEditing ? (
           <Textarea
             className="min-h-[60px] text-xs"
             placeholder="Mô tả các bước cần làm..."
+            rows={3}
             value={instructions}
             onChange={(e) => {
               setInstructions(e.target.value);
