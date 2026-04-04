@@ -29,6 +29,7 @@ import {
   Image,
   Video,
   Filter,
+  ClipboardList,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -128,6 +129,7 @@ export function Sidebar() {
 
         <SidebarSection label="Vận hành">
           <SidebarNavItem to="/ops/content-pipeline" label="Content Pipeline" icon={Activity} />
+          <SidebarNavItem to="/ops/sop-engine" label="SOP Engine" icon={ClipboardList} />
           <SidebarNavItem to="/ops/affiliate" label="Affiliate & CTV" icon={UserCircle} />
           <SidebarNavItem to="/ops/scanner" label="GEM Scanner" icon={Search} />
         </SidebarSection>

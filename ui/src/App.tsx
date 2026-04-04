@@ -78,6 +78,7 @@ import { ImportPage } from "./pages/crm/ImportPage";
 import { EmailCampaignsPage } from "./pages/crm/EmailCampaignsPage";
 import { KnowledgeBasePage } from "./pages/crm/KnowledgeBasePage";
 import { CommandConsolePage } from "./pages/ops/CommandConsolePage";
+import { SopEnginePage } from "./pages/ops/SopEnginePage";
 
 import { ConfigHubPage } from "./pages/config/ConfigHubPage";
 import { OrgChart } from "./pages/OrgChart";
@@ -168,6 +169,7 @@ function boardRoutes() {
       <Route path="ops/affiliate" element={<AffiliatePage />} />
       <Route path="ops/scanner" element={<ScannerPage />} />
       <Route path="ops/console" element={<CommandConsolePage />} />
+      <Route path="ops/sop-engine" element={<SopEnginePage />} />
       <Route path="ops/roster" element={<Navigate to="/config" replace />} />
       <Route path="config" element={<ConfigHubPage />} />
       <Route path="workflows" element={<WorkflowListPage />} />
