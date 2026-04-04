@@ -107,17 +107,19 @@ async function fetchSops(params: {
   if (params.search) qs.set("search", params.search);
   const res = await fetch(`/api/ops/sop-engine/sops?${qs}`);
   if (!res.ok) throw new Error("Không tải được danh sách SOP");
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.sops ?? []);
 }
 
-async function fetchExecutions(sopId: string): Promise<Execution[]> {
-  const res = await fetch(`/api/ops/sop-engine/sops/${sopId}/executions?limit=5`);
+async function fetchExecutions(_sopId: string): Promise<Execution[]> {
+  const res = await fetch(`/api/ops/sop-engine/executions/recent`);
   if (!res.ok) return [];
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.executions ?? []);
 }
 
 async function runSop(sopId: string): Promise<{ executionId: string }> {
-  const res = await fetch(`/api/ops/sop-engine/sops/${sopId}/run`, { method: "POST" });
+  const res = await fetch(`/api/ops/sop-engine/execute/${sopId}`, { method: "POST" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as Record<string, string>).error || "Không chạy được SOP");
