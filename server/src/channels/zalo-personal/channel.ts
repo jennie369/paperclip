@@ -18,8 +18,17 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '6486938519';
 const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 // Max reconnect backoff: 5 minutes
 const RECONNECT_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
+// Rate limit alerts: max 1 per 30 minutes to prevent spam
+const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+let _lastAlertAt = 0;
 
 function sendTelegramAlert(text: string): void {
+  const now = Date.now();
+  if (now - _lastAlertAt < ALERT_COOLDOWN_MS) {
+    console.log(`[TelegramAlert] Suppressed (cooldown ${Math.round((ALERT_COOLDOWN_MS - (now - _lastAlertAt)) / 1000)}s remaining): ${text.substring(0, 80)}`);
+    return;
+  }
+  _lastAlertAt = now;
   const body = JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' });
   const req = https.request({
     hostname: 'api.telegram.org',
