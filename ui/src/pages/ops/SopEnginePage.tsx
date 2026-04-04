@@ -2,9 +2,6 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
-  Pause,
-  Square,
-  RotateCcw,
   Search,
   Loader2,
   ChevronDown,
@@ -15,15 +12,21 @@ import {
   History,
   RefreshCw,
   X,
+  Save,
+  Brain,
+  Link2,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { SopExecutionStream } from "@/components/sop/SopExecutionStream";
-import { SopStepCard, type SopStep, type StepStatus } from "@/components/sop/SopStepCard";
+import { SopExecutionPreview } from "@/components/sop/SopExecutionPreview";
+import { SopStepCard, type StepDefinition } from "@/components/sop/SopStepCard";
+import { useNavigate } from "@/lib/router";
 
 /* ═══ Types ═══ */
 
@@ -33,6 +36,7 @@ interface SopStats {
   draft: number;
   needed: number;
   p0: number;
+  p1: number;
   byDomain: Record<string, number>;
 }
 
@@ -45,7 +49,12 @@ interface Sop {
   priority: "P0" | "P1" | "P2" | "P3";
   type?: string;
   description?: string;
-  steps?: SopStep[];
+  body?: string;
+  steps?: StepDefinition[];
+  agents?: string[];
+  cron?: string;
+  dependencies?: string[];
+  reme_synced_at?: string;
   lastRunAt?: string;
   lastRunStatus?: string;
   tags?: string[];
@@ -62,13 +71,13 @@ interface Execution {
 
 type StatusFilter = "all" | "done" | "draft" | "needed" | "in_progress" | "deprecated";
 type PriorityFilter = "all" | "P0" | "P1" | "P2" | "P3";
+type TypeFilter = "all" | "automation" | "manual" | "hybrid";
 
 /* ═══ Constants ═══ */
 
 const DOMAINS = [
-  "SOP", "AUTH", "CONTENT", "SCANNER", "CTV", "EMAIL",
-  "SHOPIFY", "PAYMENT", "CHATBOT", "DEPLOY", "MOBILE",
-  "BRIDGE", "PAPERCLIP", "CRM", "CHANNEL", "OPS",
+  "ARCH", "BGD", "HR", "FIN", "MKT", "SAL", "CNT", "DST",
+  "OPS", "IT", "AI", "CS", "COM", "ANA", "PRD", "LEG",
 ] as const;
 
 const STATUS_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -98,21 +107,24 @@ async function fetchSops(params: {
   domain?: string;
   status?: string;
   priority?: string;
+  type?: string;
   search?: string;
 }): Promise<Sop[]> {
   const qs = new URLSearchParams();
   if (params.domain && params.domain !== "all") qs.set("domain", params.domain);
   if (params.status && params.status !== "all") qs.set("status", params.status);
   if (params.priority && params.priority !== "all") qs.set("priority", params.priority);
+  if (params.type && params.type !== "all") qs.set("type", params.type);
   if (params.search) qs.set("search", params.search);
+  qs.set("limit", "100");
   const res = await fetch(`/api/ops/sop-engine/sops?${qs}`);
   if (!res.ok) throw new Error("Không tải được danh sách SOP");
   const data = await res.json();
   return Array.isArray(data) ? data : (data.sops ?? []);
 }
 
-async function fetchExecutions(_sopId: string): Promise<Execution[]> {
-  const res = await fetch(`/api/ops/sop-engine/executions/recent`);
+async function fetchExecutions(sopId: string): Promise<Execution[]> {
+  const res = await fetch(`/api/ops/sop-engine/executions/recent?sopId=${sopId}&limit=5`);
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : (data.executions ?? []);
@@ -127,9 +139,36 @@ async function runSop(sopId: string): Promise<{ executionId: string }> {
   return res.json();
 }
 
-async function controlExecution(executionId: string, action: "pause" | "stop" | "reset"): Promise<void> {
-  const res = await fetch(`/api/ops/sop-engine/executions/${executionId}/${action}`, { method: "POST" });
-  if (!res.ok) throw new Error(`Lỗi ${action}`);
+async function saveSop(sopId: string, data: Partial<Sop>): Promise<void> {
+  const res = await fetch(`/api/ops/sop-engine/sops/${sopId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Không lưu được SOP");
+}
+
+async function injectReme(sopId: string): Promise<void> {
+  const res = await fetch(`/api/ops/sop-engine/sops/${sopId}/reme`, { method: "POST" });
+  if (!res.ok) throw new Error("Không inject được ReMe");
+}
+
+async function runSopBatch(sopIds: string[]): Promise<void> {
+  const res = await fetch("/api/ops/sop-engine/execute/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sopIds }),
+  });
+  if (!res.ok) throw new Error("Không chạy batch được");
+}
+
+async function injectRemeBatch(sopIds: string[]): Promise<void> {
+  const res = await fetch("/api/ops/sop-engine/reme/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sopIds }),
+  });
+  if (!res.ok) throw new Error("Không inject batch ReMe được");
 }
 
 /* ═══ Query Keys ═══ */
@@ -141,14 +180,17 @@ const qkSops = (filters: Record<string, string>) => ["sop-engine-sops", filters]
 
 export function SopEnginePage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   // Filters
   const [domain, setDomain] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [expandedSopId, setExpandedSopId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Debounce search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -158,8 +200,14 @@ export function SopEnginePage() {
   }, [searchInput]);
 
   const filters = useMemo(
-    () => ({ domain, status: statusFilter, priority: priorityFilter, search: debouncedSearch }),
-    [domain, statusFilter, priorityFilter, debouncedSearch],
+    () => ({
+      domain,
+      status: statusFilter,
+      priority: priorityFilter,
+      type: typeFilter,
+      search: debouncedSearch,
+    }),
+    [domain, statusFilter, priorityFilter, typeFilter, debouncedSearch],
   );
 
   // Queries
@@ -171,7 +219,7 @@ export function SopEnginePage() {
   });
 
   const sopsQuery = useQuery({
-    queryKey: qkSops(filters as Record<string, string>),
+    queryKey: qkSops(filters as unknown as Record<string, string>),
     queryFn: () => fetchSops(filters),
     staleTime: 15_000,
   });
@@ -179,7 +227,7 @@ export function SopEnginePage() {
   const stats = statsQuery.data;
   const sops = sopsQuery.data ?? [];
 
-  // Click stat pill → set filter
+  // Stat pill click
   const handleStatClick = useCallback((s: StatusFilter) => {
     setStatusFilter((prev) => (prev === s ? "all" : s));
   }, []);
@@ -188,11 +236,47 @@ export function SopEnginePage() {
     setDomain("all");
     setStatusFilter("all");
     setPriorityFilter("all");
+    setTypeFilter("all");
     setSearchInput("");
     setDebouncedSearch("");
   }, []);
 
-  const hasFilters = domain !== "all" || statusFilter !== "all" || priorityFilter !== "all" || debouncedSearch !== "";
+  const hasFilters =
+    domain !== "all" ||
+    statusFilter !== "all" ||
+    priorityFilter !== "all" ||
+    typeFilter !== "all" ||
+    debouncedSearch !== "";
+
+  // Checkbox selection
+  const toggleSelect = useCallback((sopId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sopId)) next.delete(sopId);
+      else next.add(sopId);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // Batch mutations
+  const batchRunMutation = useMutation({
+    mutationFn: () => runSopBatch(Array.from(selectedIds)),
+    onSuccess: () => {
+      clearSelection();
+      qc.invalidateQueries({ queryKey: QK_STATS });
+      qc.invalidateQueries({ queryKey: ["sop-engine-sops"] });
+    },
+  });
+
+  const batchRemeMutation = useMutation({
+    mutationFn: () => injectRemeBatch(Array.from(selectedIds)),
+    onSuccess: () => {
+      clearSelection();
+      qc.invalidateQueries({ queryKey: ["sop-engine-sops"] });
+    },
+  });
 
   return (
     <div className="space-y-4 p-6">
@@ -204,10 +288,10 @@ export function SopEnginePage() {
         </p>
       </div>
 
-      {/* ─── STATS BAR ─── */}
+      {/* ─── SECTION 1: STATS BAR ─── */}
       <div className="flex flex-wrap gap-2">
         {statsQuery.isLoading ? (
-          Array.from({ length: 5 }).map((_, i) => (
+          Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-8 w-24 rounded-full animate-pulse" />
           ))
         ) : statsQuery.error ? (
@@ -254,11 +338,18 @@ export function SopEnginePage() {
               className="text-red-600 dark:text-red-400"
               onClick={() => setPriorityFilter((p) => (p === "P0" ? "all" : "P0"))}
             />
+            <StatPill
+              label="P1"
+              count={stats.p1 ?? 0}
+              active={priorityFilter === "P1"}
+              className="text-orange-600 dark:text-orange-400"
+              onClick={() => setPriorityFilter((p) => (p === "P1" ? "all" : "P1"))}
+            />
           </>
         ) : null}
       </div>
 
-      {/* ─── DOMAIN TABS ─── */}
+      {/* ─── SECTION 2: DOMAIN TABS ─── */}
       <div className="overflow-x-auto pb-1 -mx-1 px-1">
         <div className="flex gap-1 min-w-max">
           <DomainTab
@@ -279,7 +370,7 @@ export function SopEnginePage() {
         </div>
       </div>
 
-      {/* ─── SEARCH + FILTERS ─── */}
+      {/* ─── SECTION 3: SEARCH + FILTER ─── */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -292,7 +383,10 @@ export function SopEnginePage() {
           {searchInput && (
             <button
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              onClick={() => { setSearchInput(""); setDebouncedSearch(""); }}
+              onClick={() => {
+                setSearchInput("");
+                setDebouncedSearch("");
+              }}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -316,11 +410,22 @@ export function SopEnginePage() {
           value={priorityFilter}
           onChange={(v) => setPriorityFilter(v as PriorityFilter)}
           options={[
-            { value: "all", label: "Độ ưu tiên" },
+            { value: "all", label: "Ưu tiên" },
             { value: "P0", label: "P0 — Khẩn cấp" },
             { value: "P1", label: "P1 — Cao" },
             { value: "P2", label: "P2 — Trung bình" },
             { value: "P3", label: "P3 — Thấp" },
+          ]}
+        />
+
+        <NativeSelect
+          value={typeFilter}
+          onChange={(v) => setTypeFilter(v as TypeFilter)}
+          options={[
+            { value: "all", label: "Loại" },
+            { value: "automation", label: "Tự động" },
+            { value: "manual", label: "Thủ công" },
+            { value: "hybrid", label: "Kết hợp" },
           ]}
         />
 
@@ -332,7 +437,7 @@ export function SopEnginePage() {
         )}
       </div>
 
-      {/* ─── SOP LIST ─── */}
+      {/* ─── SECTION 4: SOP LIST ─── */}
       <div className="space-y-2">
         {sopsQuery.isLoading ? (
           Array.from({ length: 6 }).map((_, i) => (
@@ -367,15 +472,55 @@ export function SopEnginePage() {
               key={sop.id}
               sop={sop}
               expanded={expandedSopId === sop.id}
+              selected={selectedIds.has(sop.sopId)}
               onToggle={() => setExpandedSopId((prev) => (prev === sop.id ? null : sop.id))}
+              onSelect={() => toggleSelect(sop.sopId)}
               onInvalidate={() => {
                 qc.invalidateQueries({ queryKey: QK_STATS });
                 qc.invalidateQueries({ queryKey: ["sop-engine-sops"] });
               }}
+              onNavigateRun={(runId) => navigate(`/ops/agent-runs/${runId}`)}
             />
           ))
         )}
       </div>
+
+      {/* ─── FLOATING BULK BAR ─── */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background border border-border shadow-lg rounded-full px-4 py-2 flex items-center gap-3 z-50">
+          <span className="text-sm font-medium">
+            Đã chọn: {selectedIds.size}
+          </span>
+          <Button
+            size="xs"
+            disabled={batchRunMutation.isPending}
+            onClick={() => batchRunMutation.mutate()}
+          >
+            {batchRunMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin mr-1" />
+            ) : (
+              <Play className="h-3 w-3 mr-1" />
+            )}
+            Generate batch
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={batchRemeMutation.isPending}
+            onClick={() => batchRemeMutation.mutate()}
+          >
+            {batchRemeMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin mr-1" />
+            ) : (
+              <Brain className="h-3 w-3 mr-1" />
+            )}
+            Inject ReMe
+          </Button>
+          <Button size="xs" variant="ghost" onClick={clearSelection}>
+            Bỏ chọn
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -385,24 +530,54 @@ export function SopEnginePage() {
 function SopRow({
   sop,
   expanded,
+  selected,
   onToggle,
+  onSelect,
   onInvalidate,
+  onNavigateRun,
 }: {
   sop: Sop;
   expanded: boolean;
+  selected: boolean;
   onToggle: () => void;
+  onSelect: () => void;
   onInvalidate: () => void;
+  onNavigateRun: (runId: string) => void;
 }) {
+  const qc = useQueryClient();
   const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [editDraft, setEditDraft] = useState<Partial<Sop>>({});
+  const [bodyEdit, setBodyEdit] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState(sop.body ?? "");
 
   const statusCfg = STATUS_BADGE[sop.status] ?? STATUS_BADGE.needed;
   const priorityCfg = PRIORITY_BADGE[sop.priority] ?? PRIORITY_BADGE.P2;
 
+  // Run SOP mutation
   const runMutation = useMutation({
     mutationFn: () => runSop(sop.sopId),
     onSuccess: (data) => {
       setActiveExecutionId(data.executionId);
       onInvalidate();
+    },
+  });
+
+  // Save SOP mutation
+  const saveMutation = useMutation({
+    mutationFn: () => saveSop(sop.sopId, { ...editDraft, body: bodyDraft }),
+    onSuccess: () => {
+      setEditMode(false);
+      setEditDraft({});
+      onInvalidate();
+    },
+  });
+
+  // Inject ReMe mutation
+  const remeMutation = useMutation({
+    mutationFn: () => injectReme(sop.sopId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sop-engine-sops"] });
     },
   });
 
@@ -414,55 +589,117 @@ function SopRow({
     staleTime: 10_000,
   });
 
-  const handleControl = useCallback(
-    async (action: "pause" | "stop" | "reset") => {
-      if (!activeExecutionId) return;
+  // Step handlers
+  const handleStepUpdate = useCallback(
+    (stepIndex: number, updates: Partial<StepDefinition>) => {
+      const newSteps = [...(sop.steps ?? [])];
+      newSteps[stepIndex] = { ...newSteps[stepIndex], ...updates };
+      setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+    },
+    [sop.steps],
+  );
+
+  const handleStepDelete = useCallback(
+    (stepIndex: number) => {
+      const newSteps = [...(sop.steps ?? [])];
+      newSteps.splice(stepIndex, 1);
+      // Re-order
+      newSteps.forEach((s, i) => { s.order = i + 1; });
+      setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+    },
+    [sop.steps],
+  );
+
+  const handleStepMove = useCallback(
+    (stepIndex: number, direction: "up" | "down") => {
+      const newSteps = [...(sop.steps ?? [])];
+      const targetIndex = direction === "up" ? stepIndex - 1 : stepIndex + 1;
+      if (targetIndex < 0 || targetIndex >= newSteps.length) return;
+      [newSteps[stepIndex], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[stepIndex]];
+      newSteps.forEach((s, i) => { s.order = i + 1; });
+      setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+    },
+    [sop.steps],
+  );
+
+  const handleExecuteSingle = useCallback(
+    async (stepIndex: number) => {
       try {
-        await controlExecution(activeExecutionId, action);
-        if (action === "stop" || action === "reset") {
-          setActiveExecutionId(null);
-        }
+        const res = await fetch(`/api/ops/sop-engine/execute/${sop.sopId}/step/${stepIndex}`, {
+          method: "POST",
+        });
+        if (!res.ok) throw new Error("Lỗi chạy step");
+        const data = await res.json();
+        if (data.executionId) setActiveExecutionId(data.executionId);
         onInvalidate();
       } catch {
-        // Error handling could use toast
+        // Could use toast for error
       }
     },
-    [activeExecutionId, onInvalidate],
+    [sop.sopId, onInvalidate],
   );
+
+  const getEditVal = <K extends keyof Sop>(key: K): Sop[K] => {
+    return (editDraft[key] !== undefined ? editDraft[key] : sop[key]) as Sop[K];
+  };
+
+  const currentSteps = (editDraft.steps as StepDefinition[] | undefined) ?? sop.steps ?? [];
 
   return (
     <Card className="py-0 gap-0 overflow-hidden">
-      {/* Collapsed row */}
-      <button
-        className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-accent/30 transition-colors"
-        onClick={onToggle}
-      >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        )}
+      {/* ─── Collapsed row ─── */}
+      <div className="flex items-center gap-3 px-4 py-3 hover:bg-accent/30 transition-colors">
+        {/* Checkbox */}
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onSelect}
+          className="h-3.5 w-3.5 rounded border-input accent-primary shrink-0 cursor-pointer"
+          onClick={(e) => e.stopPropagation()}
+        />
 
-        <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0 shrink-0">
-          {sop.sopId}
-        </Badge>
+        <button
+          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+          onClick={onToggle}
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          )}
 
-        <span className="text-sm font-medium flex-1 truncate">{sop.name}</span>
+          <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0 shrink-0">
+            {sop.sopId}
+          </Badge>
 
-        <Badge variant={statusCfg.variant} className="text-[10px] px-1.5 py-0">
-          {statusCfg.label}
-        </Badge>
+          <span className="text-sm font-medium flex-1 truncate">{sop.name}</span>
 
-        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted shrink-0">
-          {sop.domain}
-        </span>
+          <Badge variant={statusCfg.variant} className="text-[10px] px-1.5 py-0">
+            {statusCfg.label}
+          </Badge>
 
-        <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded-full border shrink-0", priorityCfg.className)}>
-          {priorityCfg.label}
-        </span>
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted shrink-0">
+            {sop.domain}
+          </span>
 
-        {/* Row actions */}
-        <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <span
+            className={cn(
+              "text-[10px] font-medium px-1.5 py-0.5 rounded-full border shrink-0",
+              priorityCfg.className,
+            )}
+          >
+            {priorityCfg.label}
+          </span>
+
+          {currentSteps.length > 0 && (
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {currentSteps.length} bước
+            </span>
+          )}
+        </button>
+
+        {/* Row action buttons */}
+        <div className="flex gap-1 shrink-0">
           <Button
             size="icon-xs"
             variant="ghost"
@@ -484,24 +721,15 @@ function SopRow({
             onClick={onToggle}
             title="Soạn"
           >
-            <FileText className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="text-muted-foreground"
-            onClick={() => { if (!expanded) onToggle(); }}
-            title="Lịch sử"
-          >
-            <History className="h-3.5 w-3.5" />
+            <Pencil className="h-3.5 w-3.5" />
           </Button>
         </div>
-      </button>
+      </div>
 
-      {/* Expanded view */}
+      {/* ─── SECTION 5: Expanded Detail ─── */}
       {expanded && (
-        <div className="border-t border-border/50 space-y-4 px-4 py-4">
-          {/* Error message for run */}
+        <div className="border-t border-border/50 space-y-5 px-4 py-4">
+          {/* Error from run */}
           {runMutation.isError && (
             <div className="text-sm text-destructive flex items-center gap-1">
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -509,103 +737,257 @@ function SopRow({
             </div>
           )}
 
-          {/* SOP Info */}
-          <div className="space-y-1">
-            <h3 className="text-sm font-semibold">{sop.name}</h3>
-            {sop.description && (
-              <p className="text-xs text-muted-foreground">{sop.description}</p>
-            )}
-            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-              {sop.lastRunAt && (
-                <span className="flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  Chạy lần cuối: {new Date(sop.lastRunAt).toLocaleString("vi-VN")}
-                </span>
+          {/* ── 5.1 Editable info ── */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Thông tin SOP
+            </h4>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+              <div>
+                <div className="text-muted-foreground mb-1">SOP ID</div>
+                <span className="font-mono text-foreground">{sop.sopId}</span>
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Tên</div>
+                {editMode ? (
+                  <Input
+                    className="h-7 text-xs"
+                    value={(getEditVal("name") as string) ?? ""}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, name: e.target.value }))}
+                  />
+                ) : (
+                  <span className="text-foreground">{sop.name}</span>
+                )}
+              </div>
+              <div className="col-span-2">
+                <div className="text-muted-foreground mb-1">Mô tả</div>
+                {editMode ? (
+                  <Textarea
+                    className="min-h-[48px] text-xs"
+                    value={(getEditVal("description") as string) ?? ""}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, description: e.target.value }))}
+                  />
+                ) : (
+                  <p className="text-foreground">{sop.description || "—"}</p>
+                )}
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Domain</div>
+                {editMode ? (
+                  <NativeSelect
+                    value={(getEditVal("domain") as string) ?? ""}
+                    onChange={(v) => setEditDraft((prev) => ({ ...prev, domain: v }))}
+                    options={DOMAINS.map((d) => ({ value: d, label: d }))}
+                  />
+                ) : (
+                  <span className="text-foreground">{sop.domain}</span>
+                )}
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Ưu tiên</div>
+                {editMode ? (
+                  <NativeSelect
+                    value={(getEditVal("priority") as string) ?? "P2"}
+                    onChange={(v) => setEditDraft((prev) => ({ ...prev, priority: v as Sop["priority"] }))}
+                    options={[
+                      { value: "P0", label: "P0 — Khẩn cấp" },
+                      { value: "P1", label: "P1 — Cao" },
+                      { value: "P2", label: "P2 — Trung bình" },
+                      { value: "P3", label: "P3 — Thấp" },
+                    ]}
+                  />
+                ) : (
+                  <span className={cn("font-medium", priorityCfg.className)}>{sop.priority}</span>
+                )}
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Trạng thái</div>
+                {editMode ? (
+                  <NativeSelect
+                    value={(getEditVal("status") as string) ?? "draft"}
+                    onChange={(v) => setEditDraft((prev) => ({ ...prev, status: v as Sop["status"] }))}
+                    options={[
+                      { value: "done", label: "Hoàn thành" },
+                      { value: "draft", label: "Bản nháp" },
+                      { value: "needed", label: "Cần tạo" },
+                      { value: "in_progress", label: "Đang làm" },
+                      { value: "deprecated", label: "Ngừng dùng" },
+                    ]}
+                  />
+                ) : (
+                  <Badge variant={statusCfg.variant} className="text-[10px]">
+                    {statusCfg.label}
+                  </Badge>
+                )}
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Cron</div>
+                {editMode ? (
+                  <Input
+                    className="h-7 text-xs font-mono"
+                    placeholder="0 9 * * 1"
+                    value={(getEditVal("cron") as string) ?? ""}
+                    onChange={(e) => setEditDraft((prev) => ({ ...prev, cron: e.target.value }))}
+                  />
+                ) : (
+                  <span className="font-mono text-foreground">{sop.cron || "—"}</span>
+                )}
+              </div>
+              {sop.agents && sop.agents.length > 0 && (
+                <div className="col-span-2">
+                  <div className="text-muted-foreground mb-1">Agents</div>
+                  <div className="flex flex-wrap gap-1">
+                    {sop.agents.map((a) => (
+                      <span key={a} className="bg-muted px-1.5 py-0.5 rounded text-[10px]">
+                        {a}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               )}
-              {sop.tags?.map((tag) => (
-                <span key={tag} className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{tag}</span>
-              ))}
+              {sop.lastRunAt && (
+                <div className="col-span-2">
+                  <div className="text-muted-foreground mb-1 flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    Chạy lần cuối
+                  </div>
+                  <span className="text-foreground">
+                    {new Date(sop.lastRunAt).toLocaleString("vi-VN")}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Workflow Steps */}
-          {sop.steps && sop.steps.length > 0 && (
+          {/* ── 5.2 Workflow Steps ── */}
+          {currentSteps.length > 0 && (
             <div className="space-y-2">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Các bước thực thi
+                Các bước thực thi ({currentSteps.length})
               </h4>
               <div className="space-y-1.5">
-                {sop.steps.map((step) => (
+                {currentSteps.map((step, i) => (
                   <SopStepCard
-                    key={step.id}
+                    key={`${sop.sopId}-step-${step.order}`}
                     step={step}
-                    status={getStepStatus(step, activeExecutionId)}
-                    editable={sop.status === "draft"}
+                    stepIndex={i}
+                    sopId={sop.sopId}
+                    editable={editMode || sop.status === "draft"}
+                    onUpdate={handleStepUpdate}
+                    onExecuteSingle={handleExecuteSingle}
+                    onDelete={handleStepDelete}
+                    onMoveUp={(idx) => handleStepMove(idx, "up")}
+                    onMoveDown={(idx) => handleStepMove(idx, "down")}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Execution Stream */}
+          {/* ── 5.3 Execution Preview ── */}
           <div className="space-y-2">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Luồng thực thi
             </h4>
-            <SopExecutionStream
+            <SopExecutionPreview
               executionId={activeExecutionId ?? undefined}
               sopId={sop.sopId}
-              onComplete={onInvalidate}
+              onNavigateRun={onNavigateRun}
             />
           </div>
 
-          {/* Control buttons */}
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              className="bg-green-600 hover:bg-green-700 text-white"
-              disabled={runMutation.isPending}
-              onClick={() => runMutation.mutate()}
-            >
-              {runMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+          {/* ── 5.4 Body markdown ── */}
+          {(sop.body || editMode) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  Nội dung chi tiết
+                </h4>
+                {!editMode && sop.body && (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    onClick={() => { setBodyEdit(!bodyEdit); setBodyDraft(sop.body ?? ""); }}
+                  >
+                    <Pencil className="h-3 w-3 mr-1" />
+                    {bodyEdit ? "Xem" : "Sửa"}
+                  </Button>
+                )}
+              </div>
+              {editMode || bodyEdit ? (
+                <Textarea
+                  className="min-h-[120px] text-xs font-mono"
+                  value={bodyDraft}
+                  onChange={(e) => setBodyDraft(e.target.value)}
+                />
               ) : (
-                <Play className="h-3.5 w-3.5 mr-1" />
+                <div className="bg-muted/30 rounded-md p-3 text-xs whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+                  {sop.body}
+                </div>
               )}
-              Chạy FULL
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!activeExecutionId}
-              onClick={() => handleControl("pause")}
-            >
-              <Pause className="h-3.5 w-3.5 mr-1" />
-              Tạm dừng
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!activeExecutionId}
-              onClick={() => handleControl("stop")}
-            >
-              <Square className="h-3.5 w-3.5 mr-1" />
-              Dừng
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!activeExecutionId}
-              onClick={() => handleControl("reset")}
-            >
-              <RotateCcw className="h-3.5 w-3.5 mr-1" />
-              Reset
-            </Button>
-          </div>
+            </div>
+          )}
 
-          {/* Execution History */}
+          {/* ── 5.5 ReMe status ── */}
           <div className="space-y-2">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              ReMe
+            </h4>
+            <div className="flex items-center gap-3">
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={remeMutation.isPending}
+                onClick={() => remeMutation.mutate()}
+              >
+                {remeMutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                ) : (
+                  <Brain className="h-3 w-3 mr-1" />
+                )}
+                Inject ReMe
+              </Button>
+              {sop.reme_synced_at && (
+                <span className="text-[10px] text-muted-foreground">
+                  Đồng bộ: {new Date(sop.reme_synced_at).toLocaleString("vi-VN")}
+                </span>
+              )}
+              {remeMutation.isSuccess && (
+                <span className="text-[10px] text-green-600">Đã inject</span>
+              )}
+            </div>
+          </div>
+
+          {/* ── 5.6 Dependencies ── */}
+          {sop.dependencies && sop.dependencies.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Phụ thuộc
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {sop.dependencies.map((dep) => (
+                  <button
+                    key={dep}
+                    className="inline-flex items-center gap-1 text-xs font-mono text-primary hover:underline"
+                    onClick={() => {
+                      // Navigate or scroll to dep SOP
+                      const el = document.getElementById(`sop-${dep}`);
+                      el?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  >
+                    <Link2 className="h-3 w-3" />
+                    {dep}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── 5.7 Execution history ── */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+              <History className="h-3 w-3" />
               Lịch sử chạy gần đây
             </h4>
             {executionsQuery.isLoading ? (
@@ -617,7 +999,7 @@ function SopRow({
               <p className="text-xs text-muted-foreground">Chưa có lần chạy nào.</p>
             ) : (
               <div className="space-y-1">
-                {(executionsQuery.data ?? []).map((exec) => (
+                {(executionsQuery.data ?? []).slice(0, 5).map((exec) => (
                   <button
                     key={exec.id}
                     className={cn(
@@ -635,28 +1017,95 @@ function SopRow({
                       <span className="text-muted-foreground">{exec.triggeredBy}</span>
                     )}
                     <Badge
-                      variant={exec.status === "completed" ? "secondary" : exec.status === "failed" ? "destructive" : "outline"}
+                      variant={
+                        exec.status === "completed"
+                          ? "secondary"
+                          : exec.status === "failed"
+                            ? "destructive"
+                            : "outline"
+                      }
                       className="text-[10px] px-1.5 py-0"
                     >
-                      {exec.status === "completed" ? "Xong" : exec.status === "failed" ? "Lỗi" : exec.status === "running" ? "Đang chạy" : "Tạm dừng"}
+                      {exec.status === "completed"
+                        ? "Xong"
+                        : exec.status === "failed"
+                          ? "Lỗi"
+                          : exec.status === "running"
+                            ? "Đang chạy"
+                            : "Tạm dừng"}
                     </Badge>
                   </button>
                 ))}
               </div>
             )}
           </div>
+
+          {/* ── Actions bar ── */}
+          <div className="flex gap-2 pt-2 border-t border-border/50">
+            <Button
+              size="sm"
+              className="bg-green-600 hover:bg-green-700 text-white"
+              disabled={runMutation.isPending}
+              onClick={() => runMutation.mutate()}
+            >
+              {runMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : (
+                <Play className="h-3.5 w-3.5 mr-1" />
+              )}
+              Chạy FULL
+            </Button>
+            <Button
+              size="sm"
+              variant={editMode ? "default" : "outline"}
+              onClick={() => {
+                if (editMode) {
+                  saveMutation.mutate();
+                } else {
+                  setEditMode(true);
+                }
+              }}
+              disabled={saveMutation.isPending}
+            >
+              {saveMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : editMode ? (
+                <Save className="h-3.5 w-3.5 mr-1" />
+              ) : (
+                <Pencil className="h-3.5 w-3.5 mr-1" />
+              )}
+              {editMode ? "Lưu" : "Sửa"}
+            </Button>
+            {editMode && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setEditMode(false);
+                  setEditDraft({});
+                }}
+              >
+                Huỷ
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={remeMutation.isPending}
+              onClick={() => remeMutation.mutate()}
+            >
+              {remeMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : (
+                <Brain className="h-3.5 w-3.5 mr-1" />
+              )}
+              Inject ReMe
+            </Button>
+          </div>
         </div>
       )}
     </Card>
   );
-}
-
-/* ═══ Helpers ═══ */
-
-function getStepStatus(_step: SopStep, _activeExecutionId: string | null): StepStatus {
-  // The actual status comes from the execution stream;
-  // without real-time step data, default to pending
-  return "pending";
 }
 
 /* ═══ Sub-components ═══ */
@@ -708,8 +1157,8 @@ function DomainTab({
       className={cn(
         "px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap",
         active
-          ? "bg-primary text-primary-foreground"
-          : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
+          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+          : "border border-border bg-background text-muted-foreground hover:bg-zinc-50 dark:hover:bg-zinc-800",
       )}
     >
       {label}
@@ -755,7 +1204,12 @@ function ExecutionStatusDot({ status }: { status: string }) {
   return (
     <span className="relative flex h-2 w-2 shrink-0">
       {status === "running" && (
-        <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", colorClass)} />
+        <span
+          className={cn(
+            "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+            colorClass,
+          )}
+        />
       )}
       <span className={cn("relative inline-flex rounded-full h-2 w-2", colorClass)} />
     </span>

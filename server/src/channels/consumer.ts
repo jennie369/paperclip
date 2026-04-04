@@ -230,13 +230,21 @@ async function processMessage(
 
     // Auto-save to inbox_contacts for permanent contact persistence
     if (saveContact && merged.senderId && merged.peerKind !== 'group') {
-      supabase.from('inbox_contacts').upsert({
-        name: merged.senderName || merged.senderId,
-        zalo_id: merged.senderId,
-        channel: merged.channel,
-        last_message_at: new Date().toISOString(),
-      }, { onConflict: 'zalo_id', ignoreDuplicates: false }).then(({ error }) => {
-        if (error) console.warn(`${logPrefix} inbox_contacts upsert failed: ${error.message}`);
+      supabase.from('inbox_contacts').select('id').eq('zalo_id', merged.senderId).single().then(async ({ data }) => {
+        if (data?.id) {
+          await supabase.from('inbox_contacts').update({
+            name: merged.senderName || merged.senderId,
+            channel: merged.channel,
+            last_message_at: new Date().toISOString(),
+          }).eq('id', data.id);
+        } else {
+          await supabase.from('inbox_contacts').insert({
+            name: merged.senderName || merged.senderId,
+            zalo_id: merged.senderId,
+            channel: merged.channel,
+            last_message_at: new Date().toISOString(),
+          });
+        }
       });
     }
   } catch (err: any) {
@@ -248,9 +256,9 @@ async function processMessage(
 
   if (!agentSlug) {
     const skipReason = (merged as any)._skipReason || 'no_agent_assigned';
-    console.log(`${logPrefix} Skipped: ${skipReason}`);
+    console.log(`${logPrefix} Skipped AI routing: ${skipReason} - Saving to Inbox only`);
     if (pendingId) await bus.markHandled(pendingId, 'consumer', 'skipped', skipReason);
-    return;
+    // Don't return here! We still need to save the message to session history for human inbox
   }
 
   // ── Step 8: Build session context ──
@@ -362,62 +370,72 @@ async function processMessage(
   }
 
   // ── Step 9: Route to agent (Claude CLI) ──
-  console.log(`${logPrefix} → Routing to agent: ${agentSlug}${customerId ? ` (CRM: ${customerId.substring(0, 8)})` : ''} | msg: "${merged.content.substring(0, 60)}"`);
+  if (agentSlug) {
+    console.log(`${logPrefix} → Routing to agent: ${agentSlug}${customerId ? ` (CRM: ${customerId.substring(0, 8)})` : ''} | msg: "${merged.content.substring(0, 60)}"`);
 
-  // Mark as processing
-  if (pendingId) {
-    await supabase.from('channel_pending_messages').update({
-      status: 'processing',
-      agent_slug: agentSlug,
-      session_key: sessionKey,
-    }).eq('id', pendingId);
-  }
+    // Mark as processing
+    if (pendingId) {
+      await supabase.from('channel_pending_messages').update({
+        status: 'processing',
+        agent_slug: agentSlug,
+        session_key: sessionKey,
+      }).eq('id', pendingId);
+    }
 
-  const replyText = await router.runAgent(
-    agentSlug,
-    sessionKey,
-    enrichedMessage,
-    merged,
-    history
-  );
-
-  // Append assistant reply to session history
-  await session.appendMessage(
-    sessionKey,
-    'assistant',
-    replyText,
-    channelConfig.history_limit
-  );
-
-  // ── Step 10: Publish outbound reply ──
-  const outbound: OutboundMessage = {
-    channel: merged.channel,
-    chatId: merged.chatId,
-    content: replyText,
-    replyToMessageId: merged.id,
-    metadata: {
+    const replyText = await router.runAgent(
       agentSlug,
       sessionKey,
-      processingTime: Date.now() - merged.timestamp.getTime(),
-    },
-  };
+      enrichedMessage,
+      merged,
+      history
+    );
 
-  bus.publishOutbound(outbound);
+    // Append assistant reply to session history
+    await session.appendMessage(
+      sessionKey,
+      'assistant',
+      replyText,
+      channelConfig.history_limit
+    );
 
-  // ── Step 11: Update pending message status + cooldown ──
-  if (pendingId) {
-    await bus.markHandled(pendingId, agentSlug, 'handled');
+    // ── Step 10: Publish outbound reply ──
+    const outbound: OutboundMessage = {
+      channel: merged.channel,
+      chatId: merged.chatId,
+      content: replyText,
+      replyToMessageId: merged.id,
+      metadata: {
+        agentSlug,
+        sessionKey,
+        processingTime: Date.now() - merged.timestamp.getTime(),
+      },
+    };
+
+    bus.publishOutbound(outbound);
+
+    // ── Step 11: Update pending message status + cooldown ──
+    if (pendingId) {
+      await bus.markHandled(pendingId, agentSlug, 'handled');
+    }
+
+    // Set thread cooldown to prevent rapid-fire replies
+    threadCooldown.set(threadKey, Date.now());
+
+    console.log(`${logPrefix} ✅ Reply sent via agent ${agentSlug} (${replyText.length} chars) | "${replyText.substring(0, 60)}"`);
+  } else {
+    // If no agent, just leave it as 'pending' for a human to read from the inbox
+    console.log(`${logPrefix} ✅ Saved to inbox (no AI agent assigned)`);
+    // Note: Do not mark pendingId as 'handled' so that humans can see it's waiting for them if needed,
+    // or you could mark it as 'skipped' so it doesn't get retried by the consumer!
+    if (pendingId) {
+      await bus.markHandled(pendingId, 'human', 'skipped', 'no_agent_assigned');
+    }
   }
 
-  // Set thread cooldown to prevent rapid-fire replies
-  threadCooldown.set(threadKey, Date.now());
-
-  // Schedule AI summary after idle (5 min)
+  // Schedule AI summary after idle (5 min) - run for both AI-handled and Human-handled messages
   if (customerId) {
     aiSummarizer.scheduleSummary(sessionKey, customerId);
   }
-
-  console.log(`${logPrefix} ✅ Reply sent via agent ${agentSlug} (${replyText.length} chars) | "${replyText.substring(0, 60)}"`);
 }
 
 /**

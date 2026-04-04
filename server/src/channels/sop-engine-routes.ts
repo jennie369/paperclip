@@ -98,38 +98,37 @@ router.get('/sops/:sopId', async (req, res) => {
   }
 });
 
-// 3. PUT /sops/:sopId — Update
+// 3. PUT /sops/:sopId — Upsert (update if exists, create if not)
 router.put('/sops/:sopId', async (req, res) => {
   try {
     const { sopId } = req.params;
-    const updateData = { ...req.body, updated_at: new Date().toISOString() };
+    const body = { ...req.body, updated_at: new Date().toISOString() };
+    delete body.id;
+    delete body.created_at;
 
-    // Không cho update sop_id hoặc id
-    delete updateData.sop_id;
-    delete updateData.id;
-    delete updateData.created_at;
-
+    // Upsert: insert with onConflict on sop_id
+    body.sop_id = sopId;
     const { data, error } = await supabase
       .from('gem_sops')
-      .update(updateData)
-      .eq('sop_id', sopId)
+      .upsert(body, { onConflict: 'sop_id' })
       .select()
       .single();
 
     if (error) throw error;
-    if (!data) return res.status(404).json({ error: `Không tìm thấy SOP: ${sopId}` });
 
     // Audit
-    await supabase.from('gem_sop_audit').insert({
-      sop_id: sopId,
-      action: 'updated',
-      actor: req.body._actor || 'board',
-      detail: { fields: Object.keys(updateData) },
-    });
+    try {
+      await supabase.from('gem_sop_audit').insert({
+        sop_id: sopId,
+        action: 'upserted',
+        actor: req.body._actor || 'board',
+        detail: { fields: Object.keys(body) },
+      });
+    } catch {}
 
     res.json(data);
   } catch (err: any) {
-    console.error('[SOP Update]', err.message);
+    console.error('[SOP Upsert]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,11 +1,11 @@
 // packages/server/src/channels/zalo-personal/channel.ts
 
-import { ZaloAuth } from './protocol/auth';
-import { ZaloListener } from './protocol/listener';
-import { sendDMText, sendGroupText, sendTyping, sendDMImage, sendGroupImage } from './protocol/send';
-import { encryptCredentials, decryptCredentials } from './protocol/crypto';
-import { ZaloSession, ZaloCredentials } from './protocol/message';
-import { supabase } from './supabase';
+import { ZaloAuth } from './protocol/auth.js';
+import { ZaloListener } from './protocol/listener.js';
+import { sendDMText, sendGroupText, sendTyping, sendDMImage, sendGroupImage } from './protocol/send.js';
+import { encryptCredentials, decryptCredentials } from './protocol/crypto.js';
+import { ZaloSession, ZaloCredentials } from './protocol/message.js';
+import { supabase } from './supabase.js';
 import { bus } from '../bus.js';
 import type { OutboundMessage } from '../types.js';
 import https from 'https';
@@ -239,8 +239,8 @@ export class ZaloPersonalChannel {
       }
     });
 
-    this.listener.on('dm_message', (msg) => this.handleInboundMessage(msg, 'dm'));
-    this.listener.on('group_message', (msg) => this.handleInboundMessage(msg, 'group'));
+    this.listener.on('dm_message', (msg: any) => this.handleInboundMessage(msg, 'dm'));
+    this.listener.on('group_message', (msg: any) => this.handleInboundMessage(msg, 'group'));
 
     this.listener.on('connected', async () => {
       if (this.session?.secretKey) {
@@ -252,7 +252,7 @@ export class ZaloPersonalChannel {
       }
     });
 
-    this.listener.on('error', (err) => {
+    this.listener.on('error', (err: any) => {
       const wasConnected = this._isConnected;
       this._isConnected = false;
       if (wasConnected) {
@@ -263,10 +263,14 @@ export class ZaloPersonalChannel {
       }
     });
 
-    this.listener.on('duplicate_session', () => {
-      // Transient — listener auto-reconnects internally, don't double-reconnect
+    this.listener.on('duplicate_session', async () => {
+      // Duplicate session is fatal; need manual restart
+      console.log(`${this.tag} Duplicate session detected — stopping to prevent reconnect spam`);
       this._isConnected = false;
-      console.log(`${this.tag} Duplicate session detected — listener will auto-reconnect`);
+      this._stopped = true;
+      if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+      if (this._healthCheckInterval) { clearInterval(this._healthCheckInterval); this._healthCheckInterval = null; }
+      await this.updateStatus('error', 'Duplicate session detected. Please restart manually.');
     });
 
     this.listener.on('kickout', async (info: any) => {

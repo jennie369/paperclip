@@ -346,6 +346,7 @@ export class ZaloListener extends EventEmitter {
     // Duplicate session (cmd=3000)
     if (cmd === WS_CMD.DUPLICATE_SESSION.cmd) {
       console.warn('[ZaloListener] Duplicate session detected');
+      this.stopped = true;
       this.emit('duplicate_session');
       return;
     }
