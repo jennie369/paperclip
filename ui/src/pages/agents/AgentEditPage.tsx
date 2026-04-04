@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
-import { useNavigate } from "@/lib/router";
+import { useNavigate } from "../../lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -21,11 +21,11 @@ import {
   PROVIDER_MODELS,
   type AgentConfig,
   type AgentProvider,
-} from "@/api/agentConfigs";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+} from "../../api/agentConfigs";
+import { Button } from "../../components/ui/button";
+import { Skeleton } from "../../components/ui/skeleton";
 
-const PROVIDERS: AgentProvider[] = ["claude", "gemini", "openrouter"];
+const PROVIDERS: AgentProvider[] = ["claude", "gemini", "openrouter", "ollama"];
 
 export function AgentEditPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -59,6 +59,8 @@ export function AgentEditPage() {
     skip_permissions: true,
     can_create_agents: false,
     extra_args: "",
+    command: "",
+    bootstrap_prompt: "",
   });
   const [saved, setSaved] = useState(false);
 
@@ -102,7 +104,9 @@ export function AgentEditPage() {
         chrome: (agent as any).chrome === true,
         skip_permissions: (agent as any).skip_permissions === true || (agent as any).skip_permissions === undefined,
         can_create_agents: (agent as any).can_create_agents === true,
-        extra_args: Array.isArray((agent as any).extra_args) ? (agent as any).extra_args.join(" ") : ((agent as any).extra_args || ""),
+        extra_args: Array.isArray((agent as any).extra_args) ? (agent as any).extra_args.join(", ") : ((agent as any).extra_args || ""),
+        command: (agent as any).command || "",
+        bootstrap_prompt: (agent as any).bootstrap_prompt || "",
       });
     }
   }, [agent]);
@@ -155,7 +159,7 @@ export function AgentEditPage() {
             variant="outline"
             size="sm"
             className="mt-3"
-            onClick={() => navigate("/config")}
+            onClick={() => navigate("/agents-config")}
           >
             Quay lại
           </Button>
@@ -170,7 +174,7 @@ export function AgentEditPage() {
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/config")}>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/agents-config")}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
@@ -298,17 +302,6 @@ export function AgentEditPage() {
             ))}
           </div>
         </Field>
-        <Field label="Model">
-          <select
-            className="input-field"
-            value={form.model}
-            onChange={(e) => updateField("model", e.target.value)}
-          >
-            {availableModels.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-        </Field>
         <Field label={`Nhiệt độ (Temperature): ${form.temperature}`} hint="0 = chính xác, 2 = sáng tạo">
           <input
             type="range"
@@ -333,34 +326,6 @@ export function AgentEditPage() {
             onChange={(e) => updateField("max_tokens", Number(e.target.value))}
             min={100}
             max={128000}
-          />
-        </Field>
-        <Field label="Effort mode" hint="Mức độ suy nghĩ của agent. Auto = tự quyết định.">
-          <div className="flex gap-2">
-            {["auto", "low", "medium", "high"].map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`px-3 py-1.5 rounded-md text-xs border transition-colors ${
-                  form.effort_mode === mode
-                    ? "border-primary bg-primary/10 text-foreground font-medium"
-                    : "border-border text-muted-foreground hover:border-foreground/30"
-                }`}
-                onClick={() => updateField("effort_mode", mode)}
-              >
-                {mode === "auto" ? "Tự động" : mode === "low" ? "Thấp" : mode === "medium" ? "Trung bình" : "Cao"}
-              </button>
-            ))}
-          </div>
-        </Field>
-        <Field label="Max turns" hint="Số lượt agent tự chạy tool tối đa mỗi request.">
-          <input
-            type="number"
-            className="input-field w-40"
-            value={form.max_turns}
-            onChange={(e) => updateField("max_turns", Number(e.target.value))}
-            min={1}
-            max={50}
           />
         </Field>
       </FormSection>
@@ -422,38 +387,131 @@ export function AgentEditPage() {
         </div>
       </FormSection>
 
-      <FormSection title="Quyền & Tùy chọn chạy">
-        <div className="grid grid-cols-2 gap-4">
+      <FormSection title="Permissions & Configuration">
+        <Field label="Command" hint="VD: claude, ollama. Để trống mặc định dùng claude.">
+          <input
+            className="input-field"
+            placeholder={form.provider === "ollama" ? "ollama" : "claude"}
+            value={form.command || ""}
+            onChange={(e) => updateField("command", e.target.value)}
+          />
+          {form.provider === "ollama" && (
+            <div className="mt-2 p-2.5 rounded-md bg-muted/50 border border-border">
+              <p className="text-[10px] text-muted-foreground mb-2 font-medium">⚡ Preset — bấm để tự điền Command + Extra args + Model:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: "gemma4:2b", model: "gemma4:2b" },
+                  { label: "gemma4:e2b", model: "gemma4:e2b" },
+                  { label: "gemma4:e4b", model: "gemma4:e4b" },
+                  { label: "gemma4:26b", model: "gemma4:26b" },
+                  { label: "gemma4:31b", model: "gemma4:31b" },
+                ].map((preset) => (
+                  <button
+                    key={preset.model}
+                    type="button"
+                    className="rounded border border-border bg-background hover:bg-accent px-2.5 py-1 text-xs text-foreground transition-colors font-mono"
+                    onClick={() => {
+                      updateField("command", "ollama");
+                      updateField("extra_args", "launch, claude");
+                      updateField("model", preset.model);
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1.5">→ chạy: <code className="font-mono">ollama launch claude --model &lt;model&gt;</code></p>
+            </div>
+          )}
+        </Field>
+        <Field label="Model">
+          <select
+            className="input-field"
+            value={form.model}
+            onChange={(e) => updateField("model", e.target.value)}
+          >
+            {availableModels.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </Field>
+        
+        <Field label="Thinking effort" hint="Mức độ suy nghĩ của agent. Auto = tự quyết định.">
+          <div className="flex gap-2">
+            {["auto", "none", "low", "medium", "high"].map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`px-3 py-1.5 rounded-md text-xs border transition-colors ${
+                  form.effort_mode === mode
+                    ? "border-primary bg-primary/10 text-foreground font-medium"
+                    : "border-border text-muted-foreground hover:border-foreground/30"
+                }`}
+                onClick={() => updateField("effort_mode", mode)}
+              >
+                {mode === "auto" ? "Tự động" : mode === "none" ? "None" : mode === "low" ? "Thấp" : mode === "medium" ? "Trung bình" : "Cao"}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Bootstrap prompt (first run)" hint="Thiết lập hành vi chỉ áp dụng cho lần khởi tạo session đầu tiên.">
+          <textarea
+            className="input-field min-h-[80px] resize-y font-mono text-xs"
+            placeholder=""
+            value={form.bootstrap_prompt || ""}
+            onChange={(e) => updateField("bootstrap_prompt", e.target.value)}
+            rows={4}
+          />
+        </Field>
+
+        <div className="grid grid-cols-2 gap-4 mt-2 mb-2">
           <label className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 cursor-pointer" title="Cho phép agent mở Chrome browser (Playwright) để thao tác web">
             <input type="checkbox" className="rounded" checked={form.chrome} onChange={e => updateField("chrome", e.target.checked)} />
             <div>
-              <div className="text-sm font-medium">Bật Chrome</div>
-              <div className="text-[10px] text-muted-foreground">Agent có thể mở browser để thao tác web</div>
+              <div className="text-sm font-medium">Enable Chrome</div>
+              <div className="text-[10px] text-muted-foreground">Browser access</div>
             </div>
           </label>
           <label className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 cursor-pointer" title="Bỏ qua hỏi quyền — agent tự do thực thi (--dangerously-skip-permissions)">
             <input type="checkbox" className="rounded" checked={form.skip_permissions} onChange={e => updateField("skip_permissions", e.target.checked)} />
             <div>
-              <div className="text-sm font-medium">Bỏ qua quyền</div>
+              <div className="text-sm font-medium">Skip permissions</div>
               <div className="text-[10px] text-muted-foreground">--dangerously-skip-permissions</div>
             </div>
           </label>
-          <label className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 cursor-pointer" title="Cho phép agent tạo agent mới">
+        </div>
+
+        <Field label="Max turns per run" hint="Số lượt agent tự chạy tool trong 1 phiên (mặc định 1).">
+          <input
+            type="number"
+            className="input-field w-32"
+            value={form.max_turns}
+            onChange={(e) => updateField("max_turns", Number(e.target.value))}
+            min={1}
+            max={50}
+          />
+        </Field>
+
+        <Field label="Extra args (comma-separated)" hint="Các arguments thêm (cách nhau bằng dấu phẩy)">
+          <input
+            className="input-field font-mono text-xs"
+            placeholder="vd: --verbose, --channels plugin:telegram"
+            value={form.extra_args || ""}
+            onChange={e => updateField("extra_args", e.target.value)}
+          />
+        </Field>
+
+        <div className="mt-4 pt-4 border-t border-border">
+          <h4 className="text-sm font-medium mb-3">Permissions</h4>
+          <label className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 cursor-pointer">
             <input type="checkbox" className="rounded" checked={form.can_create_agents} onChange={e => updateField("can_create_agents", e.target.checked)} />
             <div>
-              <div className="text-sm font-medium">Tạo agent mới</div>
+              <div className="text-sm font-medium">Can create new agents</div>
               <div className="text-[10px] text-muted-foreground">Agent có quyền tạo agent khác</div>
             </div>
           </label>
         </div>
-        <Field label="Tham số bổ sung" hint="Các arguments thêm khi spawn agent (cách nhau bằng dấu phẩy)">
-          <input
-            className="input-field font-mono text-xs"
-            placeholder="--channels plugin:telegram@claude-plugins-official"
-            value={form.extra_args}
-            onChange={e => updateField("extra_args", e.target.value)}
-          />
-        </Field>
       </FormSection>
 
       <FormSection title="Lệnh chạy Agent (thật — đang dùng trên server)">
@@ -465,41 +523,50 @@ export function AgentEditPage() {
           <textarea
             className="input-field font-mono text-xs min-h-[120px] resize-y bg-zinc-950 text-green-400 p-3 rounded-lg"
             value={(() => {
-              if (form.provider === "gemini") {
-                return `# Gemini CLI\ngemini -p "<message>" -m ${form.model || "gemini-2.5-flash"}`;
-              }
               const s = form.slug || slug || "agent";
+              // Phân tích extra_args: tách subcommands (không có --) khỏi flags (có --)
+              const extraArgsList = form.extra_args
+                ? form.extra_args.split(",").map((a: string) => a.trim()).filter(Boolean)
+                : [];
+              const subCmds = extraArgsList.filter((a: string) => !a.startsWith("-"));
+              const flagArgs = extraArgsList.filter((a: string) => a.startsWith("-"));
+              // cmdPrefix: nếu là ollama thì nhúng subcommands vào ngay sau lệnh
+              const baseCmd = form.command || "claude";
+              const cmdPrefix = subCmds.length > 0
+                ? `${baseCmd} ${subCmds.join(" ")} `
+                : `${baseCmd} `;
               const lines: string[] = [];
+
               // Auto-reply command (router.ts)
               lines.push("# === Auto-reply (Zalo/FB chat) ===");
-              lines.push("claude \\");
+              lines.push(cmdPrefix + "\\");
               if (form.model) lines.push(`  --model ${form.model} \\`);
               lines.push("  --output-format json \\");
               lines.push(`  --max-turns ${form.max_turns || 1} \\`);
               lines.push("  --dangerously-skip-permissions \\");
               lines.push(`  --mcp-config agents/${s}/mcp.json \\`);
-              if (form.extra_args) lines.push(`  ${form.extra_args} \\`);
+              if (flagArgs.length > 0) lines.push(`  ${flagArgs.join(" ")} \\`);
               lines.push(`  -p "<tin nhắn từ khách>"`);
               lines.push(`  # CWD: agents/${s}/`);
               lines.push("");
-              // Heartbeat command — CHÍNH XÁC từ packages/adapters/claude-local/src/server/execute.ts line 404-418
+
+              // Heartbeat command
               lines.push("# === Heartbeat (Paperclip tasks/issues) ===");
-              lines.push("# Source: packages/adapters/claude-local/src/server/execute.ts → buildClaudeArgs()");
-              lines.push("claude \\");
+              lines.push(cmdPrefix + "\\");
               lines.push("  --print - \\");
               lines.push("  --output-format stream-json \\");
               lines.push("  --verbose \\");
               if (form.skip_permissions) lines.push("  --dangerously-skip-permissions \\");
               if (form.chrome) lines.push("  --chrome \\");
               if (form.model) lines.push(`  --model ${form.model} \\`);
-              const mtr = (agent as any)?.max_turns_per_run;
-              if (mtr && mtr > 0) lines.push(`  --max-turns ${mtr} \\`);
+              if (form.max_turns && form.max_turns > 0) lines.push(`  --max-turns ${form.max_turns} \\`);
               if (form.persona_file) lines.push(`  --append-system-prompt-file <temp>/agent-instructions.md \\`);
               lines.push("  --add-dir <temp>/paperclip-skills-XXXXXX \\");
-              if (form.extra_args) lines.push(`  ${form.extra_args} \\`);
+              if (flagArgs.length > 0) lines.push(`  ${flagArgs.join(" ")} \\`);
               lines.push("  # stdin: prompt (via --print -)");
               lines.push(`  # CWD: ${(agent as any)?.cwd || "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner"}`);
               if (form.persona_file) lines.push(`  # Instructions: ${form.persona_file} (copied to temp file + path directive appended)`);
+              
               return lines.join("\n");
             })()}
             onChange={e => {
@@ -654,7 +721,7 @@ export function AgentEditPage() {
             const r = await fetch(`/api/channels/agent-configs/${slug}`, { method: "DELETE" });
             if (r.ok) {
               qc.invalidateQueries({ queryKey: ["agent-configs"] });
-              navigate("/config");
+              navigate("/agents-config");
             } else {
               const err = await r.json().catch(() => ({ error: "Lỗi xóa agent" }));
               alert(err.error || "Không thể xóa agent. Có thể agent đang được gán cho kênh.");

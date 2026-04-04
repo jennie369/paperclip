@@ -22,7 +22,8 @@
       "@gem/services": ["./src/gem/services"],
       "@gem/services/*": ["./src/gem/services/*"],
       "@gem/hooks": ["./src/gem/hooks"],
-      "@gem/hooks/*": ["./src/gem/hooks/*"]
+      "@gem/hooks/*": ["./src/gem/hooks/*"],
+      "lexical": ["./node_modules/lexical/index.d.ts"]
     }
   },
   "include": ["src"],

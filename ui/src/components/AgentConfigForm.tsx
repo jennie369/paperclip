@@ -290,6 +290,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     adapterType === "codex_local" ||
     adapterType === "gemini_local" ||
     adapterType === "opencode_local" ||
+    adapterType === "ollama" ||
     adapterType === "cursor";
   const uiAdapter = useMemo(() => getUIAdapter(adapterType), [adapterType]);
 
@@ -668,9 +669,43 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                         ? "agent"
                         : adapterType === "opencode_local"
                           ? "opencode"
+                          : adapterType === "ollama"
+                            ? "ollama"
                           : "claude"
                   }
                 />
+                {adapterType === "ollama" && (
+                  <div className="mt-2 p-2 rounded-md bg-muted/50 border border-border">
+                    <p className="text-[10px] text-muted-foreground mb-2 font-medium">⚡ Preset — tự điền Command + Extra args + Model:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { label: "gemma4:2b", command: "ollama", extraArgs: ["launch", "claude"], model: "gemma4:2b" },
+                        { label: "gemma4:e2b", command: "ollama", extraArgs: ["launch", "claude"], model: "gemma4:e2b" },
+                        { label: "gemma4:e4b", command: "ollama", extraArgs: ["launch", "claude"], model: "gemma4:e4b" },
+                        { label: "gemma4:26b", command: "ollama", extraArgs: ["launch", "claude"], model: "gemma4:26b" },
+                        { label: "gemma4:31b", command: "ollama", extraArgs: ["launch", "claude"], model: "gemma4:31b" },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          className="rounded border border-border bg-background hover:bg-accent px-2.5 py-1 text-xs text-foreground transition-colors font-mono"
+                          onClick={() => {
+                            if (isCreate) {
+                              set!({ command: preset.command, extraArgs: preset.extraArgs.join(", "), model: preset.model });
+                            } else {
+                              mark("adapterConfig", "command", preset.command);
+                              mark("adapterConfig", "extraArgs", preset.extraArgs);
+                              mark("adapterConfig", "model", preset.model);
+                            }
+                          }}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-1.5">→ chạy: <code className="font-mono">ollama launch claude --model {"<model>"}</code></p>
+                  </div>
+                )}
               </Field>
 
               <ModelDropdown
@@ -747,7 +782,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               <div className="rounded-md border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
                 Bootstrap prompt is only sent for fresh sessions. Put stable setup, habits, and longer reusable guidance here. Frequent changes reduce the value of session reuse because new sessions must replay it.
               </div>
-              {(adapterType === "claude_local" || adapterType === "gemini_local") && (
+              {(adapterType === "claude_local" || adapterType === "gemini_local" || adapterType === "ollama") && (
                 <ClaudeLocalAdvancedFields {...adapterFieldProps} />
               )}
 
@@ -1029,7 +1064,7 @@ function SessionCompactionPolicyCard({
 
 /* ---- Internal sub-components ---- */
 
-const ENABLED_ADAPTER_TYPES = new Set(["claude_local", "codex_local", "gemini_local", "opencode_local", "cursor"]);
+const ENABLED_ADAPTER_TYPES = new Set(["claude_local", "codex_local", "gemini_local", "opencode_local", "cursor", "ollama"]);
 
 /** Display list includes all real adapter types plus UI-only coming-soon entries. */
 const ADAPTER_DISPLAY_LIST: { value: string; label: string; comingSoon: boolean }[] = [

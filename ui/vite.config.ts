@@ -19,6 +19,8 @@ export default defineConfig({
       "next/font/google": path.resolve(__dirname, "src/gem/adapters/next-font-compat.js"),
       // Supabase shim
       "@supabase/ssr": path.resolve(__dirname, "src/gem/adapters/supabase-compat.js"),
+      // Lexical
+      lexical: path.resolve(__dirname, "./node_modules/lexical/Lexical.mjs"),
     },
   },
   server: {

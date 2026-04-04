@@ -569,17 +569,58 @@ router.get('/routing/activity', async (req, res) => {
 
 router.get('/contacts', async (req, res) => {
   const { search, limit = 50 } = req.query;
-  let query = supabase
-    .from('inbox_contacts')
-    .select('*')
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .limit(Number(limit));
-  if (search) {
-    query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,zalo_id.ilike.%${search}%`);
+  
+  // Fetch from profiles
+  let profileQuery = supabase.from('profiles').select('id, full_name, username, phone, email').limit(Number(limit));
+  
+  // Fetch from channel_sessions
+  let sessionQuery = supabase.from('channel_sessions').select('chat_id, sender_name, channel_name').limit(Number(limit));
+  
+  const [profilesRes, sessionsRes] = await Promise.all([profileQuery, sessionQuery]);
+  
+  if (profilesRes.error) console.error("Profiles error:", profilesRes.error.message);
+  if (sessionsRes.error) console.error("Sessions error:", sessionsRes.error.message);
+  
+  const contactsMap = new Map<string, any>();
+  
+  // Map profiles
+  (profilesRes.data || []).forEach(p => {
+    contactsMap.set(p.id, {
+      id: p.id,
+      user_id: p.id,
+      name: p.full_name || p.username || p.phone || p.email || "Không tên",
+      phone: p.phone,
+      email: p.email,
+      label: "Thành viên app"
+    });
+  });
+  
+  // Map channel sessions
+  (sessionsRes.data || []).forEach(s => {
+    // If the person is already mapped via user_id, we could merge, but here they only have chat_id
+    if (!contactsMap.has(s.chat_id)) {
+      contactsMap.set(s.chat_id, {
+        id: s.chat_id,
+        zalo_id: s.chat_id, // Assume chat_id is either Zalo/FB ID
+        name: s.sender_name || s.chat_id,
+        label: s.channel_name.includes('zalo') ? "Zalo" : "Kênh khác"
+      });
+    }
+  });
+  
+  let allContacts = Array.from(contactsMap.values());
+  
+  if (search && typeof search === 'string') {
+    const q = search.toLowerCase();
+    allContacts = allContacts.filter(c => 
+      (c.name && c.name.toLowerCase().includes(q)) ||
+      (c.phone && c.phone.includes(q)) ||
+      (c.zalo_id && c.zalo_id.includes(q)) ||
+      (c.user_id && c.user_id.includes(q))
+    );
   }
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+
+  res.json(allContacts.slice(0, Number(limit)));
 });
 
 router.post('/contacts', async (req, res) => {
@@ -612,6 +653,83 @@ router.delete('/contacts/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── POST /api/channels/send — Universal send message (FIX SEND) ──
+// Ghi outbound message vào DB ngay, sau đó forward đến sub-handler kênh cụ thể
+router.post('/send', async (req, res) => {
+  const { channel_name, thread_id, message, thread_type = 'dm' } = req.body;
+  if (!channel_name || !thread_id || !message) {
+    return res.status(400).json({ error: 'channel_name, thread_id và message là bắt buộc' });
+  }
+
+  // 1. Ghi outbound message vào DB ngay để UI hiển thị tức thì
+  const { error: dbErr } = await supabase
+    .from('channel_sent_messages')
+    .insert({
+      channel_name,
+      thread_id,
+      thread_type,
+      to_uid: thread_id,
+      body: message,
+      content_type: 'text',
+      status: 'sending',
+      sent_by: 'manual',
+    });
+  if (dbErr) console.error('[Send] DB insert error:', dbErr.message);
+
+  // 2. Forward đến sub-handler theo channel_name
+  // Detect channel type từ DB
+  const { data: inst } = await supabase
+    .from('channel_instances')
+    .select('channel_type, name')
+    .eq('name', channel_name)
+    .single();
+
+  if (!inst) {
+    return res.status(404).json({ error: `Kênh "${channel_name}" không tồn tại` });
+  }
+
+  // Forward đến Zalo Personal sub-handler qua internal fetch
+  try {
+    const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/zalo-personal/send`;
+    const fwdRes = await fetch(forwardUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel_name, thread_id, message, thread_type }),
+    });
+    const fwdData = await fwdRes.json().catch(() => ({}));
+
+    if (fwdRes.ok) {
+      // Update DB status to sent
+      await supabase
+        .from('channel_sent_messages')
+        .update({ status: 'sent' })
+        .eq('channel_name', channel_name)
+        .eq('thread_id', thread_id)
+        .eq('status', 'sending');
+      return res.json({ success: true, ...fwdData });
+    } else {
+      // Update DB to failed
+      await supabase
+        .from('channel_sent_messages')
+        .update({ status: 'failed' })
+        .eq('channel_name', channel_name)
+        .eq('thread_id', thread_id)
+        .eq('status', 'sending');
+      return res.status(fwdRes.status).json({ success: false, error: fwdData.error || 'Gửi thất bại' });
+    }
+  } catch (err: any) {
+    console.error('[Send] Forward error:', err.message);
+    // Message đã ghi vào DB, mark failed
+    await supabase
+      .from('channel_sent_messages')
+      .update({ status: 'failed' })
+      .eq('channel_name', channel_name)
+      .eq('thread_id', thread_id)
+      .eq('status', 'sending');
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── POST /api/channels/conversations — create new conversation (FIX 7) ──
 router.post('/conversations', async (req, res) => {
   const { channel, target_id } = req.body;
@@ -629,7 +747,7 @@ router.post('/conversations', async (req, res) => {
       sender_id: target_id,
       sender_name: target_id,
       status: 'active',
-      peer_kind: 'dm',
+      peer_kind: 'direct',
       last_message_at: new Date().toISOString(),
     }, { onConflict: 'session_key' })
     .select()

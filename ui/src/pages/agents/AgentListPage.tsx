@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
@@ -61,7 +61,7 @@ export function AgentListPage() {
         </div>
         <Button
           size="sm"
-          onClick={() => navigate("../agents-config/new")}
+          onClick={() => navigate("/agents-config/new")}
         >
           <Plus className="h-4 w-4 mr-1.5" />
           Tạo agent mới
@@ -86,7 +86,7 @@ export function AgentListPage() {
             size="sm"
             variant="outline"
             className="mt-3"
-            onClick={() => navigate("../agents-config/new")}
+            onClick={() => navigate("/agents-config/new")}
           >
             <Plus className="h-4 w-4 mr-1" />
             Tạo agent đầu tiên
@@ -101,8 +101,8 @@ export function AgentListPage() {
             <AgentCard
               key={agent.id}
               agent={agent}
-              onEdit={() => navigate(`../agents-config/${agent.slug}/edit`)}
-              onTest={() => navigate(`../agents-config/${agent.slug}/test`)}
+              onEdit={() => navigate(`/agents-config/${agent.slug}/edit`)}
+              onTest={() => navigate(`/agents-config/${agent.slug}/test`)}
               onToggle={() =>
                 toggleMut.mutate({
                   slug: agent.slug,

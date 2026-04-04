@@ -46,7 +46,7 @@ router.get('/', async (_req, res) => {
       display_name: pa?.display_name || a.name,
       description: pa?.description || a.capabilities,
       avatar: pa?.avatar || a.icon,
-      provider: pa?.provider || (a.adapter_type === 'claude_local' ? 'claude' : a.adapter_type === 'gemini_local' ? 'gemini' : 'openrouter'),
+      provider: pa?.provider || (a.adapter_type === 'claude_local' ? 'claude' : a.adapter_type === 'gemini_local' ? 'gemini' : a.adapter_type === 'ollama' ? 'ollama' : 'openrouter'),
       model: pa?.model || ac.model || 'claude-sonnet-4-6',
       temperature: pa?.temperature != null ? parseFloat(pa.temperature) : (parseFloat(ac.temperature) || 0.7),
       max_tokens: parseInt(ac.maxTokens) || 4096,
@@ -67,7 +67,9 @@ router.get('/', async (_req, res) => {
       can_create_agents: a.permissions?.canCreateAgents === true,
       max_turns_per_run: parseInt(ac.maxTurnsPerRun) || parseInt(ac.maxTurns) || 1,
       cwd: ac.cwd || null,
-      extra_args: Array.isArray(ac.extraArgs) ? ac.extraArgs.join(' ') : (ac.extraArgs || ''),
+      command: ac.command || '',
+      bootstrap_prompt: ac.bootstrapPromptTemplate || '',
+      extra_args: Array.isArray(ac.extraArgs) ? ac.extraArgs.join(', ') : (ac.extraArgs || ''),
       created_at: a.created_at,
       updated_at: pa?.updated_at || a.updated_at,
     };
@@ -289,7 +291,7 @@ router.get('/:slug', async (req, res) => {
     display_name: pa?.display_name || data.name,
     description: pa?.description || data.capabilities,
     avatar: pa?.avatar || data.icon,
-    provider: pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : 'openrouter'),
+    provider: pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : data.adapter_type === 'ollama' ? 'ollama' : 'openrouter'),
     model: pa?.model || ac.model || 'claude-sonnet-4-6',
     temperature: pa?.temperature != null ? parseFloat(pa.temperature) : (parseFloat(ac.temperature) || 0.7),
     max_tokens: parseInt(ac.maxTokens) || 4096,
@@ -309,7 +311,9 @@ router.get('/:slug', async (req, res) => {
     can_create_agents: data.permissions?.canCreateAgents === true,
     max_turns_per_run: parseInt(ac.maxTurnsPerRun) || parseInt(ac.maxTurns) || 1,
     cwd: ac.cwd || null,
-    extra_args: Array.isArray(ac.extraArgs) ? ac.extraArgs.join(' ') : (ac.extraArgs || ''),
+    command: ac.command || '',
+    bootstrap_prompt: ac.bootstrapPromptTemplate || '',
+    extra_args: Array.isArray(ac.extraArgs) ? ac.extraArgs.join(', ') : (ac.extraArgs || ''),
     created_at: data.created_at,
     updated_at: pa?.updated_at || data.updated_at,
   });
@@ -526,7 +530,7 @@ router.patch('/:slug', async (req, res) => {
   // First get current agent to merge adapter_config
   const { data: current } = await supabase
     .from('agents')
-    .select('adapter_config')
+    .select('adapter_config, permissions')
     .eq('slug', slug)
     .single();
 
@@ -561,6 +565,23 @@ router.patch('/:slug', async (req, res) => {
   if (req.body.fallback_message !== undefined) acUpdates.fallbackMessage = req.body.fallback_message;
   if (req.body.history_limit !== undefined) acUpdates.historyLimit = req.body.history_limit;
   if (req.body.tools !== undefined) acUpdates.tools = req.body.tools;
+  if (req.body.bootstrap_prompt !== undefined) acUpdates.bootstrapPromptTemplate = req.body.bootstrap_prompt;
+  if (req.body.command !== undefined) acUpdates.command = req.body.command;
+  if (req.body.extra_args !== undefined) {
+    if (typeof req.body.extra_args === 'string') {
+      acUpdates.extraArgs = req.body.extra_args.split(',').map((s: string) => s.trim()).filter(Boolean);
+    } else {
+      acUpdates.extraArgs = req.body.extra_args;
+    }
+  }
+  if (req.body.chrome !== undefined) acUpdates.chrome = req.body.chrome;
+  if (req.body.skip_permissions !== undefined) acUpdates.dangerouslySkipPermissions = req.body.skip_permissions;
+  if (req.body.max_turns_per_run !== undefined) acUpdates.maxTurnsPerRun = req.body.max_turns_per_run;
+
+  if (req.body.can_create_agents !== undefined) {
+    const permissions = current.permissions || {};
+    agentUpdates.permissions = { ...permissions, canCreateAgents: req.body.can_create_agents };
+  }
 
   agentUpdates.adapter_config = acUpdates;
 
@@ -593,7 +614,11 @@ router.patch('/:slug', async (req, res) => {
   if (req.body.max_turns !== undefined) paUpdates.max_turns = parseInt(req.body.max_turns);
   if (req.body.enabled !== undefined) paUpdates.enabled = req.body.enabled;
 
-  try { await supabase.from('paperclip_agents').update(paUpdates).eq('slug', slug); } catch {}
+  const { error: paError } = await supabase.from('paperclip_agents').update(paUpdates).eq('slug', slug);
+  if (paError) {
+    console.error("Error updating paperclip_agents:", paError);
+    // Don't fail the whole request because agents table was updated, but log it
+  }
 
   // Clear router cache since agent config changed
   AgentRouter.clearAgentCache();

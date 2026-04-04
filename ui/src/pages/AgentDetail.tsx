@@ -673,7 +673,7 @@ export function AgentDetail() {
 
   const updatePermissions = useMutation({
     mutationFn: (canCreateAgents: boolean) =>
-      agentsApi.updatePermissions(agentLookupRef, { canCreateAgents }, resolvedCompanyId ?? undefined),
+      agentsApi.updatePermissions(agentLookupRef, { canCreateAgents, canAssignTasks: !!(agent as any)?.canAssignTasks }, resolvedCompanyId ?? undefined),
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });

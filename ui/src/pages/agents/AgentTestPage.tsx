@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -103,7 +104,7 @@ export function AgentTestPage() {
     <div className="flex flex-col h-full max-h-[calc(100vh-4rem)]">
       {/* Header */}
       <div className="p-4 border-b flex items-center gap-3 shrink-0">
-        <Button variant="ghost" size="sm" onClick={() => navigate("../agents-config")}>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/agents-config")}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex-1 min-w-0">

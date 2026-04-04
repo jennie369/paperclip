@@ -110,6 +110,21 @@ const brandColors: Record<string, string> = {
 const defaultScheduleForm = { date: '', time: '10:00', account: 'profile_jennie' };
 const defaultCreateForm = { title: '', body: '', pillar: 'trading', content_type: 'social_post', brand_voice: 'jennie' };
 
+// Lấy tiêu đề email hợp lệ: nếu title là HTML thì extract từ thẻ <title>, nếu không trả về title thường
+function getEmailSubject(script: any): string {
+  const rawTitle = script.title || '';
+  // Nếu title trông giống HTML (DOCTYPE hoặc <html) thì bỏ qua
+  if (/^<!DOCTYPE/i.test(rawTitle.trim()) || /^<html/i.test(rawTitle.trim())) {
+    // Thử extract từ body HTML
+    const body = script.body || script.caption || script.content || '';
+    const m = body.match(/<title[^>]*>([^<]+)<\/title>/i);
+    return m ? m[1].trim() : '';
+  }
+  // Nếu title bị bắt đầu bằng <! hoặc < khác thì cũng bỏ qua
+  if (rawTitle.trim().startsWith('<')) return '';
+  return rawTitle;
+}
+
 // ---------------------------------------------------------------------------
 // ScriptExpandedPanel
 // ---------------------------------------------------------------------------
@@ -123,16 +138,16 @@ function ScriptExpandedPanel({ script }: { script: any }) {
   const [saving, setSaving] = useState(false);
   const [reviewAgent, setReviewAgent] = useState('ceo');
   const [scheduleForm, setScheduleForm] = useState({ date: '', time: '10:00', account: 'profile_jennie' });
-  const [emailFrom, setEmailFrom] = useState('Gemral <support@gemral.com>');
+  const [emailFrom, setEmailFrom] = useState('Jennie Uyen Chu <hello@gemral.com>');
   const [emailTo, setEmailTo] = useState('');
-  const [emailSubject, setEmailSubject] = useState(script.title || '');
+  const [emailSubject, setEmailSubject] = useState(getEmailSubject(script));
   const [emailSending, setEmailSending] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Sync body when script id changes (e.g. different row expanded)
   useEffect(() => {
     setBody(script.body || script.caption || script.content || '');
-    setEmailSubject(script.title || '');
+    setEmailSubject(getEmailSubject(script));
   }, [script.id]);
 
   const inv = () => qc.invalidateQueries({ queryKey: ['ops'] });
@@ -310,7 +325,7 @@ function ScriptExpandedPanel({ script }: { script: any }) {
           <div className="rounded-lg border overflow-hidden bg-white" style={{ minHeight: 300 }}>
             <iframe
               ref={iframeRef}
-              srcDoc={stripCodeFence(body)}
+              srcDoc={stripImagePrompt(stripCodeFence(body))}
               style={{ width: '100%', minHeight: 400, border: 'none', display: 'block' }}
               title="HTML Preview"
               sandbox="allow-same-origin"
@@ -433,13 +448,17 @@ function ScriptExpandedPanel({ script }: { script: any }) {
               {/* Sender */}
               <div className="space-y-1">
                 <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Gửi từ (Sender) *</label>
-                <input
-                  type="text"
+                <select
                   value={emailFrom}
                   onChange={e => setEmailFrom(e.target.value)}
-                  placeholder="Gemral <support@gemral.com>"
                   className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
-                />
+                >
+                  <option value="Jennie Uyen Chu &lt;hello@gemral.com&gt;">Jennie Uyen Chu &lt;hello@gemral.com&gt;</option>
+                  <option value="Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;">Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;</option>
+                  <option value="Gemral &lt;no_reply@gemral.com&gt;">Gemral &lt;no_reply@gemral.com&gt;</option>
+                  <option value="Gemral &lt;info@gemral.com&gt;">Gemral &lt;info@gemral.com&gt;</option>
+                  <option value="Gemral &lt;support@gemral.com&gt;">Gemral &lt;support@gemral.com&gt;</option>
+                </select>
               </div>
               {/* Subject */}
               <div className="space-y-1">

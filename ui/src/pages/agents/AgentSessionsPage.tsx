@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -444,7 +444,7 @@ export function AgentSessionsPage() {
                   session={session}
                   onClear={() => clearMut.mutate(session.agent_slug)}
                   onViewConfig={() =>
-                    navigate(`../agents-config/${session.agent_slug}/edit`)
+                    navigate(`/agents-config/${session.agent_slug}/edit`)
                   }
                   isClearing={
                     clearMut.isPending &&
@@ -844,7 +844,7 @@ export function AgentSessionsPage() {
                             const tid = entry.thread_id;
                             if (cn && tid)
                               navigate(
-                                `../channels/zalo-personal/${cn}/${tid}`
+                                `/channels/zalo-personal/${cn}/${tid}`
                               );
                           }}
                         >

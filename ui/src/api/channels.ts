@@ -165,7 +165,7 @@ export const channelsApi = {
     api.get<ChannelInstance[]>("/channels/zalo-personal"),
 
   sendMessage: (channelName: string, threadId: string, message: string, threadType = "dm") =>
-    api.post<{ success: boolean; error?: string }>("/channels/zalo-personal/send", {
+    api.post<{ success: boolean; error?: string }>("/channels/send", {
       channel_name: channelName,
       thread_id: threadId,
       message,

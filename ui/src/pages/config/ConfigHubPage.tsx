@@ -694,6 +694,7 @@ function AgentRow({
                     <option value="claude">Claude</option>
                     <option value="gemini">Gemini</option>
                     <option value="openrouter">OpenRouter</option>
+                    <option value="ollama">Ollama (Local AI)</option>
                   </select>
                 </div>
                 <div>
@@ -709,6 +710,10 @@ function AgentRow({
                     <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                     <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                     <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                    <option value="gemma4:e2b">gemma4:e2b</option>
+                    <option value="gemma4:e4b">gemma4:e4b</option>
+                    <option value="gemma4:26b">gemma4:26b</option>
+                    <option value="gemma4:31b">gemma4:31b</option>
                   </select>
                 </div>
                 <div>

@@ -8,6 +8,8 @@ import {
   Search,
   SquarePen,
   Network,
+  Boxes,
+  Repeat,
   Settings,
   MessageCircle,
   Zap,
@@ -160,6 +162,7 @@ export function Sidebar() {
 
         <SidebarSection label="Work">
           <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+          <SidebarNavItem to="/routines" label="Routines" icon={Repeat} textBadge="Beta" textBadgeTone="amber" />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
           <SidebarNavItem to="/workflows" label="Workflows" icon={Activity} />
           <SidebarNavItem to="/channels/qa" label="Đánh giá & Trí tuệ" icon={BarChart3} />
@@ -172,6 +175,7 @@ export function Sidebar() {
 
         <SidebarSection label="Company">
           <SidebarNavItem to="/org" label="Org" icon={Network} />
+          <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
         </SidebarSection>

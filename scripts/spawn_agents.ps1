@@ -214,8 +214,6 @@ foreach ($slug in $agentList) {
     $promptFile = "$ProjectRoot\scripts\.agent_prompt_$slug.md"
     Set-Content -Path $promptFile -Value $promptText -Encoding UTF8
 
-    # Build claude command
-    $claudeCmd = "cd `"$ProjectRoot`" && claude --dangerously-skip-permissions --model sonnet -p `"$(Get-Content $promptFile -Raw | ForEach-Object { $_ -replace '"', '\"' })`""
 
     # Actually, for persistent interactive session, don't use -p (print mode)
     # Instead, start interactive claude and let user paste or use initial prompt

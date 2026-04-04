@@ -158,7 +158,7 @@ export interface QuotaResult {
 
 // ─── Agent Config (paperclip_agents table) ───
 
-export type AgentProvider = 'claude' | 'gemini' | 'openrouter';
+export type AgentProvider = 'claude' | 'gemini' | 'openrouter' | 'ollama';
 
 /** Row shape from paperclip_agents table */
 export interface AgentConfig {
@@ -208,5 +208,11 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     'openai/gpt-4.1',
     'openai/gpt-4.1-mini',
     'meta-llama/llama-4-maverick',
+  ],
+  ollama: [
+    'gemma4:e2b',
+    'gemma4:e4b',
+    'gemma4:26b',
+    'gemma4:31b',
   ],
 };

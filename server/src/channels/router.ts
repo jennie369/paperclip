@@ -215,6 +215,9 @@ export async function runAgentWithConfig(
       case 'gemini':
         reply = runViaGemini(config, systemPrompt, chatHistory, message);
         break;
+      case 'ollama':
+        reply = await runViaOllama(config, systemPrompt, chatHistory, message);
+        break;
       case 'openrouter':
         reply = await runViaOpenRouter(config, systemPrompt, chatHistory, message);
         break;
@@ -402,17 +405,18 @@ async function runViaClaude(
         const duration = parsed.duration_ms || 0;
         console.log(`[Router] ${config.slug}: ${inputTokens}+${cacheRead} in / ${outputTokens} out / $${cost.toFixed(4)} / ${duration}ms`);
 
-        await supabase.rpc('increment_agent_usage', {
+        const { error: rpcErr } = await supabase.rpc('increment_agent_usage', {
           p_slug: config.slug,
           p_input: inputTokens + cacheRead,
           p_output: outputTokens,
           p_cost: cost,
           p_duration: duration,
-        }).then(() => {
-          console.log(`[Router] Usage tracked for ${config.slug}`);
-        }).catch((rpcErr: any) => {
-          console.warn(`[Router] increment_agent_usage RPC failed: ${rpcErr?.message}`);
         });
+        if (rpcErr) {
+          console.warn(`[Router] increment_agent_usage RPC failed: ${rpcErr?.message}`);
+        } else {
+          console.log(`[Router] Usage tracked for ${config.slug}`);
+        }
       } catch {
         console.warn('[Router] JSON parse failed, using raw output');
         reply = stdout.trim();
@@ -583,6 +587,55 @@ async function runViaOpenRouter(
   }
 }
 
+/**
+ * Run via Ollama API (fetch).
+ * Uses localhost:11434 by default.
+ */
+async function runViaOllama(
+  config: AgentConfig,
+  systemPrompt: string,
+  history: SessionMessage[],
+  message: string,
+): Promise<string> {
+  const fullPrompt = systemPrompt
+    ? `[System Instructions]\n${systemPrompt}\n\n${buildFullPrompt(history, message)}`
+    : buildFullPrompt(history, message);
+
+  const model = config.model || 'gemma4:26b';
+  
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        prompt: fullPrompt,
+        stream: false,
+        options: {
+          temperature: config.temperature,
+          num_predict: config.max_tokens,
+        }
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Ollama API error ${res.status}: ${body}`);
+    }
+
+    const data = await res.json() as { response?: string };
+    return typeof data.response === 'string' ? data.response.trim() : '';
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ─── Helpers ───
 
 /**
@@ -615,6 +668,12 @@ function buildSystemPrompt(config: AgentConfig): string {
   // 2. Agent memory (tacit knowledge)
   const agentMemoryPath = pathResolve(projectRoot, 'memory', 'agents', config.slug, 'MEMORY.md');
   tryLoad(agentMemoryPath, 'KIẾN THỨC CÁ NHÂN');
+
+  // 2.5 Company Goals and Directions (SSOT for all agents)
+  const goalsFilePath = pathResolve(projectRoot, 'memory', 'goals.md');
+  const projectsFilePath = pathResolve(projectRoot, 'memory', 'projects.md');
+  tryLoad(goalsFilePath, 'MỤC TIÊU & ĐỊNH HƯỚNG CÔNG TY');
+  tryLoad(projectsFilePath, 'DỰ ÁN ĐANG CHẠY');
 
   // 3. Relevant SOPs
   const sopsDir = pathResolve(projectRoot, 'memory', 'sops');

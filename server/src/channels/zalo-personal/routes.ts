@@ -155,17 +155,48 @@ router.post('/:name/stop', async (req, res) => {
 
 /**
  * DELETE /api/channels/zalo-personal/:name
+ * Soft delete: Xóa channel instance + credentials nhưng GIỮ LẠI toàn bộ
+ * session history, pending messages, và sent messages.
+ * Dùng khi disconnect / reconnect để tránh mất lịch sử hội thoại.
  */
 router.delete('/:name', async (req, res) => {
   const { name } = req.params;
 
   const channel = activeChannels.get(name);
   if (channel) {
-    channel.stop();
+    await channel.stop();
     activeChannels.delete(name);
   }
 
-  // Delete ALL references first to avoid FK constraint violations
+  // XÓA: Chỉ xóa dữ liệu technical (quota, pairing codes)
+  // GIỮ: channel_sessions, channel_pending_messages, channel_sent_messages
+  await supabase.from('channel_quota_usage').delete().eq('channel_name', name);
+  await supabase.from('channel_group_history').delete().eq('channel_name', name);
+  await supabase.from('channel_pairing_codes').delete().eq('channel_name', name);
+
+  const { error } = await supabase.from('channel_instances').delete().eq('name', name);
+  if (error) {
+    console.error(`[ZaloPersonal] Delete error for ${name}:`, error.message);
+    return res.status(500).json({ status: 'failed', error: error.message });
+  }
+  res.json({ status: 'deleted', note: 'Session history preserved' });
+});
+
+/**
+ * DELETE /api/channels/zalo-personal/:name/history
+ * Hard delete: Xóa toàn bộ bao gồm lịch sử hội thoại.
+ * Chỉ dùng khi admin chủ động muốn reset hoàn toàn.
+ */
+router.delete('/:name/history', async (req, res) => {
+  const { name } = req.params;
+
+  const channel = activeChannels.get(name);
+  if (channel) {
+    await channel.stop();
+    activeChannels.delete(name);
+  }
+
+  // XÓA TẤT CẢ bao gồm lịch sử
   await supabase.from('channel_pending_messages').delete().eq('channel_name', name);
   await supabase.from('channel_sent_messages').delete().eq('channel_name', name);
   await supabase.from('channel_sessions').delete().eq('channel_name', name);
@@ -174,10 +205,10 @@ router.delete('/:name', async (req, res) => {
   await supabase.from('channel_pairing_codes').delete().eq('channel_name', name);
   const { error } = await supabase.from('channel_instances').delete().eq('name', name);
   if (error) {
-    console.error(`[ZaloPersonal] Delete error for ${name}:`, error.message);
+    console.error(`[ZaloPersonal] Hard delete error for ${name}:`, error.message);
     return res.status(500).json({ status: 'failed', error: error.message });
   }
-  res.json({ status: 'deleted' });
+  res.json({ status: 'deleted', note: 'All history deleted' });
 });
 
 /**

@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-export type AgentProvider = "claude" | "gemini" | "openrouter";
+export type AgentProvider = "claude" | "gemini" | "openrouter" | "ollama";
 
 export interface AgentSession {
   id: string;
@@ -62,13 +62,14 @@ export const PROVIDER_LABELS: Record<AgentProvider, string> = {
   claude: "Claude (Anthropic)",
   gemini: "Gemini (Google)",
   openrouter: "OpenRouter",
+  ollama: "Ollama (Local AI)",
 };
 
 export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
   claude: [
-    "claude-sonnet-4-6",
     "claude-opus-4-6",
-    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
   ],
   gemini: [
     "gemini-2.5-flash",
@@ -84,6 +85,13 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     "openai/gpt-4.1",
     "openai/gpt-4.1-mini",
   ],
+  ollama: [
+    "gemma4:2b",
+    "gemma4:e2b",
+    "gemma4:e4b",
+    "gemma4:26b",
+    "gemma4:31b",
+  ]
 };
 
 export const agentConfigsApi = {
