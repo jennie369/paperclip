@@ -584,16 +584,26 @@ function SopRow({
   const statusCfg = STATUS_BADGE[sop.status] ?? STATUS_BADGE.needs_creation;
   const priorityCfg = PRIORITY_BADGE[sop.priority] ?? PRIORITY_BADGE.P2;
 
+  const [saveToast, setSaveToast] = useState<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
   const handleSopUpdate = useCallback(async (sopId: string, updates: Record<string, unknown>) => {
     try {
-      await fetch(`/api/ops/sop-engine/sops/${sopId}`, {
+      const res = await fetch(`/api/ops/sop-engine/sops/${sopId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
+      if (!res.ok) throw new Error('API error');
       qc.invalidateQueries({ queryKey: ['sop-engine-sops'] });
+      setSaveToast('Đã lưu thay đổi');
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveToast(null), 2000);
     } catch (err) {
       console.error('Save failed:', err);
+      setSaveToast('Lỗi lưu — thử lại');
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveToast(null), 3000);
     }
   }, [qc]);
 
@@ -632,14 +642,21 @@ function SopRow({
     staleTime: 10_000,
   });
 
-  // Step handlers
+  // Step handlers — optimistic update + debounced PUT API
+  const stepSaveRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleStepUpdate = useCallback(
     (stepIndex: number, updates: Partial<StepDefinition>) => {
       const newSteps = [...(sop.steps ?? [])];
       newSteps[stepIndex] = { ...newSteps[stepIndex], ...updates };
       setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+
+      // Debounce 800ms then PUT to API
+      clearTimeout(stepSaveRef.current);
+      stepSaveRef.current = setTimeout(() => {
+        handleSopUpdate(sop.sopId, { steps: newSteps });
+      }, 800);
     },
-    [sop.steps],
+    [sop.steps, sop.sopId, handleSopUpdate],
   );
 
   const handleStepDelete = useCallback(
@@ -774,6 +791,15 @@ function SopRow({
       </div>
 
       {/* ─── SECTION 5: Expanded Detail ─── */}
+      {/* Toast notification */}
+      {saveToast && (
+        <div className={`fixed bottom-6 right-6 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-medium ${
+          saveToast.includes('Lỗi') ? 'bg-red-600 text-white' : 'bg-green-600 text-white'
+        }`}>
+          {saveToast}
+        </div>
+      )}
+
       {expanded && (
         <div className="border-t border-border/50 space-y-5 px-4 py-4">
           {/* Error from run */}
