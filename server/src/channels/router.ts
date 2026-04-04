@@ -3,9 +3,13 @@
 // and routes to the correct LLM provider (Claude CLI, Gemini CLI, OpenRouter API).
 
 import { execSync, execFileSync, spawn } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync, readdirSync as readdirSyncFS } from 'node:fs';
 import { resolve as pathResolve, join as pathJoin } from 'node:path';
+import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
+
+const PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
+const SKILLS_STORE = pathResolve(PROJECT_ROOT, 'skills-store');
 import { supabase } from './zalo-personal/supabase.js';
 import type { InboundMessage, SessionMessage, AgentConfig } from './types.js';
 
@@ -174,8 +178,10 @@ export async function runAgent(
       return config.fallback_message || FALLBACK_REPLY;
     }
 
-    // NOTE: session status is updated ONLY on successful completion
-    // via increment_agent_usage RPC (which sets last_activity_at = NOW())
+    // Attach customer context from consumer if available
+    if ((originalMsg as any)?._customerContext) {
+      (config as any)._customerContext = (originalMsg as any)._customerContext;
+    }
 
     // Load history from session if not provided
     const sessionHistory = history || await loadHistory(sessionKey, config.history_limit);
@@ -202,7 +208,8 @@ export async function runAgentWithConfig(
   message: string,
   history?: SessionMessage[],
 ): Promise<string> {
-  const systemPrompt = buildSystemPrompt(config);
+  const customerContext = (config as any)._customerContext || null;
+  const systemPrompt = buildSystemPrompt(config, customerContext);
   const chatHistory = history || [];
 
   try {
@@ -213,7 +220,7 @@ export async function runAgentWithConfig(
         reply = await runViaClaude(config, systemPrompt, chatHistory, message);
         break;
       case 'gemini':
-        reply = runViaGemini(config, systemPrompt, chatHistory, message);
+        reply = await runViaGemini(config, systemPrompt, chatHistory, message);
         break;
       case 'ollama':
         reply = await runViaOllama(config, systemPrompt, chatHistory, message);
@@ -241,12 +248,50 @@ export function clearAgentCache(): void {
   configCache.clear();
 }
 
+// ─── Skills / Instructions helpers (matching Core execute.ts pattern) ───
+
+/**
+ * Build temp dir with .claude/skills/ symlinks to skills-store.
+ * Matches execute.ts buildSkillsDir() — triggers SessionStart:startup
+ * so Claude auto-loads Skills/Tools.
+ */
+function buildSkillsDirForChat(): string {
+  const tmp = mkdtempSync(pathJoin(tmpdir(), 'paperclip-chat-skills-'));
+  const target = pathJoin(tmp, '.claude', 'skills');
+  mkdirSync(target, { recursive: true });
+
+  if (existsSync(SKILLS_STORE)) {
+    try {
+      for (const entry of readdirSyncFS(SKILLS_STORE)) {
+        const src = pathResolve(SKILLS_STORE, entry);
+        const dest = pathJoin(target, entry);
+        try {
+          symlinkSync(src, dest, 'junction');
+        } catch { /* skip if symlink fails */ }
+      }
+    } catch { /* skip */ }
+  }
+
+  return tmp;
+}
+
+/**
+ * Write instructions (system prompt + customer context) to temp file.
+ * Matches execute.ts effectiveInstructionsFilePath pattern.
+ */
+function writeInstructionsFile(skillsDir: string, content: string): string {
+  const filePath = pathJoin(skillsDir, 'agent-instructions.md');
+  writeFileSync(filePath, content, 'utf-8');
+  return filePath;
+}
+
 // ─── Provider implementations ───
 
 /**
- * Run via Claude CLI with PERSISTENT SESSION.
- * First call: claude -p "..." → creates session → save sessionId to DB
- * Subsequent: claude --resume {sessionId} -p "..." → continues session
+ * Run via Claude CLI with PERSISTENT SESSION + Skills/Tools.
+ * Follows Core execute.ts pattern:
+ *   --print - (stdin), --output-format stream-json, --add-dir, --append-system-prompt-file
+ *   CWD = PROJECT ROOT (not agents/{slug}/)
  */
 async function runViaClaude(
   config: AgentConfig,
@@ -254,79 +299,97 @@ async function runViaClaude(
   history: SessionMessage[],
   message: string,
 ): Promise<string> {
-  // Check for existing persistent session
+  // 1. Check persistent session
   const sessionId = await getAgentSessionId(config.slug);
 
-  // Build prompt — include system prompt only on first message (no session yet)
-  let prompt: string;
-  if (!sessionId && systemPrompt) {
-    // First message — include full system prompt + context
-    prompt = [
-      `[VAI TRÒ CỦA BẠN]`,
+  // 2. Build skills dir (matches execute.ts — triggers Skills/Tools)
+  const skillsDir = buildSkillsDirForChat();
+
+  // 3. Write system prompt + customer context to temp file
+  //    (matches execute.ts effectiveInstructionsFilePath)
+  let instructionsFile: string | undefined;
+  if (systemPrompt && !sessionId) {
+    // Only write instructions for NEW session (resume already has context)
+    const instructions = [
       systemPrompt,
-      ``,
-      `[QUY TẮC]`,
-      `- Trả lời ngắn gọn, thân thiện, tiếng Việt có dấu`,
-      `- KHÔNG xưng là Jennie — bạn là ${config.display_name} của Gemral`,
-      `- Nếu không biết → nói thật, đề nghị chuyển cho người phụ trách`,
-      `- Đây là tin nhắn từ khách hàng qua Zalo, trả lời trực tiếp`,
-      ``,
-      `[TIN NHẮN TỪ KHÁCH HÀNG]`,
-      message,
+      '',
+      `\nThe above agent instructions apply to chat conversations on Zalo/Facebook.`,
+      `Agent slug: ${config.slug}. Resolve relative paths from ${PROJECT_ROOT}.`,
     ].join('\n');
-  } else {
-    // Resume session — just the new message
-    prompt = `[TIN NHẮN MỚI TỪ KHÁCH HÀNG]\n${message}`;
+    instructionsFile = writeInstructionsFile(skillsDir, instructions);
   }
 
-  const args: string[] = [];
+  // 4. Build user prompt (message only — context is in instructions file)
+  let userPrompt: string;
+  if (!sessionId) {
+    // First message — instructions file has system prompt
+    userPrompt = buildFullPrompt(history, message);
+  } else {
+    // Resume — only new message + brief context
+    const ctx = (config as any)._customerContext;
+    const contextLine = ctx
+      ? `[Khách: ${ctx.name || 'Chưa biết'} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
+      : '';
+    userPrompt = `${contextLine}${message}`;
+  }
+
+  // 5. Build args — matches execute.ts buildClaudeArgs()
+  //    MODEL: ALWAYS from config.model (paperclip_agents SSOT — RULE 5)
+  const args: string[] = [
+    '--print', '-',                        // stdin prompt (not -p)
+    '--output-format', 'stream-json',      // streaming (not json)
+    '--verbose',
+    '--dangerously-skip-permissions',
+  ];
 
   if (sessionId) {
     args.push('--resume', sessionId);
     console.log(`[Router] Resuming session ${sessionId.substring(0, 8)}... for ${config.slug}`);
   }
 
-  // Set model from agent config (e.g., haiku for cost savings)
+  // Model from UI Cấu hình Agent → paperclip_agents.model (SSOT)
   if (config.model) {
     args.push('--model', config.model);
+    console.log(`[Router] Model from DB: ${config.model}`);
   }
 
-  // Max turns from config (default 1 for chat, higher for agentic tasks)
-  const maxTurns = (config as any).max_turns || 1;
+  // Max turns from UI Cấu hình Agent → paperclip_agents.max_turns (SSOT)
+  const maxTurns = (config as any).max_turns || 5;
+  if (maxTurns > 0) {
+    args.push('--max-turns', String(maxTurns));
+  }
 
-  // Use JSON output to capture session_id + result text
-  args.push(
-    '--output-format', 'json',
-    '--max-turns', String(maxTurns),
-    '--dangerously-skip-permissions',
-  );
+  // Instructions file (instead of stuffing into -p)
+  if (instructionsFile) {
+    args.push('--append-system-prompt-file', instructionsFile);
+  }
 
-  // Run Claude from the agent's directory (so it loads CLAUDE.md, SOUL.md, etc.)
+  // Skills dir (triggers Skills/Tools — matches execute.ts)
+  args.push('--add-dir', skillsDir);
+
+  // MCP config if agent has one
   const agentDir = pathResolve(
-    process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/agents',
-    config.slug
+    process.env.AGENTS_DIR || pathResolve(PROJECT_ROOT, 'agents'),
+    config.slug,
   );
-  const cwd = existsSync(agentDir) ? agentDir : process.cwd();
-
-  // Add MCP config if agent has mcp.json
   const mcpConfigPath = pathJoin(agentDir, 'mcp.json');
   if (existsSync(mcpConfigPath)) {
     args.push('--mcp-config', mcpConfigPath);
-    console.log(`[Router] MCP config loaded for ${config.slug}: ${mcpConfigPath}`);
   }
 
-  args.push('-p', prompt);
+  // 6. CWD = PROJECT ROOT (not agents/{slug}/)
+  const cwd = PROJECT_ROOT;
 
-  // Use spawn for streaming output
+  // 7. Spawn + stream
   const streamKey = `${config.slug}:${Date.now()}`;
   streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn('claude', args, {
       cwd,
+      shell: true,
       env: {
         ...process.env,
-        // Ensure MCP server child processes get required env vars
         GEMRAL_SUPABASE_URL: process.env.GEMRAL_SUPABASE_URL || '',
         GEMRAL_SUPABASE_SERVICE_KEY: process.env.GEMRAL_SUPABASE_SERVICE_KEY || '',
         SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL || '',
@@ -335,6 +398,12 @@ async function runViaClaude(
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+
+    // Send prompt via stdin (matches execute.ts --print -)
+    if (child.stdin) {
+      child.stdin.write(userPrompt);
+      child.stdin.end();
+    }
 
     let stdout = '';
     let stderr = '';
@@ -346,14 +415,7 @@ async function runViaClaude(
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
       stdout += text;
-
-      // Emit streaming event for SSE clients
-      streamEvents.emit('agent:chunk', {
-        agentSlug: config.slug,
-        streamKey,
-        chunk: text,
-        partial: stdout,
-      });
+      streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: text, partial: stdout });
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -362,6 +424,9 @@ async function runViaClaude(
 
     child.on('close', async (code) => {
       clearTimeout(timeout);
+
+      // Cleanup temp dir
+      try { rmSync(skillsDir, { recursive: true, force: true }); } catch { /* OK */ }
 
       if (code !== 0 && !stdout.trim()) {
         console.error(`[Router] Claude CLI exited ${code}: ${stderr.substring(0, 200)}`);
@@ -374,64 +439,71 @@ async function runViaClaude(
         return;
       }
 
-      // Parse JSON output to get reply text + session_id
+      // Parse stream-json output (multiple JSON lines, last has result + session_id)
       let reply = '';
+      let newSessionId: string | null = null;
       try {
-        const rawStr = stdout.trim();
-        console.log(`[Router] Claude raw output (first 200): ${rawStr.substring(0, 200)}`);
-        const parsed = JSON.parse(rawStr);
-
-        if (typeof parsed.result === 'string') {
-          reply = parsed.result;
-        } else if (Array.isArray(parsed.result)) {
-          reply = parsed.result
-            .filter((b: any) => b.type === 'text')
-            .map((b: any) => b.text)
-            .join('\n');
-        } else {
-          reply = String(parsed.result || '');
+        const lines = stdout.trim().split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === 'result' || parsed.result) {
+              if (typeof parsed.result === 'string') {
+                reply = parsed.result;
+              } else if (Array.isArray(parsed.result)) {
+                reply = parsed.result.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n');
+              }
+              newSessionId = parsed.session_id || null;
+            }
+            if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+              reply += parsed.delta.text;
+            }
+            if (parsed.type === 'message_stop' && parsed.session_id) {
+              newSessionId = parsed.session_id;
+            }
+          } catch { /* skip non-JSON lines */ }
         }
 
-        // Save session ID for future --resume
-        if (parsed.session_id && !sessionId) {
-          await saveAgentSession(config.slug, parsed.session_id);
+        // Fallback: try parsing entire stdout as single JSON
+        if (!reply) {
+          try {
+            const fullParsed = JSON.parse(stdout.trim());
+            reply = typeof fullParsed.result === 'string'
+              ? fullParsed.result
+              : Array.isArray(fullParsed.result)
+                ? fullParsed.result.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+                : stdout.trim();
+            newSessionId = fullParsed.session_id || null;
+          } catch {
+            reply = stdout.trim();
+          }
         }
 
-        // Log token usage
-        const cost = parsed.total_cost_usd || 0;
-        const inputTokens = parsed.usage?.input_tokens || 0;
-        const outputTokens = parsed.usage?.output_tokens || 0;
-        const cacheRead = parsed.usage?.cache_read_input_tokens || 0;
-        const duration = parsed.duration_ms || 0;
-        console.log(`[Router] ${config.slug}: ${inputTokens}+${cacheRead} in / ${outputTokens} out / $${cost.toFixed(4)} / ${duration}ms`);
+        // Save session ID
+        if (newSessionId && !sessionId) {
+          await saveAgentSession(config.slug, newSessionId);
+        }
 
-        const { error: rpcErr } = await supabase.rpc('increment_agent_usage', {
+        console.log(`[Router] ${config.slug}: reply ${reply.length} chars, session=${newSessionId?.substring(0, 8) || 'none'}`);
+
+        // Track usage via RPC
+        await supabase.rpc('increment_agent_usage', {
           p_slug: config.slug,
-          p_input: inputTokens + cacheRead,
-          p_output: outputTokens,
-          p_cost: cost,
-          p_duration: duration,
-        });
-        if (rpcErr) {
-          console.warn(`[Router] increment_agent_usage RPC failed: ${rpcErr?.message}`);
-        } else {
-          console.log(`[Router] Usage tracked for ${config.slug}`);
-        }
+          p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
+        }).catch(() => {});
+
       } catch {
-        console.warn('[Router] JSON parse failed, using raw output');
+        console.warn('[Router] Parse failed, using raw output');
         reply = stdout.trim();
       }
 
-      // NOTE: last_activity_at is already updated by increment_agent_usage RPC
-      // Do NOT call updateAgentSessionActivity here — it causes phantom updates
-
-      // Emit completion event
       streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
       resolve(reply);
     });
 
     child.on('error', (err) => {
       clearTimeout(timeout);
+      try { rmSync(skillsDir, { recursive: true, force: true }); } catch { /* OK */ }
       streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: err.message });
       reject(err);
     });
@@ -482,41 +554,132 @@ async function clearAgentSession(slug: string): Promise<void> {
 }
 
 /**
- * Run via Gemini CLI (execSync).
- * Uses: gemini -p '...' -m {model}
+ * Run via Gemini CLI — async spawn with streaming.
+ * Matches Gemini Core execute.ts pattern:
+ *   --output-format stream-json, --resume, --model, --approval-mode yolo, --sandbox=none, --prompt
  */
-function runViaGemini(
+async function runViaGemini(
   config: AgentConfig,
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
-): string {
-  const fullPrompt = systemPrompt
-    ? `[System Instructions]\n${systemPrompt}\n\n${buildFullPrompt(history, message)}`
-    : buildFullPrompt(history, message);
-
+): Promise<string> {
+  // Model from UI Cấu hình Agent → paperclip_agents.model (SSOT)
   const model = config.model || 'gemini-2.5-flash';
 
-  try {
-    const result = execSync(
-      `gemini -p "${fullPrompt.replace(/"/g, '\\"')}" -m ${model}`,
-      {
-        timeout: AGENT_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-        encoding: 'utf-8',
-        env: { ...process.env },
-      } as any,
-    );
+  // Session
+  const sessionId = await getAgentSessionId(config.slug);
 
-    return (result as string).trim();
-  } catch (err: any) {
-    if (err.killed) {
-      console.warn(`[Router] Gemini CLI timed out for agent ${config.slug}`);
-    } else {
-      console.error(`[Router] Gemini CLI error:`, err.message);
-    }
-    throw err;
+  // Build prompt: instructions + history + message
+  // Gemini Core merges instructions into --prompt (no --append-system-prompt-file)
+  const fullPrompt = systemPrompt
+    ? [systemPrompt, '', buildFullPrompt(history, message)].join('\n')
+    : buildFullPrompt(history, message);
+
+  // Build args — matches Gemini Core buildArgs() (line 323-336)
+  const args: string[] = [
+    '--output-format', 'stream-json',
+  ];
+
+  if (sessionId) {
+    args.push('--resume', sessionId);
+    console.log(`[Router] Gemini resuming session ${sessionId.substring(0, 8)}...`);
   }
+
+  if (model) {
+    args.push('--model', model);
+    console.log(`[Router] Gemini model from DB: ${model}`);
+  }
+
+  args.push('--approval-mode', 'yolo');
+  args.push('--sandbox=none');
+  args.push('--prompt', fullPrompt);
+
+  // CWD = project root
+  const cwd = PROJECT_ROOT;
+
+  const streamKey = `${config.slug}:${Date.now()}`;
+  streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
+
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('gemini', args, {
+      cwd,
+      shell: true,
+      env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`Gemini CLI timed out for ${config.slug}`));
+    }, AGENT_TIMEOUT_MS);
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf-8');
+      stdout += text;
+      streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: text });
+    });
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf-8');
+    });
+
+    child.on('close', async (code) => {
+      clearTimeout(timeout);
+
+      if (code !== 0 && !stdout.trim()) {
+        console.error(`[Router] Gemini CLI exited ${code}: ${stderr.substring(0, 200)}`);
+        if (sessionId && stderr.includes('session')) {
+          await clearAgentSession(config.slug);
+        }
+        streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: stderr.substring(0, 200) });
+        reject(new Error(stderr.substring(0, 200) || `Exit code ${code}`));
+        return;
+      }
+
+      // Parse stream-json output (Gemini JSONL format)
+      let reply = '';
+      let newSessionId: string | null = null;
+      try {
+        const lines = stdout.trim().split('\n');
+        for (const line of lines) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.result) {
+              reply = typeof parsed.result === 'string'
+                ? parsed.result
+                : Array.isArray(parsed.result)
+                  ? parsed.result.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+                  : String(parsed.result);
+            }
+            if (parsed.session_id) newSessionId = parsed.session_id;
+            if (parsed.type === 'content' && parsed.text) reply += parsed.text;
+          } catch { /* skip non-JSON lines */ }
+        }
+        if (!reply) reply = stdout.trim();
+        if (newSessionId && !sessionId) {
+          await saveAgentSession(config.slug, newSessionId);
+        }
+        console.log(`[Router] Gemini ${config.slug}: reply ${reply.length} chars`);
+      } catch {
+        reply = stdout.trim();
+      }
+
+      await supabase.rpc('increment_agent_usage', {
+        p_slug: config.slug, p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
+      }).catch(() => {});
+
+      streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
+      resolve(reply);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
 }
 
 /**
@@ -642,8 +805,8 @@ async function runViaOllama(
  * Build system prompt from config.
  * Priority: system_prompt > persona_file content > generic fallback
  */
-function buildSystemPrompt(config: AgentConfig): string {
-  const projectRoot = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
+function buildSystemPrompt(config: AgentConfig, customerContext?: any): string {
+  const projectRoot = PROJECT_ROOT;
   const agentsDir = pathResolve(
     process.env.AGENTS_DIR || pathResolve(projectRoot, 'agents'),
     config.slug,
@@ -659,11 +822,19 @@ function buildSystemPrompt(config: AgentConfig): string {
     }
   }
 
+  // 0. Owner info (shared USER.md) + Agent identity
+  tryLoad(pathResolve(projectRoot, 'agents', 'USER.md'), 'THÔNG TIN OWNER');
+  tryLoad(pathResolve(agentsDir, 'IDENTITY.md'), 'NHÂN CÁCH AGENT');
+
   // 1. Agent persona files
   tryLoad(pathResolve(agentsDir, 'SOUL.md'), 'PERSONA');
   tryLoad(pathResolve(agentsDir, 'AGENTS.md'), 'HƯỚNG DẪN VẬN HÀNH');
   tryLoad(pathResolve(agentsDir, 'TOOLS.md'), 'CÔNG CỤ');
   tryLoad(pathResolve(agentsDir, 'HEARTBEAT.md'), 'HEARTBEAT CHECKLIST');
+
+  // 1.5. Tone profile (how to talk to owner)
+  const toneProfilePath = pathResolve(projectRoot, 'memory', 'agents', config.slug, 'tone-profile.md');
+  tryLoad(toneProfilePath, 'TONE VỚI OWNER');
 
   // 2. Agent memory (tacit knowledge)
   const agentMemoryPath = pathResolve(projectRoot, 'memory', 'agents', config.slug, 'MEMORY.md');
@@ -697,14 +868,35 @@ function buildSystemPrompt(config: AgentConfig): string {
     loadedFiles.push('DB system_prompt');
   }
 
-  // 5. Chat-specific rules
+  // 5. Customer context (if available from CRM lookup)
+  if (customerContext) {
+    const stage = customerContext.stage || 'new';
+    const isSales = ['new', 'đang_tư_vấn', 'chờ_chốt', 'follow_up'].includes(stage);
+    parts.push([
+      '# THÔNG TIN KHÁCH HÀNG',
+      `- Tên: ${customerContext.name || 'Chưa biết'}`,
+      `- Kênh: ${customerContext.channel_name || 'Zalo'}`,
+      `- Giai đoạn: ${stage}`,
+      customerContext.products_interested ? `- Quan tâm: ${customerContext.products_interested}` : '',
+      customerContext.total_orders ? `- Đã mua: ${customerContext.total_orders} đơn` : '',
+      '',
+      '# VAI TRÒ',
+      isSales
+        ? 'BẠN LÀ TƯ VẤN BÁN HÀNG. Tư vấn sản phẩm, thuyết phục, chốt đơn.'
+        : 'BẠN LÀ CHĂM SÓC SAU MUA. Hỗ trợ, giải quyết vấn đề, giữ chân.',
+    ].filter(Boolean).join('\n'));
+  }
+
+  // 6. Chat-specific rules
   parts.push([
     '# QUY TẮC CHAT',
-    '- Đây là tin nhắn từ khách hàng qua Zalo. Trả lời TRỰC TIẾP.',
-    '- Ngắn gọn, thân thiện, tiếng Việt có dấu đầy đủ.',
+    '- Đây là tin nhắn từ khách hàng qua Zalo/Facebook. Trả lời TRỰC TIẾP.',
+    '- NHẮN NGẮN 2-4 câu. Thân thiện, tiếng Việt có dấu đầy đủ.',
     `- Bạn là ${config.display_name} của Gemral. KHÔNG xưng là Jennie hay bất kỳ ai khác.`,
     '- Nếu không biết câu trả lời → nói thật, đề nghị chuyển cho người phụ trách.',
+    '- Nếu khách tức giận → "Em chuyển chuyên viên nhé!" → DỪNG.',
     '- KHÔNG dùng markdown formatting (**, ##, etc.) — chỉ text thuần.',
+    '- Sản phẩm chính: 6 khóa học, GEM Scanner, Crystal (YinyangMasters), App Gemral.',
     `- Có thể escalate tới: ${(config.can_escalate_to || []).join(', ') || 'CEO'}`,
   ].join('\n'));
 

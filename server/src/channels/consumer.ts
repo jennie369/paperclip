@@ -342,6 +342,25 @@ async function processMessage(
     ? `${customerContext}\n\n[TIN NHẮN MỚI]\n${merged.content}`
     : merged.content;
 
+  // ── Step 8c: Attach structured CRM data for buildSystemPrompt ──
+  if (customerId) {
+    try {
+      const { data: crmCustomer } = await supabase
+        .from('crm_customers')
+        .select('display_name, status, lead_score, lead_temperature, total_orders, total_revenue')
+        .eq('id', customerId)
+        .single();
+      if (crmCustomer) {
+        (merged as any)._customerContext = {
+          name: crmCustomer.display_name,
+          stage: crmCustomer.status || 'new',
+          total_orders: crmCustomer.total_orders,
+          channel_name: merged.channel,
+        };
+      }
+    } catch { /* non-blocking */ }
+  }
+
   // ── Step 9: Route to agent (Claude CLI) ──
   console.log(`${logPrefix} → Routing to agent: ${agentSlug}${customerId ? ` (CRM: ${customerId.substring(0, 8)})` : ''} | msg: "${merged.content.substring(0, 60)}"`);
 
