@@ -133,6 +133,15 @@ export const queryKeys = {
   skills: {
     available: ["skills", "available"] as const,
   },
+  knowledgeGraph: {
+    stats: ["kg", "stats"] as const,
+    entities: (type?: string, search?: string) => ["kg", "entities", type, search] as const,
+    entity: (id: string) => ["kg", "entity", id] as const,
+    graph: (types?: string, limit?: number) => ["kg", "graph", types, limit] as const,
+    subgraph: (startId: string, depth?: number) => ["kg", "subgraph", startId, depth] as const,
+    dedup: ["kg", "dedup"] as const,
+    search: (query: string) => ["kg", "search", query] as const,
+  },
   plugins: {
     all: ["plugins"] as const,
     examples: ["plugins", "examples"] as const,

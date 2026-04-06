@@ -12,6 +12,7 @@ import { supabase } from './zalo-personal/supabase.js';
 import { CustomerResolver } from './crm/customer-resolver.js';
 import { ContextBuilder } from './crm/context-builder.js';
 import { AISummarizer } from './crm/ai-summarizer.js';
+import { extractEntitiesAsync } from './kg-extractor.js';
 import type {
   InboundMessage,
   ChannelInstanceRow,
@@ -420,6 +421,9 @@ async function processMessage(
 
     // Set thread cooldown to prevent rapid-fire replies
     threadCooldown.set(threadKey, Date.now());
+
+    // ── KG: Fire-and-forget entity extraction from chat ──
+    extractEntitiesAsync(merged.content, replyText, agentSlug);
 
     console.log(`${logPrefix} ✅ Reply sent via agent ${agentSlug} (${replyText.length} chars) | "${replyText.substring(0, 60)}"`);
   } else {

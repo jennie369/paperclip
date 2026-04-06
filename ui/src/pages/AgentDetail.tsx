@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/r
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type AgentKey, type ClaudeLoginResult, type AvailableSkill } from "../api/agents";
 import { budgetsApi } from "../api/budgets";
+import AgentRelationsTab from "@/components/knowledge-graph/AgentRelationsTab";
 import { heartbeatsApi } from "../api/heartbeats";
 import { ApiError } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
@@ -187,13 +188,14 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "configuration" | "skills" | "runs" | "budget";
+type AgentDetailView = "dashboard" | "configuration" | "skills" | "runs" | "budget" | "relations";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "configure" || value === "configuration") return "configuration";
   if (value === "skills") return value;
   if (value === "budget") return value;
   if (value === "runs") return value;
+  if (value === "relations") return value;
   return "dashboard";
 }
 
@@ -865,6 +867,7 @@ export function AgentDetail() {
               { value: "skills", label: "Skills" },
               { value: "runs", label: "Runs" },
               { value: "budget", label: "Budget" },
+              { value: "relations", label: "Quan hệ" },
             ]}
             value={activeView}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -980,6 +983,12 @@ export function AgentDetail() {
             onSave={(amount) => budgetMutation.mutate(amount)}
             variant="plain"
           />
+        </div>
+      ) : null}
+
+      {activeView === "relations" && agent ? (
+        <div className="max-w-4xl">
+          <AgentRelationsTab agentSlug={agent.slug ?? agent.name ?? ""} />
         </div>
       ) : null}
     </div>

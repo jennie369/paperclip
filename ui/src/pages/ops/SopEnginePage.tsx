@@ -16,7 +16,10 @@ import {
   Brain,
   Link2,
   Pencil,
+  Network,
+  ClipboardList,
 } from "lucide-react";
+import KGMiniGraph from "@/components/knowledge-graph/KGMiniGraph";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -58,6 +61,8 @@ interface Sop {
   lastRunAt?: string;
   lastRunStatus?: string;
   tags?: string[];
+  body_markdown?: string;   // DB column name (mirrors body field)
+  inject_reme?: boolean;
 }
 
 interface Execution {
@@ -134,7 +139,22 @@ async function fetchSops(params: {
   const res = await fetch(`/api/ops/sop-engine/sops?${qs}`);
   if (!res.ok) throw new Error("Không tải được danh sách SOP");
   const data = await res.json();
-  return Array.isArray(data) ? data : (data.sops ?? []);
+  const raw = Array.isArray(data) ? data : (data.sops ?? []);
+  // Normalize: DB may store steps as "" (empty string) or null — convert to []
+  return raw.map((s: any) => ({
+    ...s,
+    steps: Array.isArray(s.steps) ? s.steps : [],
+    // Normalize assigned_agents too
+    agents: Array.isArray(s.assigned_agents)
+      ? s.assigned_agents
+      : typeof s.assigned_agents === 'string' && s.assigned_agents
+        ? s.assigned_agents.split(/[,\s]+/).filter(Boolean)
+        : [],
+    // Map DB fields to frontend fields
+    sopId: s.sop_id || s.sopId,
+    lastRunAt: s.last_run_at || s.lastRunAt,
+    lastRunStatus: s.last_run_status || s.lastRunStatus,
+  }));
 }
 
 async function fetchExecutions(sopId: string): Promise<Execution[]> {
@@ -209,6 +229,7 @@ export function SopEnginePage() {
   const navigate = useNavigate();
 
   // Filters
+  const [sopViewTab, setSopViewTab] = useState<"list" | "graph">("list");
   const [domain, setDomain] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
@@ -306,14 +327,47 @@ export function SopEnginePage() {
 
   return (
     <div className="space-y-4 p-6">
-      {/* Title */}
-      <div>
-        <h1 className="text-2xl font-bold">SOP Engine</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Quản lý, chạy và theo dõi quy trình vận hành tự động
-        </p>
+      {/* Title + Tab bar */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">SOP Engine</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Quản lý, chạy và theo dõi quy trình vận hành tự động
+          </p>
+        </div>
+        <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+          <button
+            onClick={() => setSopViewTab("list")}
+            className={`px-3 py-1.5 text-xs rounded font-medium transition-colors flex items-center gap-1 ${
+              sopViewTab === "list"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <ClipboardList className="w-3.5 h-3.5" />
+            Danh sách SOP
+          </button>
+          <button
+            onClick={() => setSopViewTab("graph")}
+            className={`px-3 py-1.5 text-xs rounded font-medium transition-colors flex items-center gap-1 ${
+              sopViewTab === "graph"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Network className="w-3.5 h-3.5" />
+            Bản đồ quan hệ
+          </button>
+        </div>
       </div>
 
+      {/* KG Graph Tab */}
+      {sopViewTab === "graph" ? (
+        <div className="rounded-lg border border-border bg-card overflow-hidden" style={{ height: 500 }}>
+          <KGMiniGraph filterTypes={["sop", "agent"]} maxNodes={40} className="h-full" />
+        </div>
+      ) : (
+      <>
       {/* ─── SECTION 1: STATS BAR ─── */}
       <div className="flex flex-wrap gap-2">
         {statsQuery.isLoading ? (
@@ -551,6 +605,8 @@ export function SopEnginePage() {
           </Button>
         </div>
       )}
+    </>
+    )}
     </div>
   );
 }
@@ -607,6 +663,19 @@ function SopRow({
     }
   }, [qc]);
 
+  // Debounced auto-save for info fields
+  const infoSaveRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const handleInfoChange = useCallback(
+    (field: keyof Sop, value: unknown) => {
+      setEditDraft((prev) => ({ ...prev, [field]: value }));
+      clearTimeout(infoSaveRef.current);
+      infoSaveRef.current = setTimeout(() => {
+        handleSopUpdate(sop.sopId, { [field]: value });
+      }, 500);
+    },
+    [sop.sopId, handleSopUpdate],
+  );
+
   // Run SOP mutation
   const runMutation = useMutation({
     mutationFn: () => runSop(sop.sopId),
@@ -646,7 +715,8 @@ function SopRow({
   const stepSaveRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleStepUpdate = useCallback(
     (stepIndex: number, updates: Partial<StepDefinition>) => {
-      const newSteps = [...(sop.steps ?? [])];
+      const base = Array.isArray(sop.steps) ? sop.steps : [];
+      const newSteps = [...base];
       newSteps[stepIndex] = { ...newSteps[stepIndex], ...updates };
       setEditDraft((prev) => ({ ...prev, steps: newSteps }));
 
@@ -659,27 +729,56 @@ function SopRow({
     [sop.steps, sop.sopId, handleSopUpdate],
   );
 
+  const handleAddStep = useCallback(
+    () => {
+      const base = Array.isArray(sop.steps) ? sop.steps : [];
+      const cur = Array.isArray((editDraft as any).steps) ? (editDraft as any).steps as StepDefinition[] : base;
+      const newStep: StepDefinition = {
+        order: cur.length + 1,
+        name: `Bước ${cur.length + 1}`,
+        type: 'manual',
+        executor: '',
+        cwd: '',
+        agent: '',
+        instructions: '',
+        input: { source: '' },
+        output: { destination: '' },
+        on_success: 'continue',
+        on_failure: 'retry',
+        estimated_minutes: 5,
+      };
+      const newSteps = [...cur, newStep];
+      setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+      handleSopUpdate(sop.sopId, { steps: newSteps });
+    },
+    [editDraft, sop.steps, sop.sopId, handleSopUpdate],
+  );
+
   const handleStepDelete = useCallback(
     (stepIndex: number) => {
-      const newSteps = [...(sop.steps ?? [])];
+      const base = Array.isArray(sop.steps) ? sop.steps : [];
+      const newSteps = [...base];
       newSteps.splice(stepIndex, 1);
       // Re-order
       newSteps.forEach((s, i) => { s.order = i + 1; });
       setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+      handleSopUpdate(sop.sopId, { steps: newSteps });
     },
-    [sop.steps],
+    [sop.steps, sop.sopId, handleSopUpdate],
   );
 
   const handleStepMove = useCallback(
     (stepIndex: number, direction: "up" | "down") => {
-      const newSteps = [...(sop.steps ?? [])];
+      const base = Array.isArray(sop.steps) ? sop.steps : [];
+      const newSteps = [...base];
       const targetIndex = direction === "up" ? stepIndex - 1 : stepIndex + 1;
       if (targetIndex < 0 || targetIndex >= newSteps.length) return;
       [newSteps[stepIndex], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[stepIndex]];
       newSteps.forEach((s, i) => { s.order = i + 1; });
       setEditDraft((prev) => ({ ...prev, steps: newSteps }));
+      handleSopUpdate(sop.sopId, { steps: newSteps });
     },
-    [sop.steps],
+    [sop.steps, sop.sopId, handleSopUpdate],
   );
 
   const handleExecuteSingle = useCallback(
@@ -693,7 +792,9 @@ function SopRow({
         if (data.executionId) setActiveExecutionId(data.executionId);
         onInvalidate();
       } catch {
-        // Could use toast for error
+        setSaveToast('Lỗi chạy step — thử lại');
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => setSaveToast(null), 3000);
       }
     },
     [sop.sopId, onInvalidate],
@@ -703,7 +804,9 @@ function SopRow({
     return (editDraft[key] !== undefined ? editDraft[key] : sop[key]) as Sop[K];
   };
 
-  const currentSteps = (editDraft.steps as StepDefinition[] | undefined) ?? sop.steps ?? [];
+  // Normalize: steps may come from DB as "" string or null — always use array
+  const rawSteps = (editDraft.steps as StepDefinition[] | undefined) ?? sop.steps;
+  const currentSteps: StepDefinition[] = Array.isArray(rawSteps) ? rawSteps : [];
 
   return (
     <Card className="py-0 gap-0 overflow-hidden">
@@ -822,103 +925,72 @@ function SopRow({
               </div>
               <div>
                 <div className="text-muted-foreground mb-1">Tên</div>
-                {editMode ? (
-                  <Input
-                    className="h-7 text-xs"
-                    value={(getEditVal("name") as string) ?? ""}
-                    onChange={(e) => setEditDraft((prev) => ({ ...prev, name: e.target.value }))}
-                  />
-                ) : (
-                  <span className="text-foreground">{sop.name}</span>
-                )}
+                <Input
+                  className="h-7 text-xs"
+                  value={(getEditVal("name") as string) ?? ""}
+                  onChange={(e) => handleInfoChange("name", e.target.value)}
+                  placeholder="Tên quy trình..."
+                />
               </div>
               <div className="col-span-2">
                 <div className="text-muted-foreground mb-1">Mô tả</div>
-                {editMode ? (
-                  <Textarea
-                    className="min-h-[48px] text-xs"
-                    value={(getEditVal("description") as string) ?? ""}
-                    onChange={(e) => setEditDraft((prev) => ({ ...prev, description: e.target.value }))}
-                  />
-                ) : (
-                  <p className="text-foreground">{sop.description || "—"}</p>
-                )}
+                <Textarea
+                  className="min-h-[48px] text-xs"
+                  value={(getEditVal("description") as string) ?? ""}
+                  onChange={(e) => handleInfoChange("description", e.target.value)}
+                  placeholder="Mô tả mục đích quy trình..."
+                />
               </div>
               <div>
                 <div className="text-muted-foreground mb-1">Domain</div>
-                {editMode ? (
-                  <NativeSelect
-                    value={(getEditVal("domain") as string) ?? ""}
-                    onChange={(v) => setEditDraft((prev) => ({ ...prev, domain: v }))}
-                    options={DOMAINS.map((d) => ({ value: d, label: d }))}
-                  />
-                ) : (
-                  <span className="text-foreground">{sop.domain}</span>
-                )}
+                <NativeSelect
+                  value={(getEditVal("domain") as string) ?? ""}
+                  onChange={(v) => handleInfoChange("domain", v)}
+                  options={DOMAINS.map((d) => ({ value: d, label: `${d} — ${DOMAIN_TOOLTIPS[d] || d}` }))}
+                />
               </div>
               <div>
                 <div className="text-muted-foreground mb-1">Ưu tiên</div>
-                {editMode ? (
-                  <NativeSelect
-                    value={(getEditVal("priority") as string) ?? "P2"}
-                    onChange={(v) => setEditDraft((prev) => ({ ...prev, priority: v as Sop["priority"] }))}
-                    options={[
-                      { value: "P0", label: "P0 — Khẩn cấp" },
-                      { value: "P1", label: "P1 — Cao" },
-                      { value: "P2", label: "P2 — Trung bình" },
-                      { value: "P3", label: "P3 — Thấp" },
-                    ]}
-                  />
-                ) : (
-                  <span className={cn("font-medium", priorityCfg.className)}>{sop.priority}</span>
-                )}
+                <NativeSelect
+                  value={(getEditVal("priority") as string) ?? "P2"}
+                  onChange={(v) => handleInfoChange("priority", v)}
+                  options={[
+                    { value: "P0", label: "P0 — Khẩn cấp" },
+                    { value: "P1", label: "P1 — Cao" },
+                    { value: "P2", label: "P2 — Trung bình" },
+                    { value: "P3", label: "P3 — Thấp" },
+                  ]}
+                />
               </div>
               <div>
                 <div className="text-muted-foreground mb-1">Trạng thái</div>
-                {editMode ? (
-                  <NativeSelect
-                    value={(getEditVal("status") as string) ?? "needs_creation"}
-                    onChange={(v) => setEditDraft((prev) => ({ ...prev, status: v as Sop["status"] }))}
-                    options={[
-                      { value: "needs_creation", label: "Cần tạo" },
-                      { value: "drafting", label: "Đang soạn" },
-                      { value: "review", label: "Chờ duyệt" },
-                      { value: "published", label: "Đã hoàn thành" },
-                      { value: "deprecated", label: "Ngừng dùng" },
-                    ]}
-                  />
-                ) : (
-                  <Badge variant={statusCfg.variant} className="text-[10px]">
-                    {statusCfg.label}
-                  </Badge>
-                )}
+                <NativeSelect
+                  value={(getEditVal("status") as string) ?? "needs_creation"}
+                  onChange={(v) => handleInfoChange("status", v)}
+                  options={[
+                    { value: "needs_creation", label: "Cần tạo" },
+                    { value: "drafting", label: "Đang soạn" },
+                    { value: "review", label: "Chờ duyệt" },
+                    { value: "published", label: "Đã hoàn thành" },
+                    { value: "deprecated", label: "Ngừng dùng" },
+                  ]}
+                />
               </div>
               <div>
                 <div className="text-muted-foreground mb-1">Cron</div>
-                {editMode ? (
-                  <div className="space-y-1">
-                    <Input
-                      className="h-7 text-xs font-mono"
-                      placeholder="0 9 * * 1"
-                      value={(getEditVal("cron") as string) ?? ""}
-                      onChange={(e) => setEditDraft((prev) => ({ ...prev, cron: e.target.value }))}
-                    />
-                    {parseCron((getEditVal("cron") as string) ?? "") && (
-                      <span className="text-[10px] text-muted-foreground">
-                        {parseCron((getEditVal("cron") as string) ?? "")}
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <span className="font-mono text-foreground">
-                    {sop.cron || "—"}
-                    {sop.cron && parseCron(sop.cron) !== sop.cron && (
-                      <span className="ml-2 text-[10px] text-muted-foreground font-sans">
-                        ({parseCron(sop.cron)})
-                      </span>
-                    )}
-                  </span>
-                )}
+                <div className="space-y-1">
+                  <Input
+                    className="h-7 text-xs font-mono"
+                    placeholder="0 9 * * 1"
+                    value={(getEditVal("cron") as string) ?? ""}
+                    onChange={(e) => handleInfoChange("cron", e.target.value)}
+                  />
+                  {parseCron((getEditVal("cron") as string) ?? sop.cron ?? "") && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {parseCron((getEditVal("cron") as string) ?? sop.cron ?? "")}
+                    </span>
+                  )}
+                </div>
               </div>
               {sop.agents && sop.agents.length > 0 && (
                 <div className="col-span-2">
@@ -947,19 +1019,36 @@ function SopRow({
           </div>
 
           {/* ── 5.2 Workflow Steps ── */}
-          {currentSteps.length > 0 && (
-            <div className="space-y-2">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                 Các bước thực thi ({currentSteps.length})
               </h4>
+              <button
+                onClick={handleAddStep}
+                className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 font-medium px-2 py-1 rounded hover:bg-primary/10 transition-colors"
+              >
+                <span className="text-sm leading-none">+</span> Thêm step
+              </button>
+            </div>
+            {currentSteps.length === 0 ? (
+              <div className="border-2 border-dashed border-muted rounded-lg p-6 text-center">
+                <p className="text-xs text-muted-foreground mb-2">SOP này chưa có bước thực thi nào</p>
+                <button
+                  onClick={handleAddStep}
+                  className="text-xs font-medium text-primary hover:underline">
+                  + Bấm để thêm bước đầu tiên
+                </button>
+              </div>
+            ) : (
               <div className="space-y-1.5">
                 {currentSteps.map((step, i) => (
                   <SopStepCard
-                    key={`${sop.sopId}-step-${step.order}`}
+                    key={`${sop.sopId}-step-${step.order ?? i}`}
                     step={step}
                     stepIndex={i}
                     sopId={sop.sopId}
-                    editable={editMode || sop.status === "draft"}
+                    editable
                     onUpdate={handleStepUpdate}
                     onExecuteSingle={handleExecuteSingle}
                     onDelete={handleStepDelete}
@@ -968,8 +1057,8 @@ function SopRow({
                   />
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* ── 5.3 Execution Preview ── */}
           <div className="space-y-2">
@@ -983,38 +1072,29 @@ function SopRow({
             />
           </div>
 
-          {/* ── 5.4 Body markdown ── */}
-          {(sop.body || editMode) && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  Nội dung chi tiết
-                </h4>
-                {!editMode && sop.body && (
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    className="text-muted-foreground"
-                    onClick={() => { setBodyEdit(!bodyEdit); setBodyDraft(sop.body ?? ""); }}
-                  >
-                    <Pencil className="h-3 w-3 mr-1" />
-                    {bodyEdit ? "Xem" : "Sửa"}
-                  </Button>
-                )}
-              </div>
-              {editMode || bodyEdit ? (
-                <Textarea
-                  className="min-h-[120px] text-xs font-mono"
-                  value={bodyDraft}
-                  onChange={(e) => setBodyDraft(e.target.value)}
-                />
-              ) : (
-                <div className="bg-muted/30 rounded-md p-3 text-xs whitespace-pre-wrap max-h-[200px] overflow-y-auto">
-                  {sop.body}
-                </div>
-              )}
+          {/* ── 5.4 Body markdown — LUÔN HIỆN để xem/sửa nội dung file SOP ── */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                📄 Nội dung SOP (body_markdown)
+              </h4>
+              <span className="text-xs text-muted-foreground">
+                {(getEditVal('body') || sop.body_markdown) ? 'Editable · tự lưu' : 'Chưa có nội dung'}
+              </span>
             </div>
-          )}
+            <textarea
+              className="w-full min-h-[160px] text-xs font-mono bg-muted/30 border border-border rounded-md p-3 resize-y focus:outline-none focus:ring-1 focus:ring-primary"
+              value={bodyDraft || (sop as any).body_markdown || ''}
+              placeholder="Viết nội dung SOP ở đây bằng Markdown...\n\n## Mục đích\n...\n\n## Các bước\n1. ...\n2. ..."
+              onChange={(e) => {
+                setBodyDraft(e.target.value);
+                clearTimeout(stepSaveRef.current);
+                stepSaveRef.current = setTimeout(() => {
+                  handleSopUpdate(sop.sopId, { body_markdown: e.target.value, body: e.target.value });
+                }, 800);
+              }}
+            />
+          </div>
 
           {/* ── 5.5 ReMe status ── */}
           <div className="space-y-2">

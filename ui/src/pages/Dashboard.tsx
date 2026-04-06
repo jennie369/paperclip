@@ -8,6 +8,7 @@ import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
+import KGMiniWidget from "@/components/knowledge-graph/KGMiniWidget";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -292,6 +293,11 @@ export function Dashboard() {
         <ChartCard title="Issues by Priority" subtitle="Last 14 days">
           <PriorityChart issues={issues ?? []} />
         </ChartCard>
+      </div>
+
+      {/* Knowledge Graph Mini Widget */}
+      <div className="grid grid-cols-2 gap-4">
+        <KGMiniWidget />
       </div>
 
       <PluginSlotOutlet

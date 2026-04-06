@@ -80,6 +80,9 @@ import { KnowledgeBasePage } from "./pages/crm/KnowledgeBasePage";
 import { CommandConsolePage } from "./pages/ops/CommandConsolePage";
 import { SopEnginePage } from "./pages/ops/SopEnginePage";
 
+// Knowledge Graph — lazy load (heavy Three.js dependency)
+const KnowledgeGraphPage = lazy(() => import("./pages/ops/KnowledgeGraphPage"));
+
 import { ConfigHubPage } from "./pages/config/ConfigHubPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
@@ -91,6 +94,7 @@ import { queryKeys } from "./lib/queryKeys";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
+import { DevToolsOverlay } from "./components/devtools/DevToolsOverlay";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
   return (
@@ -170,6 +174,11 @@ function boardRoutes() {
       <Route path="ops/scanner" element={<ScannerPage />} />
       <Route path="ops/console" element={<CommandConsolePage />} />
       <Route path="ops/sop-engine" element={<SopEnginePage />} />
+      <Route path="ops/knowledge-graph" element={
+        <Suspense fallback={<div className="p-8 text-center text-sm text-muted-foreground">Đang tải...</div>}>
+          <KnowledgeGraphPage />
+        </Suspense>
+      } />
       <Route path="ops/roster" element={<Navigate to="/config" replace />} />
       <Route path="config" element={<ConfigHubPage />} />
       <Route path="workflows" element={<WorkflowListPage />} />
@@ -453,6 +462,7 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
+      <DevToolsOverlay />
     </>
   );
 }

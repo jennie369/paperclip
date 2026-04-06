@@ -132,6 +132,7 @@ export function Sidebar() {
           <SidebarNavItem to="/ops/sop-engine" label="SOP Engine" icon={ClipboardList} />
           <SidebarNavItem to="/ops/affiliate" label="Affiliate & CTV" icon={UserCircle} />
           <SidebarNavItem to="/ops/scanner" label="GEM Scanner" icon={Search} />
+          <SidebarNavItem to="/ops/knowledge-graph" label="Mắt Thần CEO" icon={Network} />
         </SidebarSection>
 
         <SidebarSection label="Trung tâm Nội dung">

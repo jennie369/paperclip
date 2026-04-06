@@ -43,6 +43,7 @@ import trackingRoutes from "./channels/crm/tracking/tracking-routes.js";
 import conversationRoutes from "./channels/conversation-routes.js";
 import opsRoutes from "./channels/ops-routes.js";
 import sopEngineRoutes from "./channels/sop-engine-routes.js";
+import kgRoutes from "./channels/kg-routes.js";
 import socialRoutes from "./channels/social-routes.js";
 import systemRoutes from "./routes/system-routes.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -253,6 +254,7 @@ export async function createApp(
   api.use("/channels/conversations", conversationRoutes);
   api.use("/ops", opsRoutes);
   api.use("/ops/sop-engine", sopEngineRoutes);
+  api.use("/ops/kg", kgRoutes);
   api.use("/", socialRoutes); // /api/social/publish, /api/news/publish, /api/social/pages
   api.use("/system", systemRoutes);
   api.use("/channels", channelRoutes);

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { useNavigate } from "@/lib/router";
-import { ArrowLeft, RefreshCw, Link2, Phone, Mail, Calendar, User, ShoppingBag, Ticket, MessageSquare, Brain, StickyNote, History } from "lucide-react";
+import { ArrowLeft, RefreshCw, Link2, Phone, Mail, Calendar, User, ShoppingBag, Ticket, MessageSquare, Brain, StickyNote, History, Network } from "lucide-react";
+import KGMiniGraph from "@/components/knowledge-graph/KGMiniGraph";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,7 @@ const tabs = [
   { key: 'gemral', label: 'Gemral', icon: Brain },
   { key: 'memory', label: 'Memory', icon: History },
   { key: 'notes', label: 'Ghi chú', icon: StickyNote },
+  { key: 'kg', label: 'Bản đồ quan hệ', icon: Network },
 ];
 
 export function CustomerDetailPage() {
@@ -418,6 +420,15 @@ export function CustomerDetailPage() {
           )}
 
           {/* TAB: Ghi chú */}
+          {activeTab === 'kg' && id && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">Bản đồ quan hệ 2 bước từ khách hàng này</p>
+              <div className="rounded-lg border border-border overflow-hidden" style={{ height: 400 }}>
+                <KGMiniGraph centerId={`customer:${id}`} centerType="customer" depth={2} maxNodes={20} className="h-full" />
+              </div>
+            </div>
+          )}
+
           {activeTab === 'notes' && (
             <div className="space-y-4">
               <div className="flex gap-2">
