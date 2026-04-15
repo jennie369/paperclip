@@ -86,7 +86,26 @@ router.get('/', async (_req, res) => {
  * GET /api/channels/agent-configs/sessions
  * List all agent sessions (joined with paperclip_agents for display_name/avatar).
  */
-router.get('/sessions', async (_req, res) => {
+router.get('/sessions', async (req, res) => {
+  // ?scope=channel (default): only sessions owned by paperclip_agents (27 channel-serving agents).
+  //   Excludes batch/content-center work, manual CLI, unknown-gemini disk files.
+  // ?scope=all: legacy behaviour, every session materialized from DB + disk.
+  const scope = (req.query.scope as string) || 'channel';
+
+  // Pre-fetch channel agent slugs for scope filtering.
+  // Falls back to empty set on error → with scope=channel the response is empty,
+  // with scope=all the list is unfiltered.
+  let channelAgentSlugs = new Set<string>();
+  if (scope === 'channel') {
+    const { data: paList } = await supabase.from('paperclip_agents').select('slug');
+    for (const pa of paList || []) if (pa.slug) channelAgentSlugs.add(pa.slug);
+  }
+  const passesScope = (slug: string | null | undefined): boolean => {
+    if (scope === 'all') return true;
+    if (!slug) return false;
+    return channelAgentSlugs.has(slug);
+  };
+
   const { data: dbSessions, error } = await supabase
     .from('agent_sessions')
     .select('*')
@@ -208,7 +227,11 @@ router.get('/sessions', async (_req, res) => {
     }
   }
 
-  const sessions = [...(dbSessions || []), ...diskSessions]
+  // Apply scope filter to BOTH DB rows and disk-materialized rows.
+  const filteredDb = (dbSessions || []).filter((s: any) => passesScope(s.agent_slug));
+  const filteredDisk = diskSessions.filter((s: any) => passesScope(s.agent_slug));
+
+  const sessions = [...filteredDb, ...filteredDisk]
     .sort((a: any, b: any) => {
       const ta = new Date(a.started_at || 0).getTime();
       const tb = new Date(b.started_at || 0).getTime();
@@ -1073,6 +1096,184 @@ router.get('/:slug/chat-history', async (req, res) => {
     fullHistoryCount,
     lastMessageAt: sessionRow.last_message_at,
     messages,
+  });
+});
+
+// ─── Per-Agent Session Files (browse JSONL disk) ────────────────────
+
+/**
+ * GET /api/channels/agent-configs/:slug/session-files
+ * Lists ALL session JSONL files on disk for a given agent slug.
+ * Returns both Claude (~/.claude/projects/*-agents-<slug>/*.jsonl) and Gemini
+ * (~/.gemini/tmp/...) sessions with metadata for browsing inside the chat drawer.
+ *
+ * Query params:
+ *   - from / to: ISO date range (filter by file mtime)
+ *   - limit: default 100, max 500
+ */
+router.get('/:slug/session-files', async (req, res) => {
+  let { slug } = req.params;
+  const fromStr = req.query.from as string | undefined;
+  const toStr = req.query.to as string | undefined;
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+
+  // Slug resolution (reuse pattern from other endpoints)
+  const { data: paCheck } = await supabase.from('paperclip_agents').select('slug').eq('slug', slug).maybeSingle();
+  if (!paCheck) {
+    const { data: agentRow } = await supabase.from('agents').select('slug').eq('slug', slug).maybeSingle();
+    if (agentRow?.slug) {
+      slug = agentRow.slug;
+    } else {
+      const { data: allPa } = await supabase.from('paperclip_agents').select('slug, display_name');
+      const match = (allPa || []).find((pa: any) => {
+        const derived = (pa.display_name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        return derived === slug;
+      });
+      if (match) slug = match.slug;
+    }
+  }
+
+  const fromTs = fromStr ? new Date(fromStr).getTime() : 0;
+  const toTs = toStr ? new Date(toStr).getTime() : Number.MAX_SAFE_INTEGER;
+  const inRange = (ms: number) => ms >= fromTs && ms <= toTs;
+
+  const files: Array<{
+    session_id: string;
+    short_id: string;
+    fileKind: 'claude-jsonl' | 'gemini-json';
+    file_path: string;
+    started_at: string;
+    last_activity_at: string;
+    turn_count: number;
+    first_user_snippet: string | null;
+    size_bytes: number;
+  }> = [];
+
+  // Claude scan: ~/.claude/projects/*-agents-<slug>/*.jsonl
+  const projectsRoot = path.resolve(os.homedir(), '.claude', 'projects');
+  if (fs.existsSync(projectsRoot)) {
+    const dirs = fs.readdirSync(projectsRoot).filter((d) => {
+      try {
+        const m = d.match(/-agents-([a-z0-9-]+)$/);
+        return m && m[1] === slug && fs.statSync(path.join(projectsRoot, d)).isDirectory();
+      } catch { return false; }
+    });
+    for (const dir of dirs) {
+      const fullDir = path.join(projectsRoot, dir);
+      let fileNames: string[] = [];
+      try { fileNames = fs.readdirSync(fullDir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+      for (const fn of fileNames) {
+        const fp = path.join(fullDir, fn);
+        try {
+          const st = fs.statSync(fp);
+          if (!inRange(st.mtimeMs)) continue;
+          // Quick line count + first user snippet (read first ~4KB only)
+          let turn_count = 0;
+          let first_user_snippet: string | null = null;
+          try {
+            const buf = fs.readFileSync(fp, { encoding: 'utf-8' });
+            const lines = buf.split('\n').filter(Boolean);
+            turn_count = lines.length;
+            for (const line of lines.slice(0, 50)) {
+              try {
+                const ev = JSON.parse(line);
+                const content = ev?.message?.content || ev?.content;
+                if (ev?.type === 'user' || ev?.role === 'user') {
+                  const text = typeof content === 'string' ? content : (Array.isArray(content) ? content.map((c: any) => c?.text || '').join(' ') : '');
+                  if (text && text.length > 10) {
+                    first_user_snippet = text.replace(/\[(TIN NHẮN MỚI|HỒ SƠ|Khách:|TÓM TẮT AI|HƯỚNG DẪN TOOLS|PURCHASE JOURNEY STATE).*?\]/gs, '').trim().slice(0, 120);
+                    if (first_user_snippet) break;
+                  }
+                }
+              } catch { /* skip malformed line */ }
+            }
+          } catch { /* keep defaults */ }
+          files.push({
+            session_id: fn.replace(/\.jsonl$/, ''),
+            short_id: fn.slice(0, 8),
+            fileKind: 'claude-jsonl',
+            file_path: fp,
+            started_at: new Date(st.birthtimeMs || st.mtimeMs).toISOString(),
+            last_activity_at: new Date(st.mtimeMs).toISOString(),
+            turn_count,
+            first_user_snippet,
+            size_bytes: st.size,
+          });
+        } catch { /* skip unreadable file */ }
+      }
+    }
+  }
+
+  // Gemini scan: ~/.gemini/tmp/**/chats/session-*-<short8>.json
+  // Cross-ref with agent_sessions DB for slug attribution (short8 → slug).
+  const geminiRoot = path.resolve(os.homedir(), '.gemini', 'tmp');
+  if (fs.existsSync(geminiRoot)) {
+    const { data: dbSessions } = await supabase
+      .from('agent_sessions')
+      .select('session_id, agent_slug')
+      .eq('agent_slug', slug);
+    const short8Set = new Set<string>();
+    for (const s of dbSessions || []) {
+      if (s.session_id) short8Set.add(String(s.session_id).substring(0, 8));
+    }
+    const projDirs = fs.readdirSync(geminiRoot).filter((d) => {
+      try { return fs.statSync(path.join(geminiRoot, d)).isDirectory(); } catch { return false; }
+    });
+    for (const proj of projDirs) {
+      const chatsDir = path.join(geminiRoot, proj, 'chats');
+      if (!fs.existsSync(chatsDir)) continue;
+      let fileNames: string[] = [];
+      try { fileNames = fs.readdirSync(chatsDir).filter((f) => f.startsWith('session-') && f.endsWith('.json')); } catch { continue; }
+      for (const fn of fileNames) {
+        const m = fn.match(/-([a-f0-9]{8})\.json$/);
+        if (!m) continue;
+        const short8 = m[1];
+        if (!short8Set.has(short8)) continue; // only surface Gemini sessions owned by this agent
+        const fp = path.join(chatsDir, fn);
+        try {
+          const st = fs.statSync(fp);
+          if (!inRange(st.mtimeMs)) continue;
+          let fullSessionId = short8;
+          let turn_count = 0;
+          let first_user_snippet: string | null = null;
+          try {
+            const raw = fs.readFileSync(fp, 'utf-8');
+            const doc = JSON.parse(raw);
+            if (doc.sessionId) fullSessionId = doc.sessionId;
+            if (Array.isArray(doc.messages)) {
+              turn_count = doc.messages.length;
+              const firstUser = doc.messages.find((m: any) => m?.type === 'user' && typeof m.content === 'string' && m.content.length > 10);
+              if (firstUser) {
+                first_user_snippet = String(firstUser.content).replace(/\[(TIN NHẮN MỚI|HỒ SƠ|Khách:|TÓM TẮT AI|HƯỚNG DẪN TOOLS|PURCHASE JOURNEY STATE).*?\]/gs, '').trim().slice(0, 120);
+              }
+            }
+          } catch { /* defaults */ }
+          files.push({
+            session_id: fullSessionId,
+            short_id: short8,
+            fileKind: 'gemini-json',
+            file_path: fp,
+            started_at: new Date(st.birthtimeMs || st.mtimeMs).toISOString(),
+            last_activity_at: new Date(st.mtimeMs).toISOString(),
+            turn_count,
+            first_user_snippet,
+            size_bytes: st.size,
+          });
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  files.sort((a, b) => new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime());
+  const trimmed = files.slice(0, limit);
+
+  return res.json({
+    slug,
+    total: files.length,
+    returned: trimmed.length,
+    claude_count: trimmed.filter((f) => f.fileKind === 'claude-jsonl').length,
+    gemini_count: trimmed.filter((f) => f.fileKind === 'gemini-json').length,
+    files: trimmed,
   });
 });
 
