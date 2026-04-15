@@ -66,44 +66,70 @@ function formatDateTs(ts) {
   } catch { return ts; }
 }
 
-// ────────────────────────── Input field list ──────────────────────────
-// Read-only Inputs panel. Pulls from both job columns (pillar/persona/...)
-// and input_params jsonb. Designed to show EVERY input so user can debug
-// "AI output wrong" by inspecting what was actually sent.
+// ────────────────────────── Inputs panel ──────────────────────────
+// Read-only Inputs panel. Pulls from BOTH job columns AND input_params jsonb —
+// many batch_processor versions store things like pillar/topic/voice inside
+// input_params instead of their dedicated columns, so we always merge + fallback.
+//
+// Rendering strategy (no more raw JSON dumps):
+//   - Short scalar values → compact FieldRow (label + value)
+//   - Long text (userPrompt, systemPrompt, anything >200 chars) → TextBlock
+//     with Copy button and its own scrollable pre
+//   - Nested objects/arrays → pretty-formatted JSON block (readable whitespace,
+//     syntax-highlighted-ish indent, still inside a card with a Copy button)
+
+function pick(...vals) {
+  for (const v of vals) {
+    if (v !== null && v !== undefined && v !== '') return v;
+  }
+  return null;
+}
+
 function InputsPanel({ job }) {
   if (!job) return null;
   const ip = job.input_params || {};
   const md = job.metadata || {};
 
-  // Structured rows from known columns first, then spread input_params for the rest.
-  const knownKeys = new Set([
-    'topic', 'theme', 'audience', 'target_audience', 'voice', 'brand_voice',
-    'tone', 'cta', 'hashtags', 'length', 'word_count', 'language',
-    'framework', 'hook_type', 'format', 'platform', 'channel',
-  ]);
-
-  const structured = [
-    { label: 'Job type',     value: job.job_type, mono: true },
-    { label: 'Content type', value: job.content_type, mono: true },
-    { label: 'Pillar',       value: job.pillar },
-    { label: 'Track',        value: job.track },
-    { label: 'Persona',      value: job.persona },
-    { label: 'Writing mode', value: job.writing_mode },
-    { label: 'Model',        value: job.model_used, mono: true },
-    { label: 'Processor',    value: job.processor, mono: true },
-    { label: 'Priority',     value: job.priority },
-    { label: 'Entity',       value: job.entity_type && job.entity_id ? `${job.entity_type}:${job.entity_id}` : null, mono: true },
+  // Core fields — column first, fallback to input_params alias(es).
+  const core = [
+    { label: 'Job type',     value: pick(job.job_type),        mono: true },
+    { label: 'Content type', value: pick(job.content_type, ip.content_type), mono: true },
+    { label: 'Pillar',       value: pick(job.pillar, ip.pillar) },
+    { label: 'Track',        value: pick(job.track, ip.track) },
+    { label: 'Persona',      value: pick(job.persona, ip.persona) },
+    { label: 'Writing mode', value: pick(job.writing_mode, ip.writingMode, ip.writing_mode) },
+    { label: 'Model',        value: pick(job.model_used, ip.model, md.requested_model), mono: true },
+    { label: 'Provider',     value: pick(ip.provider), mono: true },
+    { label: 'Processor',    value: pick(job.processor), mono: true },
+    { label: 'Priority',     value: pick(job.priority) },
+    { label: 'Max tokens',   value: pick(ip.maxTokens, ip.max_tokens), mono: true },
+    { label: 'Temperature',  value: pick(ip.temperature), mono: true },
+    {
+      label: 'Entity',
+      value: job.entity_type && job.entity_id ? `${job.entity_type}:${job.entity_id}` : null,
+      mono: true,
+    },
   ];
 
-  const topicFields = knownKeys
-    .values()
-    ? Array.from(knownKeys)
-        .map((k) => ({ label: k, value: ip[k] }))
-        .filter((r) => r.value !== undefined && r.value !== null && r.value !== '')
-    : [];
+  // Pick out long text prompts for their own blocks
+  const LONG_TEXT_KEYS = ['userPrompt', 'user_prompt', 'systemPrompt', 'system_prompt', 'prompt', 'instruction', 'instructions'];
+  const textBlocks = LONG_TEXT_KEYS
+    .map((k) => ({ key: k, value: ip[k] }))
+    .filter((r) => typeof r.value === 'string' && r.value.length > 0);
 
-  // Remaining input_params keys (anything not in knownKeys)
-  const extraIpEntries = Object.entries(ip).filter(([k]) => !knownKeys.has(k));
+  // Topic-level short fields (one-line strings)
+  const TOPIC_KEYS = ['topic', 'theme', 'audience', 'target_audience', 'voice', 'brand_voice', 'tone', 'cta', 'hashtags', 'length', 'word_count', 'language', 'framework', 'hook_type', 'format', 'platform', 'channel'];
+  const topicFields = TOPIC_KEYS
+    .map((k) => ({ label: k, value: ip[k] }))
+    .filter((r) => r.value !== undefined && r.value !== null && r.value !== '' && typeof r.value !== 'object');
+
+  // Remaining input_params — anything not already shown
+  const shown = new Set([
+    'content_type', 'pillar', 'track', 'persona', 'writingMode', 'writing_mode',
+    'model', 'provider', 'maxTokens', 'max_tokens', 'temperature',
+    ...LONG_TEXT_KEYS, ...TOPIC_KEYS,
+  ]);
+  const extraEntries = Object.entries(ip).filter(([k]) => !shown.has(k));
 
   return (
     <div className="border border-border rounded-md bg-card/50 mb-3">
@@ -115,47 +141,44 @@ function InputsPanel({ job }) {
           <span className="ml-auto text-[10px] text-muted-foreground">chi tiết ▾</span>
         </summary>
         <div className="px-3 pb-3 space-y-3">
-          {/* Column fields */}
+          {/* Core fields */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2">
-            {structured.map((f) => (
-              <FieldRow key={f.label} {...f} />
-            ))}
+            {core.map((f) => <FieldRow key={f.label} {...f} />)}
           </div>
 
-          {/* Known topic fields from input_params */}
+          {/* Topic fields (if any) */}
           {topicFields.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Content inputs</div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2">
-                {topicFields.map((f) => (
-                  <FieldRow key={f.label} {...f} wide />
-                ))}
+                {topicFields.map((f) => <FieldRow key={f.label} {...f} wide />)}
               </div>
             </div>
           )}
 
-          {/* Any remaining input_params */}
-          {extraIpEntries.length > 0 && (
-            <details>
-              <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground select-none">
-                Raw input_params JSON ({extraIpEntries.length} field khác)
-              </summary>
-              <pre className="mt-1 text-[10px] p-2 rounded border border-border bg-muted/40 text-foreground overflow-x-auto whitespace-pre-wrap">
-{JSON.stringify(Object.fromEntries(extraIpEntries), null, 2)}
-              </pre>
-            </details>
+          {/* Long text blocks (system prompt, user prompt) */}
+          {textBlocks.map((b) => (
+            <TextBlock key={b.key} label={b.key} text={b.value} />
+          ))}
+
+          {/* Extra input_params — render as key-value rows */}
+          {extraEntries.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                Input params khác ({extraEntries.length})
+              </div>
+              <KeyValueList entries={extraEntries} />
+            </div>
           )}
 
-          {/* Metadata (batch_processor internal tags) */}
+          {/* Metadata */}
           {md && Object.keys(md).length > 0 && (
-            <details>
-              <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground select-none">
-                metadata ({Object.keys(md).length} field)
-              </summary>
-              <pre className="mt-1 text-[10px] p-2 rounded border border-border bg-muted/40 text-foreground overflow-x-auto whitespace-pre-wrap">
-{JSON.stringify(md, null, 2)}
-              </pre>
-            </details>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                Metadata ({Object.keys(md).length})
+              </div>
+              <KeyValueList entries={Object.entries(md)} />
+            </div>
           )}
         </div>
       </details>
@@ -164,13 +187,146 @@ function InputsPanel({ job }) {
 }
 
 function FieldRow({ label, value, mono, wide }) {
-  const display = value === null || value === undefined || value === '' ? '—' : String(value);
+  const display =
+    value === null || value === undefined || value === '' ? '—' : String(value);
+  const isMissing = display === '—';
   return (
     <div className={wide ? 'col-span-1 md:col-span-2' : ''}>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</div>
-      <div className={`text-xs text-foreground break-all ${mono ? 'font-mono' : ''}`}>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
+        {label}
+      </div>
+      <div
+        className={`text-xs break-all ${mono ? 'font-mono' : ''} ${
+          isMissing ? 'text-muted-foreground/60' : 'text-foreground'
+        }`}
+      >
         {display}
       </div>
+    </div>
+  );
+}
+
+// Render a list of key → value pairs nicely. Values that are objects/arrays
+// get pretty-printed in an indented, monospaced block; primitives render inline.
+function KeyValueList({ entries }) {
+  return (
+    <div className="border border-border rounded bg-muted/30 divide-y divide-border/60 overflow-hidden">
+      {entries.map(([k, v]) => (
+        <KeyValueRow key={k} k={k} v={v} />
+      ))}
+    </div>
+  );
+}
+
+function KeyValueRow({ k, v }) {
+  const isObject = v !== null && typeof v === 'object';
+  const isLongString = typeof v === 'string' && (v.length > 120 || v.includes('\n'));
+  const [open, setOpen] = useState(false);
+
+  if (isObject) {
+    const pretty = JSON.stringify(v, null, 2);
+    return (
+      <div className="px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((x) => !x)}
+          className="w-full flex items-center gap-2 text-left"
+        >
+          <span className="text-[10px] text-muted-foreground shrink-0">{open ? '▼' : '▶'}</span>
+          <span className="text-[11px] font-mono font-semibold text-foreground">{k}</span>
+          <span className="text-[10px] text-muted-foreground ml-auto">
+            {Array.isArray(v) ? `array[${v.length}]` : `object · ${Object.keys(v).length} key`}
+          </span>
+        </button>
+        {open && (
+          <pre className="mt-2 text-[11px] leading-relaxed p-2 rounded border border-border bg-background text-foreground overflow-x-auto whitespace-pre-wrap">
+{pretty}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
+  if (isLongString) {
+    return (
+      <div className="px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((x) => !x)}
+          className="w-full flex items-center gap-2 text-left"
+        >
+          <span className="text-[10px] text-muted-foreground shrink-0">{open ? '▼' : '▶'}</span>
+          <span className="text-[11px] font-mono font-semibold text-foreground">{k}</span>
+          <span className="text-[10px] text-muted-foreground ml-auto">string · {v.length} chars</span>
+        </button>
+        {open ? (
+          <pre className="mt-2 text-[11px] leading-relaxed p-2 rounded border border-border bg-background text-foreground overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto">
+{v}
+          </pre>
+        ) : (
+          <div className="text-[11px] text-muted-foreground mt-1 line-clamp-1">{v.slice(0, 120)}…</div>
+        )}
+      </div>
+    );
+  }
+
+  // Primitive
+  return (
+    <div className="px-3 py-1.5 flex items-baseline gap-3">
+      <span className="text-[11px] font-mono font-semibold text-foreground shrink-0">{k}</span>
+      <span className="text-[11px] text-muted-foreground">=</span>
+      <span className="text-[11px] font-mono text-foreground break-all">
+        {v === null ? <em className="text-muted-foreground">null</em> :
+         v === '' ? <em className="text-muted-foreground">(empty)</em> :
+         typeof v === 'boolean' ? (v ? 'true' : 'false') :
+         String(v)}
+      </span>
+    </div>
+  );
+}
+
+function TextBlock({ label, text }) {
+  const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
+  const copy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  const preview = text.split('\n').slice(0, 2).join(' ').slice(0, 140);
+
+  return (
+    <div className="border border-border rounded bg-muted/30 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((x) => !x)}
+          className="flex items-center gap-2 text-left flex-1 min-w-0"
+        >
+          <span className="text-[10px] text-muted-foreground shrink-0">{open ? '▼' : '▶'}</span>
+          <span className="text-[11px] font-mono font-semibold text-foreground shrink-0">{label}</span>
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            · {text.length.toLocaleString()} chars
+          </span>
+          {!open && (
+            <span className="text-[11px] text-muted-foreground truncate">{preview}…</span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={copy}
+          className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent/40 shrink-0"
+        >
+          {copied ? '✓' : '📋 Copy'}
+        </button>
+      </div>
+      {open && (
+        <pre className="text-[11px] leading-relaxed px-3 pb-3 text-foreground overflow-x-auto whitespace-pre-wrap max-h-96 overflow-y-auto">
+{text}
+        </pre>
+      )}
     </div>
   );
 }
