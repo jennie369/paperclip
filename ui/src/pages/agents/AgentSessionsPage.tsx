@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
 import { ClipboardList, FileText } from "lucide-react";
 import { AgentLogDrawer } from "./AgentLogDrawer";
+import { CustomerChatDrawer } from "./CustomerChatDrawer";
 
 type StatusFilter = "all" | "running" | "idle" | "stopped";
 
@@ -229,22 +230,66 @@ export function AgentSessionsPage() {
   const [newKwAgentSlug, setNewKwAgentSlug] = useState("");
   const [newKwReason, setNewKwReason] = useState("");
 
-  // ── Agent log drawer state ──
+  // ── Drawers state ──
+  // Mode A: per-customer chat history (from activity row click)
+  const [chatDrawer, setChatDrawer] = useState<{
+    open: boolean;
+    agentSlug: string;
+    channelName: string | null;
+    senderId: string | null;
+    fallbackCustomerName: string | null;
+    fallbackChannelDisplay: string | null;
+  }>({ open: false, agentSlug: "", channelName: null, senderId: null, fallbackCustomerName: null, fallbackChannelDisplay: null });
+
+  // Mode B: per-session CLI debug log (from session row click OR drill-down from Mode A)
   const [logDrawer, setLogDrawer] = useState<{
     open: boolean;
     slug: string;
     context: string;
-  }>({ open: false, slug: "", context: "" });
+    sessionId: string | null;
+  }>({ open: false, slug: "", context: "", sessionId: null });
 
+  // Click activity row → open Mode A (customer chat history)
   const openLogForEntry = (entry: any) => {
     const slug = entry.handled_by || entry.agent_slug || "";
     if (!slug) return;
-    const channel = entry.channel_name || "—";
-    const sender = entry.sender_name || entry.from_uid || entry.sender_id || "—";
+    const channelRaw = entry.channel_raw || entry.channel_name || null;
+    const channelDisplay = entry.channel_name || channelRaw;
+    const senderId = entry.sender_id || entry.from_uid || null;
+    const customerName = entry.customer_name || entry.sender_name || null;
+    if (!senderId || !channelRaw) {
+      pushToast({ variant: "error", title: "Thiếu thông tin", description: "Không có sender_id hoặc channel để load chat." });
+      return;
+    }
+    setChatDrawer({
+      open: true,
+      agentSlug: slug,
+      channelName: channelRaw,
+      senderId,
+      fallbackCustomerName: customerName,
+      fallbackChannelDisplay: channelDisplay,
+    });
+  };
+
+  // Click session row → open Mode B (CLI debug log)
+  const openLogForSession = (session: any) => {
     setLogDrawer({
       open: true,
-      slug,
-      context: `Hội thoại: ${sender} · ${channel}`,
+      slug: session.agent_slug,
+      context: `Session ${String(session.session_id || "").substring(0, 8)}…`,
+      sessionId: session.session_id || null,
+    });
+  };
+
+  // Drill-down from Mode A agent message → open Mode B overlay
+  const handleDrillDownToSession = (sessionId: string | null) => {
+    setLogDrawer({
+      open: true,
+      slug: chatDrawer.agentSlug,
+      context: chatDrawer.fallbackCustomerName
+        ? `← ${chatDrawer.fallbackCustomerName} · Session ${sessionId ? sessionId.substring(0, 8) + "…" : "latest"}`
+        : `Session ${sessionId ? sessionId.substring(0, 8) + "…" : "latest"}`,
+      sessionId,
     });
   };
 
@@ -589,6 +634,7 @@ export function AgentSessionsPage() {
                   onViewConfig={() =>
                     navigate(`/agents-config/${session.agent_slug}/edit`)
                   }
+                  onViewLog={() => openLogForSession(session)}
                   pushToast={pushToast}
                 />
               ))}
@@ -1146,11 +1192,24 @@ export function AgentSessionsPage() {
         </div>
       )}
 
-      {/* ── Agent Session Log Drawer ── */}
+      {/* ── Mode A: Customer Chat Drawer (per-customer chat history) ── */}
+      <CustomerChatDrawer
+        open={chatDrawer.open}
+        onClose={() => setChatDrawer({ ...chatDrawer, open: false })}
+        agentSlug={chatDrawer.agentSlug}
+        channelName={chatDrawer.channelName}
+        senderId={chatDrawer.senderId}
+        fallbackCustomerName={chatDrawer.fallbackCustomerName}
+        fallbackChannelDisplay={chatDrawer.fallbackChannelDisplay}
+        onOpenSessionLog={handleDrillDownToSession}
+      />
+
+      {/* ── Mode B: Agent Session Log Drawer (CLI debug — JSONL events) ── */}
       <AgentLogDrawer
         open={logDrawer.open}
         onClose={() => setLogDrawer({ ...logDrawer, open: false })}
         agentSlug={logDrawer.slug}
+        sessionId={logDrawer.sessionId}
         contextLabel={logDrawer.context}
       />
     </div>
@@ -1163,6 +1222,7 @@ function SessionRow({
   onToggle,
   onHide,
   onViewConfig,
+  onViewLog,
   pushToast,
 }: {
   session: AgentSession;
@@ -1170,6 +1230,7 @@ function SessionRow({
   onToggle: () => void;
   onHide: () => void;
   onViewConfig: () => void;
+  onViewLog: () => void;
   pushToast: (t: any) => void;
 }) {
   // Stop propagation on interactive children so row-click toggle doesn't fire
@@ -1329,6 +1390,16 @@ function SessionRow({
           >
             <Terminal className="h-3 w-3 mr-1" />
             Terminal
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={onViewLog}
+            title="Xem log của session này (không bị lẫn với session khác)"
+          >
+            <FileText className="h-3 w-3 mr-1" />
+            Log
           </Button>
           <Button
             variant="ghost"
