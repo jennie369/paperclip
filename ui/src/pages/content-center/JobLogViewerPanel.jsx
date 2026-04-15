@@ -31,15 +31,17 @@ const STAGE_META = {
   batch:            { icon: '📦', tone: 'cyan',    label: 'Batch' },
 };
 
-// Tone → Tailwind classes (all paired light/dark so contrast never fails).
+// Tone → Tailwind classes. Kept intentionally subtle — cards use the same
+// neutral card background as Inputs panel; the stage color only appears as
+// a 2px left accent stripe + small badge. Keeps the eye on content, not tint.
 const TONE_CLASSES = {
-  slate:   { border: 'border-slate-400/40',   bg: 'bg-slate-500/5',   badge: 'bg-slate-500/15 text-slate-700 dark:text-slate-200' },
-  blue:    { border: 'border-blue-400/40',    bg: 'bg-blue-500/5',    badge: 'bg-blue-500/15 text-blue-700 dark:text-blue-200' },
-  violet:  { border: 'border-violet-400/40',  bg: 'bg-violet-500/5',  badge: 'bg-violet-500/15 text-violet-700 dark:text-violet-200' },
-  amber:   { border: 'border-amber-400/40',   bg: 'bg-amber-500/5',   badge: 'bg-amber-500/15 text-amber-700 dark:text-amber-200' },
-  emerald: { border: 'border-emerald-400/40', bg: 'bg-emerald-500/5', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200' },
-  red:     { border: 'border-red-400/40',     bg: 'bg-red-500/5',     badge: 'bg-red-500/15 text-red-700 dark:text-red-200' },
-  cyan:    { border: 'border-cyan-400/40',    bg: 'bg-cyan-500/5',    badge: 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-200' },
+  slate:   { stripe: 'bg-slate-400/60',   badge: 'bg-slate-500/15 text-slate-700 dark:text-slate-200' },
+  blue:    { stripe: 'bg-blue-500/70',    badge: 'bg-blue-500/15 text-blue-700 dark:text-blue-200' },
+  violet:  { stripe: 'bg-violet-500/70',  badge: 'bg-violet-500/15 text-violet-700 dark:text-violet-200' },
+  amber:   { stripe: 'bg-amber-500/70',   badge: 'bg-amber-500/15 text-amber-700 dark:text-amber-200' },
+  emerald: { stripe: 'bg-emerald-500/70', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200' },
+  red:     { stripe: 'bg-red-500/70',     badge: 'bg-red-500/15 text-red-700 dark:text-red-200' },
+  cyan:    { stripe: 'bg-cyan-500/70',    badge: 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-200' },
 };
 
 const STATUS_TONE = {
@@ -431,13 +433,18 @@ function StageCard({ event, defaultOpen = false }) {
     : [];
 
   return (
-    <div className={`border-l-2 ${tone.border} ${tone.bg} border border-border rounded-md mb-2 overflow-hidden`}>
-      {/* Header (toggle button). Interactive children live OUTSIDE this button
-          to avoid invalid nested-button HTML & accidental bubbling. */}
+    <div className="relative border border-border rounded-md bg-card/50 mb-2 overflow-hidden">
+      {/* 2px tone stripe on the left — single visual cue for stage category */}
+      <span
+        aria-hidden
+        className={`absolute left-0 top-0 bottom-0 w-0.5 ${tone.stripe}`}
+      />
+
+      {/* Header (toggle). Interactive children live OUTSIDE to avoid nested buttons. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-start gap-2 p-2.5 text-left hover:bg-accent/40 transition-colors"
+        className="w-full flex items-start gap-2 p-2.5 pl-3 text-left hover:bg-accent/40 transition-colors"
       >
         <span className="text-base shrink-0 leading-none mt-0.5">{meta.icon}</span>
         <div className="flex-1 min-w-0">
@@ -471,7 +478,7 @@ function StageCard({ event, defaultOpen = false }) {
 
       {/* Expanded body — separate block so nested buttons are valid */}
       {open && (promptText || metaEntries.length > 0) && (
-        <div className="px-2.5 pb-2.5 space-y-2">
+        <div className="px-3 pb-2.5 space-y-2">
           {promptText && <PromptBlock text={promptText} />}
           {metaEntries.length > 0 && (
             <div>
