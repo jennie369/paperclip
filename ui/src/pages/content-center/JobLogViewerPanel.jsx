@@ -285,9 +285,80 @@ function KeyValueRow({ k, v }) {
   );
 }
 
-function TextBlock({ label, text }) {
+// Output panel — mirrors InputsPanel layout so they feel consistent.
+// Handles 3 shapes: plain string, array, plain object. Long string values
+// inside an object become TextBlocks; primitives/nested objects go through
+// KeyValueList; the wrapping object itself is NOT dumped as raw JSON.
+function OutputPanel({ output }) {
+  let data = output;
+  if (typeof data === 'string') {
+    // If it's a JSON string, parse so we can render structured.
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed && typeof parsed === 'object') data = parsed;
+    } catch { /* keep as string */ }
+  }
+
+  const isString = typeof data === 'string';
+  const isArray = Array.isArray(data);
+  const entries = isString || isArray ? null : Object.entries(data || {});
+
+  // Inside the object, long text fields get their own TextBlock; short ones
+  // plus primitives/nested go to KeyValueList.
+  const longTextKeys = entries
+    ? entries.filter(([, v]) => typeof v === 'string' && (v.length > 200 || v.includes('\n')))
+    : [];
+  const otherEntries = entries
+    ? entries.filter(
+        ([, v]) => !(typeof v === 'string' && (v.length > 200 || v.includes('\n')))
+      )
+    : [];
+
+  return (
+    <div className="mt-3 border border-border rounded-md bg-card/50">
+      <details open>
+        <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 hover:bg-accent/40 select-none">
+          <span className="text-sm">📤</span>
+          <span className="text-xs font-semibold text-foreground">Output data</span>
+          <span className="text-[10px] text-muted-foreground">
+            — kết quả AI trả về
+          </span>
+          <span className="ml-auto text-[10px] text-muted-foreground">chi tiết ▾</span>
+        </summary>
+        <div className="px-3 pb-3 space-y-2">
+          {isString && <TextBlock label="output" text={data} defaultOpen />}
+          {isArray && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                Array · {data.length} item
+              </div>
+              <KeyValueList entries={data.map((v, i) => [String(i), v])} />
+            </div>
+          )}
+          {entries && (
+            <>
+              {longTextKeys.map(([k, v]) => (
+                <TextBlock key={k} label={k} text={v} />
+              ))}
+              {otherEntries.length > 0 && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                    Fields ({otherEntries.length})
+                  </div>
+                  <KeyValueList entries={otherEntries} />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function TextBlock({ label, text, defaultOpen = false }) {
   const [copied, setCopied] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const copy = (e) => {
     e.stopPropagation();
     navigator.clipboard?.writeText(text).then(() => {
@@ -351,8 +422,18 @@ function StageCard({ event, defaultOpen = false }) {
     (event.message && event.message.length > 80) ||
     !!promptText;
 
+  // Remaining metadata fields — exclude the prompt key we already surfaced
+  // as its own TextBlock, otherwise it would appear twice.
+  const metaEntries = event.metadata
+    ? Object.entries(event.metadata).filter(
+        ([k]) => !['prompt', 'full_prompt', 'rendered_prompt'].includes(k)
+      )
+    : [];
+
   return (
     <div className={`border-l-2 ${tone.border} ${tone.bg} border border-border rounded-md mb-2 overflow-hidden`}>
+      {/* Header (toggle button). Interactive children live OUTSIDE this button
+          to avoid invalid nested-button HTML & accidental bubbling. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -382,21 +463,26 @@ function StageCard({ event, defaultOpen = false }) {
           <div className={`text-xs text-foreground mt-1 ${open ? 'whitespace-pre-wrap wrap-break-word' : 'line-clamp-2'}`}>
             {event.message}
           </div>
-
-          {open && promptText && (
-            <PromptBlock text={promptText} />
-          )}
-
-          {open && event.metadata && Object.keys(event.metadata).length > 0 && (
-            <pre className="text-[10px] mt-2 p-2 rounded border border-border bg-muted/50 text-foreground overflow-x-auto whitespace-pre-wrap">
-{JSON.stringify(event.metadata, null, 2)}
-            </pre>
-          )}
         </div>
         {hasDetails && (
           <span className="text-[10px] text-muted-foreground shrink-0 mt-0.5">{open ? '▲' : '▼'}</span>
         )}
       </button>
+
+      {/* Expanded body — separate block so nested buttons are valid */}
+      {open && (promptText || metaEntries.length > 0) && (
+        <div className="px-2.5 pb-2.5 space-y-2">
+          {promptText && <PromptBlock text={promptText} />}
+          {metaEntries.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                Metadata ({metaEntries.length})
+              </div>
+              <KeyValueList entries={metaEntries} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -688,18 +774,9 @@ function JobLogBody({ jobId, recentJobs, onSelectJob, embedded }) {
           />
         ))}
 
-        {/* Output preview */}
+        {/* Output preview — same pretty treatment as Inputs */}
         {!loading && !error && currentJob?.output_data && (
-          <details className="mt-3 border border-border rounded-md bg-card/50">
-            <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 hover:bg-accent/40 select-none">
-              <span className="text-sm">📤</span>
-              <span className="text-xs font-semibold text-foreground">Output data</span>
-              <span className="ml-auto text-[10px] text-muted-foreground">chi tiết ▾</span>
-            </summary>
-            <pre className="text-[11px] px-3 pb-3 text-foreground overflow-x-auto whitespace-pre-wrap">
-{typeof currentJob.output_data === 'string' ? currentJob.output_data : JSON.stringify(currentJob.output_data, null, 2)}
-            </pre>
-          </details>
+          <OutputPanel output={currentJob.output_data} />
         )}
       </div>
 
