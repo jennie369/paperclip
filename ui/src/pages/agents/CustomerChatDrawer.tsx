@@ -269,6 +269,14 @@ export function CustomerChatDrawer({
                     Agent: <span className="font-medium text-foreground/80">{data?.agent_display_name || agentSlug}</span>
                     {data?.agent_model && <span className="ml-1 font-mono text-muted-foreground/50">({data.agent_model})</span>}
                   </span>
+                  <button
+                    onClick={onClose}
+                    className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline inline-flex items-center gap-0.5"
+                    title="Đóng drawer để xem danh sách Phiên Agent (tất cả sessions JSONL của agent này, gồm cả Claude + Gemini từ trước)"
+                  >
+                    <FileText className="h-3 w-3" />
+                    Xem tất cả sessions của agent →
+                  </button>
                   {data?.fullHistoryCount !== undefined && (
                     <>
                       <span className="text-muted-foreground/40">·</span>
@@ -369,14 +377,29 @@ export function CustomerChatDrawer({
         {/* ─── BODY ───────────────────────────────────────────── */}
         <div ref={scrollRef} className="flex-1 overflow-auto px-6 py-4">
           {!canQuery && !isLoading && (
-            <div className="py-16 text-center">
+            <div className="py-16 text-center max-w-md mx-auto">
               <CircleAlert className="h-10 w-10 mx-auto mb-3 text-muted-foreground/40" />
-              <p className="text-sm font-medium text-foreground/80">Thiếu thông tin để load chat</p>
-              <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
-                Hoạt động này không có <code className="bg-muted px-1 rounded">sender_id</code> hoặc{' '}
-                <code className="bg-muted px-1 rounded">channel_name</code> (ví dụ: follow-up scheduled, manual send).
-                Click vào row của tin nhắn inbound/outbound để xem chat history.
-              </p>
+              <p className="text-sm font-medium text-foreground/80">Row này không map được về một cuộc chat cụ thể</p>
+              <div className="text-xs text-muted-foreground mt-2 space-y-2">
+                <p>
+                  Hoạt động này thiếu <code className="bg-muted px-1 rounded">sender_id</code> hoặc{' '}
+                  <code className="bg-muted px-1 rounded">channel_name</code> — thường xảy ra với:
+                </p>
+                <ul className="text-left list-disc pl-4 space-y-0.5">
+                  <li>Follow-up queue (tin gửi tự động theo schedule)</li>
+                  <li>Outbound gửi thủ công qua dashboard</li>
+                  <li>Rows hệ thống (skipped bởi policy/quota)</li>
+                </ul>
+                {fallbackCustomerName && (
+                  <p className="pt-2 border-t border-border/50">
+                    💡 Muốn xem chat của <span className="font-semibold text-foreground/80">{fallbackCustomerName}</span>?
+                    Scroll xuống bảng Hoạt động, click vào 1 row có cột "Hội thoại" là tên khách.
+                  </p>
+                )}
+              </div>
+              <Button size="sm" variant="outline" onClick={onClose} className="mt-4">
+                Đóng & xem danh sách hoạt động
+              </Button>
             </div>
           )}
 
@@ -586,10 +609,11 @@ function ChatBubble({
           </div>
         )}
 
-        {/* Drill-down to session log — only when message has agent_session_id tracking.
-            Old messages (pre-tracking) don't have metadata.agent_session_id, so the
-            session log would fall back to the newest session which is misleading.
-            Hide the button instead of showing wrong data. */}
+        {/* Drill-down only when message has agent_session_id tracking.
+            Per-message session_id tracking lands in v2 (writer-side patch of
+            consumer.ts + router.ts). Until then, old messages have no
+            precise session link — use header "Xem session logs" button
+            to browse all sessions of this agent. */}
         {!isCustomer && onOpenSessionLog && message.metadata?.agent_session_id && (
           <button
             onClick={() => onOpenSessionLog(message.metadata?.agent_session_id || null)}
@@ -599,16 +623,6 @@ function ChatBubble({
             <FileText className="h-2.5 w-2.5" />
             Xem session log
           </button>
-        )}
-        {/* Indicator when tracking is missing (old message) */}
-        {!isCustomer && !message.metadata?.agent_session_id && (
-          <div
-            className="mt-1 text-[10px] text-muted-foreground/40 inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity cursor-help"
-            title="Tin nhắn này không có tracking agent_session_id (v2 sẽ fix writer). Xem agent hiện tại qua menu Phiên Agent."
-          >
-            <FileText className="h-2.5 w-2.5" />
-            Không có session log
-          </div>
         )}
       </div>
     </div>
