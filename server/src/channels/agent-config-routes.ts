@@ -5,6 +5,8 @@
 import { Router } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { mkdtempSync } from 'fs';
 import { supabase } from './zalo-personal/supabase.js';
 import * as AgentRouter from './router.js';
 import type { AgentConfig } from './types.js';
@@ -85,7 +87,7 @@ router.get('/', async (_req, res) => {
  * List all agent sessions (joined with paperclip_agents for display_name/avatar).
  */
 router.get('/sessions', async (_req, res) => {
-  const { data: sessions, error } = await supabase
+  const { data: dbSessions, error } = await supabase
     .from('agent_sessions')
     .select('*')
     .order('started_at', { ascending: false });
@@ -94,7 +96,126 @@ router.get('/sessions', async (_req, res) => {
     return res.status(500).json({ error: error.message });
   }
 
-  if (!sessions || sessions.length === 0) {
+  // ALSO scan disk for historical JSONL files that aren't in DB. Older sessions
+  // (from when an agent was spawned with cwd=agents/<slug>) live in dedicated
+  // project dirs like `*-agents-<slug>/`. Without this scan, those sessions are
+  // invisible in the UI even though their logs are intact on disk.
+  const dbSessionIds = new Set((dbSessions || []).map((s: any) => s.session_id).filter(Boolean));
+  const projectsRoot = path.resolve(os.homedir(), '.claude', 'projects');
+  const diskSessions: any[] = [];
+
+  if (fs.existsSync(projectsRoot)) {
+    const allDirs = fs.readdirSync(projectsRoot).filter((d) => {
+      try { return fs.statSync(path.join(projectsRoot, d)).isDirectory(); } catch { return false; }
+    });
+
+    // Convention-driven: any dir matching `-agents-<slug>` is owned by that agent.
+    // This is safe — it avoids scanning the shared main project dir where
+    // user's own Claude Code sessions live.
+    for (const dir of allDirs) {
+      const match = dir.match(/-agents-([a-z0-9-]+)$/);
+      if (!match) continue;
+      const agentSlug = match[1];
+      const fullDir = path.join(projectsRoot, dir);
+      let files: string[] = [];
+      try {
+        files = fs.readdirSync(fullDir).filter((f) => f.endsWith('.jsonl'));
+      } catch { continue; }
+
+      for (const file of files) {
+        const sessionId = file.replace(/\.jsonl$/, '');
+        if (dbSessionIds.has(sessionId)) continue; // DB row already covers it
+        let mtimeMs = 0; let birthtimeMs = 0;
+        try {
+          const st = fs.statSync(path.join(fullDir, file));
+          mtimeMs = st.mtimeMs;
+          birthtimeMs = st.birthtimeMs || st.mtimeMs;
+        } catch { continue; }
+        diskSessions.push({
+          id: sessionId,
+          agent_slug: agentSlug,
+          session_id: sessionId,
+          status: 'stopped',
+          started_at: new Date(birthtimeMs).toISOString(),
+          last_activity_at: new Date(mtimeMs).toISOString(),
+          terminal_type: 'disk-only',
+          source: 'disk',
+          total_input_tokens: null,
+          total_output_tokens: null,
+          total_cost_usd: null,
+          total_requests: null,
+          last_duration_ms: null,
+        });
+      }
+    }
+  }
+
+  // Also scan Gemini CLI disk sessions at ~/.gemini/tmp/*/chats/session-*-<short8>.json.
+  // These don't follow Claude's `-agents-<slug>` dir convention, so we must match
+  // by filename short8 ↔ DB session_id short8 to figure out which agent owns them.
+  const geminiRoot = path.resolve(os.homedir(), '.gemini', 'tmp');
+  if (fs.existsSync(geminiRoot)) {
+    // Build lookup: DB short8 → agent_slug (for Gemini sessions already tracked in DB)
+    const short8ToSlug = new Map<string, string>();
+    for (const s of (dbSessions || [])) {
+      const sid = (s as any).session_id;
+      if (sid) short8ToSlug.set(String(sid).substring(0, 8), (s as any).agent_slug);
+    }
+    const projectDirs = fs.readdirSync(geminiRoot).filter((d) => {
+      try { return fs.statSync(path.join(geminiRoot, d)).isDirectory(); } catch { return false; }
+    });
+    for (const proj of projectDirs) {
+      const chatsDir = path.join(geminiRoot, proj, 'chats');
+      if (!fs.existsSync(chatsDir)) continue;
+      let files: string[] = [];
+      try { files = fs.readdirSync(chatsDir).filter((f) => f.startsWith('session-') && f.endsWith('.json')); } catch { continue; }
+      for (const file of files) {
+        // Filename: session-2026-04-15T15-33-d3caad11.json → short8 = "d3caad11"
+        const m = file.match(/-([a-f0-9]{8})\.json$/);
+        if (!m) continue;
+        const short8 = m[1];
+        // Already tracked in DB — don't duplicate
+        if (short8ToSlug.has(short8)) continue;
+        // Try to read sessionId from file content for full UUID
+        let fullSessionId = short8;
+        try {
+          const raw = fs.readFileSync(path.join(chatsDir, file), 'utf-8');
+          const doc = JSON.parse(raw);
+          if (doc.sessionId) fullSessionId = doc.sessionId;
+        } catch { /* fall back to short8 */ }
+        let mtimeMs = 0; let birthtimeMs = 0;
+        try {
+          const st = fs.statSync(path.join(chatsDir, file));
+          mtimeMs = st.mtimeMs;
+          birthtimeMs = st.birthtimeMs || st.mtimeMs;
+        } catch { continue; }
+        diskSessions.push({
+          id: fullSessionId,
+          agent_slug: 'unknown-gemini',  // Cannot infer slug from file alone
+          session_id: fullSessionId,
+          status: 'stopped',
+          started_at: new Date(birthtimeMs).toISOString(),
+          last_activity_at: new Date(mtimeMs).toISOString(),
+          terminal_type: 'gemini-disk',
+          source: 'gemini-disk',
+          total_input_tokens: null,
+          total_output_tokens: null,
+          total_cost_usd: null,
+          total_requests: null,
+          last_duration_ms: null,
+        });
+      }
+    }
+  }
+
+  const sessions = [...(dbSessions || []), ...diskSessions]
+    .sort((a: any, b: any) => {
+      const ta = new Date(a.started_at || 0).getTime();
+      const tb = new Date(b.started_at || 0).getTime();
+      return tb - ta;
+    });
+
+  if (sessions.length === 0) {
     return res.json([]);
   }
 
@@ -192,6 +313,327 @@ router.post('/sessions/:slug/clear', async (req, res) => {
 });
 
 /**
+ * GET /api/channels/agent-configs/sessions/:slug/log
+ * Returns parsed/pretty events from the agent's Claude CLI session JSONL file.
+ *
+ * Flow:
+ *   1. Look up the agent's session_id from agent_sessions table
+ *   2. Find the matching JSONL file under ~/.claude/projects/<encoded-project>/
+ *   3. Parse last N lines and return as structured events
+ *
+ * Query params:
+ *   ?limit=100   How many events to return (default 100, max 500)
+ *   ?session_id=<uuid>  Specific session to load (else uses active one from DB)
+ */
+router.get('/sessions/:slug/log', async (req, res) => {
+  let { slug } = req.params;
+  const limitRaw = parseInt(String(req.query.limit || '100'), 10);
+  const limit = Math.max(1, Math.min(500, isNaN(limitRaw) ? 100 : limitRaw));
+  const explicitSessionId = typeof req.query.session_id === 'string' ? req.query.session_id : null;
+
+  try {
+    // Resolve URL slug → paperclip_agents.slug (same logic as activity endpoint)
+    const { data: paCheck } = await supabase.from('paperclip_agents').select('slug').eq('slug', slug).maybeSingle();
+    if (!paCheck) {
+      const { data: agentRow } = await supabase.from('agents').select('slug').eq('slug', slug).maybeSingle();
+      if (agentRow?.slug) {
+        slug = agentRow.slug;
+      } else {
+        const { data: allPa } = await supabase.from('paperclip_agents').select('slug, display_name');
+        const match = (allPa || []).find((pa: any) => {
+          const derived = (pa.display_name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+          return derived === slug;
+        });
+        if (match) slug = match.slug;
+      }
+    }
+
+    // Resolve session_id
+    let sessionId = explicitSessionId;
+    if (!sessionId) {
+      const { data: sessRow } = await supabase
+        .from('agent_sessions')
+        .select('session_id, started_at, status')
+        .eq('agent_slug', slug)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (sessRow?.session_id) {
+        sessionId = sessRow.session_id;
+      }
+    }
+
+    // Sessions may be stored in TWO different places depending on provider:
+    //   1. Claude CLI: ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl (line-per-event)
+    //   2. Gemini CLI: ~/.gemini/tmp/<project>/chats/session-<ISO>-<short8>.json (single JSON object)
+    // We resolve the file by trying Claude first, then Gemini (matching first 8 chars
+    // of the UUID to the filename suffix).
+    const claudeRoot = path.resolve(os.homedir(), '.claude', 'projects');
+    const geminiRoot = path.resolve(os.homedir(), '.gemini', 'tmp');
+
+    // Helper: find Claude JSONL by exact sessionId across all project dirs
+    const findClaudeJsonl = (sid: string): string | null => {
+      if (!fs.existsSync(claudeRoot)) return null;
+      const dirs = fs.readdirSync(claudeRoot).filter((d) => {
+        try { return fs.statSync(path.join(claudeRoot, d)).isDirectory(); } catch { return false; }
+      });
+      for (const dir of dirs) {
+        const candidate = path.join(claudeRoot, dir, `${sid}.jsonl`);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    // Helper: find Gemini JSON by matching short8 suffix in any project's chats dir
+    const findGeminiJson = (sid: string): string | null => {
+      if (!fs.existsSync(geminiRoot)) return null;
+      const short8 = sid.substring(0, 8);
+      const projectDirs = fs.readdirSync(geminiRoot).filter((d) => {
+        try { return fs.statSync(path.join(geminiRoot, d)).isDirectory(); } catch { return false; }
+      });
+      for (const proj of projectDirs) {
+        const chatsDir = path.join(geminiRoot, proj, 'chats');
+        if (!fs.existsSync(chatsDir)) continue;
+        let files: string[] = [];
+        try { files = fs.readdirSync(chatsDir); } catch { continue; }
+        const hit = files.find((f) => f.endsWith(`-${short8}.json`));
+        if (hit) return path.join(chatsDir, hit);
+      }
+      return null;
+    };
+
+    // Helper: newest Claude JSONL for agent (disk convention `-agents-<slug>`)
+    const findNewestClaudeForSlug = (targetSlug: string): { file: string; sessionId: string } | null => {
+      if (!fs.existsSync(claudeRoot)) return null;
+      const allDirs = fs.readdirSync(claudeRoot).filter((d) => {
+        try { return fs.statSync(path.join(claudeRoot, d)).isDirectory(); } catch { return false; }
+      });
+      const agentDirs = allDirs.filter((d) => d.endsWith(`-agents-${targetSlug}`));
+      let newest: { file: string; sessionId: string; mtime: number } | null = null;
+      for (const dir of agentDirs) {
+        const fullDir = path.join(claudeRoot, dir);
+        let files: string[] = [];
+        try { files = fs.readdirSync(fullDir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+        for (const f of files) {
+          try {
+            const mtime = fs.statSync(path.join(fullDir, f)).mtimeMs;
+            if (!newest || mtime > newest.mtime) {
+              newest = { file: path.join(fullDir, f), sessionId: f.replace(/\.jsonl$/, ''), mtime };
+            }
+          } catch { /* skip */ }
+        }
+      }
+      return newest ? { file: newest.file, sessionId: newest.sessionId } : null;
+    };
+
+    let targetFile: string | null = null;
+    let fileKind: 'claude-jsonl' | 'gemini-json' | null = null;
+
+    if (sessionId) {
+      // Try Claude JSONL first, then Gemini JSON for this exact sessionId
+      targetFile = findClaudeJsonl(sessionId);
+      if (targetFile) fileKind = 'claude-jsonl';
+      if (!targetFile) {
+        targetFile = findGeminiJson(sessionId);
+        if (targetFile) fileKind = 'gemini-json';
+      }
+      if (!targetFile) {
+        return res.json({
+          slug,
+          sessionId,
+          events: [],
+          error: `Session ${sessionId.substring(0, 8)}… not found in Claude or Gemini dirs. DB row may be stale or provider logs differently.`,
+        });
+      }
+    } else {
+      // No DB session → try newest Claude disk session (Gemini doesn't follow disk convention)
+      const diskHit = findNewestClaudeForSlug(slug);
+      if (diskHit) {
+        targetFile = diskHit.file;
+        sessionId = diskHit.sessionId;
+        fileKind = 'claude-jsonl';
+      } else {
+        return res.json({
+          slug,
+          sessionId: null,
+          events: [],
+          error: 'No session found for agent (no DB row and no JSONL files on disk).',
+        });
+      }
+    }
+
+    // Parse based on file kind
+    const events: any[] = [];
+    let totalLines = 0;
+    let returnedLines = 0;
+
+    if (fileKind === 'claude-jsonl') {
+      const raw = fs.readFileSync(targetFile, 'utf-8');
+      const allLines = raw.split('\n').filter((l) => l.trim());
+      const lines = allLines.slice(-limit);
+      totalLines = allLines.length;
+      returnedLines = lines.length;
+      for (const line of lines) {
+        try {
+          const d = JSON.parse(line);
+          const event = extractEvent(d);
+          if (event) events.push(event);
+        } catch { /* skip */ }
+      }
+    } else if (fileKind === 'gemini-json') {
+      try {
+        const raw = fs.readFileSync(targetFile, 'utf-8');
+        const doc = JSON.parse(raw);
+        const messages = Array.isArray(doc.messages) ? doc.messages : [];
+        totalLines = messages.length;
+        const sliced = messages.slice(-limit);
+        returnedLines = sliced.length;
+        for (const m of sliced) {
+          const event = geminiMessageToEvent(m);
+          if (event) events.push(event);
+        }
+      } catch (err: any) {
+        return res.json({ slug, sessionId, events: [], error: `Gemini parse failed: ${err.message}` });
+      }
+    }
+
+    res.json({
+      slug,
+      sessionId,
+      file: path.basename(targetFile),
+      fileKind,
+      totalLines,
+      returnedLines,
+      events,
+    });
+  } catch (err: any) {
+    console.error(`[AgentLog] Error for ${slug}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Extract a structured event from 1 JSONL record — compatible with
+ * ~/claude-log-pretty.py parser (same fields: kind, text, tool name, hook, etc.)
+ */
+function extractEvent(d: any): any | null {
+  const t = d.type;
+  const msg = d.message && typeof d.message === 'object' ? d.message : {};
+
+  if (t === 'user') {
+    const content = msg.content ?? d.content ?? '';
+    const parsed = extractContentBlocks(content);
+    const text = parsed.text;
+    const result = parsed.result;
+    if (result) return { kind: 'result', text: result, ts: d.timestamp };
+    if (text) return { kind: 'user', text, ts: d.timestamp };
+    return null;
+  }
+
+  if (t === 'assistant') {
+    const parsed = extractContentBlocks(msg.content);
+    return {
+      kind: 'assistant',
+      thinking: parsed.thinking,
+      thinkingRedacted: parsed.thinkingRedacted,
+      text: parsed.text,
+      tools: parsed.tools,
+      ts: d.timestamp,
+    };
+  }
+
+  if (t === 'attachment') {
+    const att = d.attachment;
+    if (att && typeof att === 'object' && String(att.type || '').includes('hook')) {
+      return {
+        kind: 'hook',
+        name: att.hookName || '?',
+        event: att.hookEvent || '',
+        exitCode: att.exitCode || 0,
+        durationMs: att.durationMs || 0,
+        command: att.command || '',
+        stdout: att.stdout || '',
+        ts: d.timestamp,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Convert a single Gemini CLI session message to a LogEvent.
+ * Gemini format: { id, timestamp, type: 'user'|'gemini', content: string | [{text}] }
+ * No tool_use/thinking blocks in this format — Gemini CLI stores them elsewhere.
+ */
+function geminiMessageToEvent(m: any): any | null {
+  if (!m || typeof m !== 'object') return null;
+  const ts = m.timestamp;
+  const content = m.content;
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content.map((c: any) => (c && typeof c === 'object' && c.text) || '').join('');
+  } else if (content && typeof content === 'object' && content.text) {
+    text = content.text;
+  }
+  if (!text) return null;
+  if (m.type === 'user') return { kind: 'user', text, ts };
+  if (m.type === 'gemini' || m.type === 'model' || m.type === 'assistant') {
+    return { kind: 'assistant', text, ts };
+  }
+  return null;
+}
+
+function extractContentBlocks(content: any): {
+  text: string;
+  thinking: string;
+  thinkingRedacted: boolean;
+  tools: any[];
+  result: string;
+} {
+  const out = { text: '', thinking: '', thinkingRedacted: false, tools: [] as any[], result: '' };
+  if (content == null) return out;
+  if (typeof content === 'string') {
+    out.text = content;
+    return out;
+  }
+  if (!Array.isArray(content)) {
+    out.text = String(content);
+    return out;
+  }
+  const textParts: string[] = [];
+  const thinkParts: string[] = [];
+  const resultParts: string[] = [];
+  for (const b of content) {
+    if (!b || typeof b !== 'object') continue;
+    const bt = b.type;
+    if (bt === 'text' && b.text) textParts.push(b.text);
+    else if (bt === 'thinking') {
+      if (b.thinking) thinkParts.push(b.thinking);
+      else if (b.signature) out.thinkingRedacted = true;
+    } else if (bt === 'redacted_thinking') {
+      out.thinkingRedacted = true;
+    } else if (bt === 'tool_use') {
+      out.tools.push({ name: b.name || '?', input: b.input || {} });
+    } else if (bt === 'tool_result') {
+      let r = b.content || '';
+      if (Array.isArray(r)) {
+        r = r.map((x: any) => (typeof x === 'object' && x?.text) || '').join(' ');
+      }
+      resultParts.push(String(r));
+    } else if (bt === 'image') {
+      textParts.push('[IMAGE]');
+    }
+  }
+  out.text = textParts.join(' ');
+  out.thinking = thinkParts.join('\n');
+  out.result = resultParts.join('\n');
+  return out;
+}
+
+/**
  * GET /api/channels/agent-configs/sessions/activity
  * Recent consumer activity — messages handled by agents.
  */
@@ -200,7 +642,7 @@ router.get('/sessions/activity', async (_req, res) => {
   const [{ data: handled }, { data: sent }] = await Promise.all([
     supabase
       .from('channel_pending_messages')
-      .select('id, channel_name, thread_id, from_uid, sender_name, body, status, agent_slug, handled_by, handled_at, created_at')
+      .select('id, channel_name, thread_id, from_uid, sender_name, body, status, agent_slug, handled_by, handled_at, created_at, customer_id')
       .not('handled_by', 'is', null)
       .order('handled_at', { ascending: false })
       .limit(30),
@@ -211,6 +653,20 @@ router.get('/sessions/activity', async (_req, res) => {
       .order('created_at', { ascending: false })
       .limit(30),
   ]);
+
+  // Resolve customer names from crm_customers
+  const customerIds = new Set<string>();
+  for (const m of handled || []) if (m.customer_id) customerIds.add(m.customer_id);
+  const customerNameMap = new Map<string, string>();
+  if (customerIds.size > 0) {
+    const { data: customers } = await supabase
+      .from('crm_customers')
+      .select('id, display_name')
+      .in('id', [...customerIds]);
+    for (const c of customers || []) {
+      if (c.display_name) customerNameMap.set(c.id, c.display_name);
+    }
+  }
 
   // Fetch channel display names for mapping
   const allChannelNames = new Set<string>();
@@ -238,6 +694,7 @@ router.get('/sessions/activity', async (_req, res) => {
       thread_id: m.thread_id,
       sender_id: m.from_uid,
       sender_name: m.sender_name,
+      customer_name: m.customer_id ? customerNameMap.get(m.customer_id) || null : null,
       body: m.body,
       status: m.status === 'handled' ? 'done' : m.status,
       handled_by: m.agent_slug || (m.handled_by !== 'consumer' ? m.handled_by : null) || 'skipped',
@@ -262,6 +719,299 @@ router.get('/sessions/activity', async (_req, res) => {
    .slice(0, 50);
 
   res.json(activity);
+});
+
+// ─── Agent-specific Activity Log ────────────────────────────────────
+
+/**
+ * GET /api/channels/agent-configs/:slug/activity
+ * Activity log for a specific agent — inbound messages handled + outbound sent + follow-ups.
+ * Used by the "Nhật ký" tab in agent detail page.
+ */
+router.get('/:slug/activity', async (req, res) => {
+  let { slug } = req.params;
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+
+  // Resolve: URL key (e.g. "gi-m-c-i-u-h-nh") → paperclip_agents.slug ("ceo")
+  // channel tables use paperclip_agents.slug, but UI passes the URL-derived slug
+  const { data: paCheck } = await supabase.from('paperclip_agents').select('slug').eq('slug', slug).maybeSingle();
+  if (!paCheck) {
+    // Try matching via agents table: agents.slug often matches paperclip_agents.slug
+    // but URL key is derived from agent name, so look up by agents table slug first
+    const { data: agentRow } = await supabase.from('agents').select('slug').eq('slug', slug).maybeSingle();
+    if (agentRow?.slug) {
+      // agents.slug = paperclip_agents.slug for known agents
+      slug = agentRow.slug;
+    } else {
+      // Last resort: scan paperclip_agents for a display_name-derived match
+      const { data: allPa } = await supabase.from('paperclip_agents').select('slug, display_name');
+      const match = (allPa || []).find((pa: any) => {
+        const derived = (pa.display_name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        return derived === slug;
+      });
+      if (match) slug = match.slug;
+    }
+  }
+
+  const [{ data: handled }, { data: sent }, { data: followups }] = await Promise.all([
+    supabase
+      .from('channel_pending_messages')
+      .select('id, channel_name, thread_id, from_uid, sender_name, body, status, agent_slug, handled_by, handled_at, created_at, customer_id')
+      .eq('agent_slug', slug)
+      .not('handled_by', 'is', null)
+      .order('handled_at', { ascending: false })
+      .limit(limit),
+    supabase
+      .from('channel_sent_messages')
+      .select('id, channel_name, thread_id, to_uid, body, status, sent_by, created_at')
+      .eq('sent_by', slug)
+      .in('status', ['sent', 'failed', 'archived'])
+      .order('created_at', { ascending: false })
+      .limit(limit),
+    supabase
+      .from('follow_up_queue')
+      .select('id, customer_id, agent_slug, message, scheduled_at, status, created_at')
+      .eq('agent_slug', slug)
+      .order('created_at', { ascending: false })
+      .limit(50),
+  ]);
+
+  // Resolve customer + channel names
+  const customerIds = new Set<string>();
+  for (const m of handled || []) if (m.customer_id) customerIds.add(m.customer_id);
+  for (const f of followups || []) if (f.customer_id) customerIds.add(f.customer_id);
+  const customerMap = new Map<string, string>();
+  if (customerIds.size > 0) {
+    const { data: customers } = await supabase.from('crm_customers').select('id, display_name').in('id', [...customerIds]);
+    for (const c of customers || []) if (c.display_name) customerMap.set(c.id, c.display_name);
+  }
+
+  const channelNames = new Set<string>();
+  for (const m of handled || []) channelNames.add(m.channel_name);
+  for (const m of sent || []) channelNames.add(m.channel_name);
+  const channelMap = new Map<string, string>();
+  if (channelNames.size > 0) {
+    const { data: channels } = await supabase.from('channel_instances').select('name, display_name').in('name', [...channelNames]);
+    for (const ch of channels || []) if (ch.display_name) channelMap.set(ch.name, ch.display_name);
+  }
+
+  const activity = [
+    ...(handled || []).map((m: any) => ({
+      id: m.id,
+      kind: 'inbound' as const,
+      channel: channelMap.get(m.channel_name) || m.channel_name,
+      channel_raw: m.channel_name,
+      sender: m.sender_name || m.from_uid || '—',
+      customer_name: m.customer_id ? customerMap.get(m.customer_id) || null : null,
+      body: m.body,
+      preview: m.body?.substring(0, 150),
+      status: m.status === 'handled' ? 'done' : m.status,
+      ts: m.handled_at || m.created_at,
+    })),
+    ...(sent || []).map((m: any) => ({
+      id: m.id,
+      kind: 'outbound' as const,
+      channel: channelMap.get(m.channel_name) || m.channel_name,
+      channel_raw: m.channel_name,
+      sender: null,
+      customer_name: null,
+      body: m.body,
+      preview: m.body?.substring(0, 150),
+      status: m.status === 'sent' ? 'done' : m.status,
+      ts: m.created_at,
+    })),
+    ...(followups || []).map((f: any) => ({
+      id: f.id,
+      kind: 'follow-up' as const,
+      channel: null,
+      channel_raw: null,
+      sender: null,
+      customer_name: f.customer_id ? customerMap.get(f.customer_id) || null : null,
+      body: f.message,
+      preview: f.message?.substring(0, 150),
+      status: f.status,
+      ts: f.scheduled_at || f.created_at,
+    })),
+  ].sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+
+  res.json({ slug, total: activity.length, items: activity });
+});
+
+// ─── Per-Customer Chat History ──────────────────────────────────────
+
+/**
+ * GET /api/channels/agent-configs/:slug/chat-history
+ * Full chat history with a specific customer for this agent.
+ * Reads channel_sessions.history JSONB (already persisted by session.appendMessage).
+ *
+ * Query params:
+ *   - session_key (preferred — unique per customer×channel thread)
+ *   OR
+ *   - channel_name + sender_id (compose lookup)
+ *
+ *   Optional:
+ *   - search: substring filter on message content
+ *   - from / to: ISO date range filter on message timestamp
+ *
+ * Response: { slug, agent_display_name, channel, customer, totalMessages, messages: [...] }
+ */
+router.get('/:slug/chat-history', async (req, res) => {
+  let { slug } = req.params;
+  const session_key = (req.query.session_key as string | undefined)?.trim();
+  const channel_name = (req.query.channel_name as string | undefined)?.trim();
+  const sender_id = (req.query.sender_id as string | undefined)?.trim();
+  const search = (req.query.search as string | undefined)?.trim().toLowerCase();
+  const fromStr = req.query.from as string | undefined;
+  const toStr = req.query.to as string | undefined;
+
+  if (!session_key && !(channel_name && sender_id)) {
+    return res.status(400).json({ error: 'session_key OR (channel_name + sender_id) required', messages: [] });
+  }
+
+  // Resolve URL slug → paperclip_agents.slug (same as /:slug/activity)
+  let paRow: any = null;
+  const { data: paCheck } = await supabase
+    .from('paperclip_agents')
+    .select('slug, display_name, provider, model')
+    .eq('slug', slug)
+    .maybeSingle();
+  paRow = paCheck;
+  if (!paRow) {
+    const { data: agentRow } = await supabase.from('agents').select('slug').eq('slug', slug).maybeSingle();
+    if (agentRow?.slug) {
+      slug = agentRow.slug;
+      const { data } = await supabase
+        .from('paperclip_agents')
+        .select('slug, display_name, provider, model')
+        .eq('slug', slug)
+        .maybeSingle();
+      paRow = data;
+    } else {
+      const { data: allPa } = await supabase
+        .from('paperclip_agents')
+        .select('slug, display_name, provider, model');
+      const match = (allPa || []).find((pa: any) => {
+        const derived = (pa.display_name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        return derived === slug;
+      });
+      if (match) {
+        slug = match.slug;
+        paRow = match;
+      }
+    }
+  }
+  if (!paRow) {
+    return res.status(404).json({ error: 'Agent not found', messages: [] });
+  }
+
+  // Lookup session row
+  let q = supabase.from('channel_sessions').select('*').eq('agent_slug', slug);
+  if (session_key) {
+    q = q.eq('session_key', session_key);
+  } else {
+    q = q.eq('channel_name', channel_name!).eq('sender_id', sender_id!);
+  }
+  const { data: sessionRow, error: sessErr } = await q.maybeSingle();
+
+  if (sessErr) {
+    return res.status(500).json({ error: sessErr.message, messages: [] });
+  }
+  if (!sessionRow) {
+    return res.json({
+      slug,
+      agent_display_name: paRow.display_name,
+      agent_provider: paRow.provider,
+      agent_model: paRow.model,
+      session_key: session_key || null,
+      channel: null,
+      customer: null,
+      totalMessages: 0,
+      fullHistoryCount: 0,
+      messages: [],
+      error: 'No session found for this customer/channel pair',
+    });
+  }
+
+  // Join crm_customers if linked
+  let customerData: any = null;
+  if (sessionRow.customer_id) {
+    const { data: c } = await supabase
+      .from('crm_customers')
+      .select('id, display_name, status, lead_score, lead_temperature, total_orders, total_revenue, first_contact_at')
+      .eq('id', sessionRow.customer_id)
+      .maybeSingle();
+    customerData = c;
+  }
+
+  // Resolve channel display name + platform
+  let channelDisplayName: string | null = null;
+  let channelPlatform: string | null = null;
+  if (sessionRow.channel_name) {
+    const { data: chInst } = await supabase
+      .from('channel_instances')
+      .select('display_name, channel_type')
+      .eq('name', sessionRow.channel_name)
+      .maybeSingle();
+    channelDisplayName = chInst?.display_name || null;
+    channelPlatform = chInst?.channel_type || sessionRow.channel_name.split('-')[0] || null;
+  }
+
+  // Normalize + filter messages
+  let history: any[] = Array.isArray(sessionRow.history) ? sessionRow.history : [];
+  const fullHistoryCount = history.length;
+
+  if (search) {
+    history = history.filter((m: any) => typeof m.content === 'string' && m.content.toLowerCase().includes(search));
+  }
+  if (fromStr) {
+    const fromTs = new Date(fromStr).getTime();
+    if (Number.isFinite(fromTs)) {
+      history = history.filter((m: any) => new Date(m.timestamp || 0).getTime() >= fromTs);
+    }
+  }
+  if (toStr) {
+    const toTs = new Date(toStr).getTime();
+    if (Number.isFinite(toTs)) {
+      history = history.filter((m: any) => new Date(m.timestamp || 0).getTime() <= toTs);
+    }
+  }
+
+  const messages = history.map((m: any, idx: number) => ({
+    id: `${sessionRow.session_key}:${idx}`,
+    role: m.role === 'user' ? 'customer' : 'agent',
+    content: m.content || '',
+    senderName: m.senderName || (m.role === 'user' ? sessionRow.sender_name : paRow.display_name),
+    timestamp: m.timestamp || null,
+    metadata: m.metadata || null,
+  }));
+
+  return res.json({
+    slug,
+    agent_display_name: paRow.display_name,
+    agent_provider: paRow.provider,
+    agent_model: paRow.model,
+    session_key: sessionRow.session_key,
+    channel: {
+      name: sessionRow.channel_name,
+      display_name: channelDisplayName || sessionRow.channel_name,
+      platform: channelPlatform,
+    },
+    customer: {
+      customer_id: sessionRow.customer_id,
+      sender_id: sessionRow.sender_id,
+      sender_name: customerData?.display_name || sessionRow.sender_name || sessionRow.sender_id,
+      stage: customerData?.status || null,
+      lead_score: customerData?.lead_score ?? null,
+      lead_temperature: customerData?.lead_temperature ?? null,
+      total_orders: customerData?.total_orders ?? null,
+      total_revenue: customerData?.total_revenue ?? null,
+      first_contact_at: customerData?.first_contact_at || sessionRow.created_at,
+    },
+    totalMessages: messages.length,
+    fullHistoryCount,
+    lastMessageAt: sessionRow.last_message_at,
+    messages,
+  });
 });
 
 // ─── Single Agent CRUD (/:slug routes) ──────────────────────────────
@@ -720,15 +1470,45 @@ router.delete('/:slug', async (req, res) => {
 
 /**
  * POST /api/channels/agent-configs/:slug/test
- * Test an agent reply. Sends a message and returns the agent's response.
- * Body: { message: string }
+ * Test an agent reply with optional multimodal input (image/voice).
+ *
+ * Body:
+ *   message      string             — text prompt (can be empty if media provided)
+ *   media        MediaInput[]       — optional. Each: { base64 | url | path, mimeType?, filename? }
+ *   contentType  'text'|'image'|'voice'|'file'  — optional, hints to provider
+ *
+ * Notes:
+ *   - For Ollama gemma4 (omnimodal), images and audio both go in messages[].images[]
+ *   - Base64 inputs are written to a tmp file so resolveMediaToBase64() can reuse path
  */
+type TestMediaInput = {
+  base64?: string;
+  url?: string;
+  path?: string;
+  mimeType?: string;
+  filename?: string;
+};
+
 router.post('/:slug/test', async (req, res) => {
   const { slug } = req.params;
-  const { message } = req.body;
+  const { message, media, contentType } = req.body as {
+    message?: string;
+    media?: TestMediaInput[];
+    contentType?: 'text' | 'image' | 'voice' | 'file';
+  };
 
-  if (!message) {
-    return res.status(400).json({ error: 'message is required' });
+  // Training Room: orchestrator passes a stable session id via header so the
+  // agent's conversation history persists across turns. Without this every
+  // turn would get a fresh sessionKey based on Date.now() and the agent would
+  // forget what the customer said in the previous turn (the "agent keeps
+  // asking the same question" bug).
+  const trainingSessionId = req.headers['x-training-session-id'] as string | undefined;
+
+  const hasText = typeof message === 'string' && message.trim().length > 0;
+  const hasMedia = Array.isArray(media) && media.length > 0;
+
+  if (!hasText && !hasMedia) {
+    return res.status(400).json({ error: 'message or media is required' });
   }
 
   // Load agent config
@@ -743,16 +1523,87 @@ router.post('/:slug/test', async (req, res) => {
   }
 
   const startTime = Date.now();
+  const tmpFiles: string[] = [];
 
   try {
-    const sessionKey = `test:${slug}:${Date.now()}`;
+    // Materialize base64 media to tmp files so router resolveMediaToBase64 can read by path
+    const resolvedMedia: Array<{ url?: string; path?: string; mimeType: string; filename?: string }> = [];
+    if (hasMedia) {
+      const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'pc-agent-test-'));
+      for (let i = 0; i < media!.length; i++) {
+        const m = media![i];
+        if (m.base64) {
+          const ext = (m.mimeType || '').includes('audio')
+            ? '.wav'
+            : (m.mimeType || '').includes('png')
+              ? '.png'
+              : (m.mimeType || '').includes('jpeg') || (m.mimeType || '').includes('jpg')
+                ? '.jpg'
+                : '.bin';
+          const fp = path.join(tmpDir, `media_${i}${ext}`);
+          fs.writeFileSync(fp, Buffer.from(m.base64, 'base64'));
+          tmpFiles.push(fp);
+          resolvedMedia.push({
+            path: fp,
+            mimeType: m.mimeType || 'application/octet-stream',
+            filename: m.filename,
+          });
+        } else if (m.url || m.path) {
+          resolvedMedia.push({
+            url: m.url,
+            path: m.path,
+            mimeType: m.mimeType || 'application/octet-stream',
+            filename: m.filename,
+          });
+        }
+      }
+    }
+
+    // Inject media into config via the same `_media` channel that runAgent uses
+    if (resolvedMedia.length > 0) {
+      (config as any)._media = resolvedMedia;
+      (config as any)._contentType = contentType || (resolvedMedia[0].mimeType.startsWith('audio') ? 'voice' : 'image');
+    }
+
+    // Use stable session key per training session, falling back to per-call
+    // ad-hoc key for non-training tests. This is what gives the agent
+    // continuity across turns ("remembering" what the customer said).
+    const sessionKey = trainingSessionId
+      ? `training:${slug}:${trainingSessionId}`
+      : `test:${slug}:${Date.now()}`;
+
     const reply = await AgentRouter.runAgentWithConfig(
       config as AgentConfig,
       sessionKey,
-      message,
+      message || '',
     );
 
     const duration = Date.now() - startTime;
+
+    // Surface outbound media (extracted from [[SEND_MEDIA: id]] markers) so the
+    // test UI can preview what would be attached to a real Zalo/FB reply.
+    const outboundMedia = (config as any)._outboundMedia as
+      | Array<{ url?: string; path?: string; mimeType: string; filename?: string; caption?: string }>
+      | undefined;
+
+    // Surface MSG_BREAK chunks so training room can render multi-message replies
+    // exactly like the live channels do (each chunk a separate bubble).
+    // Field name matches router.ts side-channel: `_messageChunks`.
+    const messageChunks = (config as any)._messageChunks as string[] | undefined;
+
+    // Surface escalation marker so training orchestrator can call handleEscalation()
+    // and create a real CRM ticket. Router parses [[ESCALATE: reason]] markers in
+    // post-processing and stores the parsed object on `config._escalation` BEFORE
+    // stripping the marker from finalContent — meaning the cleaned `reply` no
+    // longer contains the marker. Without surfacing here, orchestrator's regex
+    // match on replyText would always miss → no ticket created.
+    const escalation = (config as any)._escalation as
+      | {
+          reason: string;
+          priority: 'low' | 'normal' | 'high' | 'urgent';
+          summary?: string;
+        }
+      | undefined;
 
     res.json({
       reply,
@@ -760,6 +1611,11 @@ router.post('/:slug/test', async (req, res) => {
       provider: config.provider,
       model: config.model,
       duration_ms: duration,
+      media_count: resolvedMedia.length,
+      outbound_media: outboundMedia || [],
+      message_chunks: messageChunks || undefined,
+      escalation: escalation || undefined,
+      session_key: sessionKey,
     });
   } catch (err: any) {
     const duration = Date.now() - startTime;
@@ -767,6 +1623,11 @@ router.post('/:slug/test', async (req, res) => {
       error: err.message || 'Agent test failed',
       duration_ms: duration,
     });
+  } finally {
+    // Cleanup tmp files
+    for (const f of tmpFiles) {
+      try { fs.unlinkSync(f); } catch { /* ignore */ }
+    }
   }
 });
 
@@ -824,30 +1685,42 @@ router.get('/:slug/files/:fileName', (req, res) => {
 
 /**
  * PUT /api/channels/agent-configs/:slug/files/:fileName
- * Write/update an agent file
+ *
+ * DISABLED 2026-04-14 per Jennie (Telegram msg #2512).
+ *
+ * This endpoint let the channel-router UI overwrite any file under
+ * `agents/{slug}/` (SOUL.md, AGENTS.md, TOOLS.md, HEARTBEAT.md, ...).
+ * Those files are the HEARTBEAT adapter's SSOT (read on disk by
+ * `packages/adapters/{gemini,claude,...}-local/src/server/execute.ts`).
+ * Allowing the ROUTER to mutate them violated the separation declared in
+ * `paperclip-dashboard/architecture/ssot.md` (see BUG-033, BUG-040):
+ *
+ *   - Router SSOT   = `paperclip_agents` (DB)
+ *   - Heartbeat SSOT = `agents.adapter_config` (DB) + disk files under AGENTS_DIR
+ *
+ * A save from the router UI's Files tab trimmed
+ * `agents/community-engagement/AGENTS.md` from 8,670 B to 105 B, which in turn
+ * left the heartbeat adapter with no real instructions and the agent wandered
+ * blindly through the repo (verified in run 29093a35 on 2026-04-14).
+ *
+ * To edit heartbeat disk files use the HEARTBEAT config page
+ * (`/GEM/agents/:agentId/configuration` + its dedicated file editor), NOT the
+ * router's agent-configs page.
+ *
+ * GET /:slug/files/:fileName (the read endpoint above) remains available —
+ * reads are harmless and still power the "Loaded" badge on the Skills tab.
  */
-router.put('/:slug/files/:fileName', (req, res) => {
-  const { slug, fileName } = req.params;
-  const { content } = req.body;
-
-  if (!ALLOWED_FILES.includes(fileName)) {
-    return res.status(400).json({ error: `File không cho phép: ${fileName}` });
-  }
-
-  if (typeof content !== 'string') {
-    return res.status(400).json({ error: 'content là bắt buộc' });
-  }
-
-  const agentDir = path.join(AGENTS_DIR, slug);
-  if (!fs.existsSync(agentDir)) {
-    fs.mkdirSync(agentDir, { recursive: true });
-  }
-
-  const filePath = path.join(agentDir, fileName);
-  fs.writeFileSync(filePath, content, 'utf-8');
-
-  const stat = fs.statSync(filePath);
-  res.json({ name: fileName, missing: false, size: stat.size, updatedAt: stat.mtime.toISOString() });
+router.put('/:slug/files/:fileName', (_req, res) => {
+  return res.status(410).json({
+    error:
+      'Router route cannot write heartbeat disk files. Use the heartbeat Configuration page ' +
+      '(/GEM/agents/:agentId/configuration) — see troubleshooting_tips.md BUG-040.',
+    ssot: {
+      router: 'paperclip_agents (DB)',
+      heartbeat_db: 'agents.adapter_config (DB)',
+      heartbeat_disk: 'agents/{slug}/*.md (read-only from router)',
+    },
+  });
 });
 
 export default router;
