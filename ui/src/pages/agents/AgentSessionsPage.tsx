@@ -13,6 +13,8 @@ import {
   Clock,
   AlertCircle,
   Square,
+  ChevronDown,
+  ChevronRight,
   Route,
   Ban,
   UserCog,
@@ -163,6 +165,36 @@ export function AgentSessionsPage() {
 
   // ── Hidden rows (UI-only, not destructive) ──
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenIds());
+
+  // ── Collapse whole sessions table ──
+  const [tableCollapsed, setTableCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("paperclip:sessionsTableCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleTable = useCallback(() => {
+    setTableCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("paperclip:sessionsTableCollapsed", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  // ── Expand individual rows (click anywhere in row) ──
+  const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(new Set());
+  const toggleRow = useCallback((id: string) => {
+    setExpandedRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const hideRow = useCallback((id: string) => {
     setHiddenIds((prev) => {
       const next = new Set(prev);
@@ -495,6 +527,26 @@ export function AgentSessionsPage() {
       {/* Sessions Table */}
       {!isLoading && filtered.length > 0 && (
         <div className="border rounded-lg overflow-hidden">
+          <button
+            type="button"
+            onClick={toggleTable}
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-muted/40 hover:bg-muted/60 transition-colors border-b text-left"
+          >
+            <div className="flex items-center gap-2">
+              {tableCollapsed ? (
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              )}
+              <span className="text-xs font-semibold">
+                Danh sách phiên ({filtered.length})
+              </span>
+            </div>
+            <span className="text-[10px] text-muted-foreground">
+              {tableCollapsed ? "Hiện bảng" : "Ẩn bảng"}
+            </span>
+          </button>
+          {!tableCollapsed && (
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col className="w-[24%]" />{/* Agent */}
@@ -531,6 +583,8 @@ export function AgentSessionsPage() {
                 <SessionRow
                   key={session.id}
                   session={session}
+                  expanded={expandedRowIds.has(session.id)}
+                  onToggle={() => toggleRow(session.id)}
                   onHide={() => hideRow(session.id)}
                   onViewConfig={() =>
                     navigate(`/agents-config/${session.agent_slug}/edit`)
@@ -540,6 +594,7 @@ export function AgentSessionsPage() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
       )}
 
@@ -1104,20 +1159,38 @@ export function AgentSessionsPage() {
 
 function SessionRow({
   session,
+  expanded,
+  onToggle,
   onHide,
   onViewConfig,
   pushToast,
 }: {
   session: AgentSession;
+  expanded: boolean;
+  onToggle: () => void;
   onHide: () => void;
   onViewConfig: () => void;
   pushToast: (t: any) => void;
 }) {
+  // Stop propagation on interactive children so row-click toggle doesn't fire
+  // when user clicks buttons, copy widgets, or badges inside the row.
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+
   return (
-    <tr className="border-b last:border-b-0 hover:bg-muted/30 transition-colors">
+    <>
+    <tr
+      onClick={onToggle}
+      className="border-b last:border-b-0 hover:bg-muted/30 transition-colors cursor-pointer"
+      title={expanded ? "Nhấn để thu gọn" : "Nhấn để mở rộng"}
+    >
       {/* Agent */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-2.5">
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          )}
           <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center shrink-0 text-sm">
             {session.avatar ||
               (session.display_name ?? session.agent_slug).charAt(0).toUpperCase()}
@@ -1134,7 +1207,7 @@ function SessionRow({
       </td>
 
       {/* Session ID + Channel */}
-      <td className="px-4 py-3">
+      <td className="px-4 py-3" onClick={stop}>
         <CopyableId value={session.session_id} />
         {(session as any).channels?.length > 0 && (
           <div className="flex gap-1 mt-1 flex-wrap">
@@ -1177,7 +1250,7 @@ function SessionRow({
       </td>
 
       {/* Actions */}
-      <td className="px-4 py-3 text-right">
+      <td className="px-4 py-3 text-right" onClick={stop}>
         <div className="flex items-center gap-1 justify-end flex-wrap">
           <Button
             variant="ghost"
@@ -1212,7 +1285,6 @@ function SessionRow({
                   tone: "success",
                   ttlMs: 4000,
                 });
-                onClear();
               } catch {
                 pushToast({
                   title: "Lỗi",
@@ -1280,5 +1352,81 @@ function SessionRow({
         </div>
       </td>
     </tr>
+    {expanded && (
+      <tr className="bg-muted/20 border-b last:border-b-0">
+        <td colSpan={6} className="px-6 py-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-xs">
+            <DetailField label="Agent slug" value={session.agent_slug} mono />
+            <DetailField
+              label="Session ID"
+              value={session.session_id}
+              mono
+              full
+            />
+            <DetailField
+              label="Model"
+              value={(session as any).model ?? "—"}
+              mono
+            />
+            <DetailField
+              label="Trạng thái"
+              value={statusLabel(session.status)}
+            />
+            <DetailField
+              label="Bắt đầu"
+              value={
+                session.started_at
+                  ? new Date(session.started_at).toLocaleString("vi-VN")
+                  : "—"
+              }
+            />
+            <DetailField
+              label="Hoạt động gần nhất"
+              value={
+                session.last_activity_at
+                  ? new Date(session.last_activity_at).toLocaleString("vi-VN")
+                  : session.last_poll_at
+                  ? new Date(session.last_poll_at).toLocaleString("vi-VN")
+                  : "—"
+              }
+            />
+            <DetailField
+              label="Số kênh"
+              value={`${(session as any).channels?.length ?? 0}`}
+            />
+            <DetailField
+              label="Display name"
+              value={session.display_name ?? "—"}
+            />
+          </div>
+        </td>
+      </tr>
+    )}
+    </>
+  );
+}
+
+function DetailField({
+  label,
+  value,
+  mono,
+  full,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  full?: boolean;
+}) {
+  return (
+    <div className={full ? "col-span-2 md:col-span-2" : ""}>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
+        {label}
+      </div>
+      <div
+        className={`${mono ? "font-mono" : ""} text-xs text-foreground break-all`}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
