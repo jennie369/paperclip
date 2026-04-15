@@ -10,11 +10,11 @@ export interface Channel {
   isAllowed(senderId: string): boolean;
 }
 
-export type ChannelType = 'facebook' | 'zalo_personal' | 'zalo_oa' | 'telegram';
+export type ChannelType = 'facebook' | 'zalo_personal' | 'zalo_oa' | 'telegram' | 'youtube';
 
 export type DmPolicy = 'open' | 'allowlist' | 'pairing' | 'disabled';
 export type GroupPolicy = 'open' | 'allowlist' | 'pairing' | 'disabled';
-export type PeerKind = 'direct' | 'group';
+export type PeerKind = 'direct' | 'group' | 'comment';
 export type ContentType = 'text' | 'image' | 'file' | 'voice' | 'sticker';
 export type MessageStatus = 'pending' | 'processing' | 'handled' | 'failed' | 'skipped';
 export type PairingStatus = 'pending' | 'approved' | 'rejected' | 'expired';
@@ -51,6 +51,28 @@ export interface MediaFile {
   mimeType: string;
   filename?: string;
   size?: number;
+  caption?: string;
+}
+
+/** Entry in agents/{slug}/media-library.json */
+export interface MediaLibraryItem {
+  id: string;
+  name: string;
+  type: 'image' | 'video' | 'pdf' | 'audio' | 'document' | 'file';
+  mimeType: string;
+  path?: string | null;
+  url?: string | null;
+  description: string;
+  tags?: string[];
+  language?: string;
+}
+
+export interface MediaLibrary {
+  agent_slug: string;
+  version: string;
+  description?: string;
+  items: MediaLibraryItem[];
+  instructions_for_agent?: string;
 }
 
 /** Row shape from channel_instances table */
@@ -138,6 +160,12 @@ export interface SessionMessage {
   content: string;
   timestamp: string;
   senderName?: string;
+  /** Optional per-message metadata. `agent_session_id` lets the Chat Drawer
+   *  drill-down to the exact JSONL session that generated the assistant turn. */
+  metadata?: {
+    agent_session_id?: string;
+    [k: string]: unknown;
+  };
 }
 
 /** Policy check result */
@@ -158,7 +186,7 @@ export interface QuotaResult {
 
 // ─── Agent Config (paperclip_agents table) ───
 
-export type AgentProvider = 'claude' | 'gemini' | 'openrouter' | 'ollama';
+export type AgentProvider = 'claude' | 'gemini' | 'openrouter' | 'ollama' | 'nvidia_nim';
 
 /** Row shape from paperclip_agents table */
 export interface AgentConfig {
@@ -210,9 +238,17 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     'meta-llama/llama-4-maverick',
   ],
   ollama: [
+    'gemma4:latest',
     'gemma4:e2b',
     'gemma4:e4b',
     'gemma4:26b',
     'gemma4:31b',
+  ],
+  nvidia_nim: [
+    'google/gemma-4-31b-it',
+    'google/gemma-3-27b-it',
+    'google/gemma-2-27b-it',
+    'google/gemma-2-9b-it',
+    'google/gemma-2-2b-it',
   ],
 };

@@ -7,17 +7,32 @@ import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, mkdi
 import { resolve as pathResolve, join as pathJoin } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
+import { spawnHidden } from '../spawn-hidden.js';
 
 const PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
 const SKILLS_STORE = pathResolve(PROJECT_ROOT, 'skills-store');
 import { supabase } from './zalo-personal/supabase.js';
-import type { InboundMessage, SessionMessage, AgentConfig } from './types.js';
+import type {
+  InboundMessage,
+  SessionMessage,
+  AgentConfig,
+  MediaFile,
+  MediaLibrary,
+} from './types.js';
+import {
+  type ToolExecutionContext,
+} from './agent-tools.js';
+import {
+  parseStageMarker,
+  loadPurchaseStage,
+  type PurchaseStage,
+} from './crm/purchase-stage-handler.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
 streamEvents.setMaxListeners(100);
 
-const AGENT_TIMEOUT_MS = 60_000; // 60 seconds
+const AGENT_TIMEOUT_MS = 300_000; // 300 seconds (5 min — Gemini CLI cold-start + large prompts)
 const DEFAULT_AGENT = 'customer-success';
 const FALLBACK_REPLY = 'Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau.';
 
@@ -183,13 +198,30 @@ export async function runAgent(
       (config as any)._customerContext = (originalMsg as any)._customerContext;
     }
 
+    // Attach media (image/voice/file) from inbound message — used by multimodal
+    // providers (Claude vision, Gemini). Providers resolve base64 on demand.
+    if (originalMsg?.media && originalMsg.media.length > 0) {
+      (config as any)._media = originalMsg.media;
+      (config as any)._contentType = originalMsg.contentType;
+    }
+
     // Load history from session if not provided
     const sessionHistory = history || await loadHistory(sessionKey, config.history_limit);
 
     const reply = await runAgentWithConfig(config, sessionKey, message, sessionHistory);
 
-    // Save history
-    await saveHistory(sessionKey, message, reply, config);
+    // Save history (single writer — stamps agent_session_id on each entry)
+    const senderNameForHist = (originalMsg as any)?.senderName || null;
+    await saveHistory(sessionKey, message, reply, config, senderNameForHist);
+
+    // Surface outbound media (extracted from [[SEND_MEDIA: id]] markers) back
+    // to the caller via the originalMsg side-channel so consumer.ts can attach
+    // it to the published OutboundMessage. This avoids changing runAgent's
+    // string return signature.
+    const outMedia = (config as any)._outboundMedia as MediaFile[] | undefined;
+    if (outMedia && outMedia.length > 0) {
+      (originalMsg as any)._outboundMedia = outMedia;
+    }
 
     return reply;
   } catch (err: any) {
@@ -209,7 +241,10 @@ export async function runAgentWithConfig(
   history?: SessionMessage[],
 ): Promise<string> {
   const customerContext = (config as any)._customerContext || null;
-  const systemPrompt = buildSystemPrompt(config, customerContext);
+  // Company context resolved either from the config override (set by SOP
+  // executor or channel consumer) or the single-tenant default GEMRAL.
+  const companyId = (config as any)._companyId || DEFAULT_COMPANY_ID;
+  const systemPrompt = await buildSystemPrompt(config, customerContext, companyId);
   const chatHistory = history || [];
 
   try {
@@ -217,13 +252,13 @@ export async function runAgentWithConfig(
 
     switch (config.provider) {
       case 'claude':
-        reply = await runViaClaude(config, systemPrompt, chatHistory, message);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, message, sessionKey);
         break;
       case 'gemini':
-        reply = await runViaGemini(config, systemPrompt, chatHistory, message);
+        reply = await runViaGemini(config, systemPrompt, chatHistory, message, sessionKey);
         break;
-      case 'ollama':
-        reply = await runViaOllama(config, systemPrompt, chatHistory, message);
+      case 'nvidia_nim':
+        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, message);
         break;
       case 'openrouter':
         reply = await runViaOpenRouter(config, systemPrompt, chatHistory, message);
@@ -298,6 +333,7 @@ async function runViaClaude(
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
+  sessionKey: string = '',
 ): Promise<string> {
   // 1. Check persistent session
   const sessionId = await getAgentSessionId(config.slug);
@@ -305,14 +341,19 @@ async function runViaClaude(
   // 2. Build skills dir (matches execute.ts — triggers Skills/Tools)
   const skillsDir = buildSkillsDirForChat();
 
+  // 2b. Load media library for this agent (provider-agnostic)
+  const mediaLib = loadMediaLibrary(config.slug);
+
   // 3. Write system prompt + customer context to temp file
   //    (matches execute.ts effectiveInstructionsFilePath)
   let instructionsFile: string | undefined;
   if (systemPrompt && !sessionId) {
-    // Only write instructions for NEW session (resume already has context)
+    // Only write instructions for NEW session (resume already has context).
+    // Append provider-agnostic override: native MCP tools + media markers +
+    // no-phone-number rule + no-tool-call-leak rule.
     const instructions = [
       systemPrompt,
-      '',
+      buildProviderOverride(config.slug, mediaLib),
       `\nThe above agent instructions apply to chat conversations on Zalo/Facebook.`,
       `Agent slug: ${config.slug}. Resolve relative paths from ${PROJECT_ROOT}.`,
     ].join('\n');
@@ -320,16 +361,19 @@ async function runViaClaude(
   }
 
   // 4. Build user prompt (message only — context is in instructions file)
+  // [Khách:] prefix is injected in BOTH new-session and resume paths so the
+  // AgentLogDrawer can always extract customer name + channel from JSONL turns.
+  const ctx = (config as any)._customerContext;
+  const contextLine = ctx?.name
+    ? `[Khách: ${ctx.name} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
+    : '';
   let userPrompt: string;
   if (!sessionId) {
-    // First message — instructions file has system prompt
-    userPrompt = buildFullPrompt(history, message);
+    // First message — instructions file has system prompt.
+    // Inject [Khách:] inside the message so it lands in the JSONL user turn.
+    userPrompt = buildFullPrompt(history, contextLine + message);
   } else {
     // Resume — only new message + brief context
-    const ctx = (config as any)._customerContext;
-    const contextLine = ctx
-      ? `[Khách: ${ctx.name || 'Chưa biết'} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
-      : '';
     userPrompt = `${contextLine}${message}`;
   }
 
@@ -385,9 +429,11 @@ async function runViaClaude(
   streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('claude', args, {
+    // spawnHidden — claude is .exe so spawns directly with windowsHide.
+    // Plain `shell: true + windowsHide: true` flashes a black console window
+    // on Windows because CREATE_NO_WINDOW doesn't always reach grandchildren.
+    const child = spawnHidden('claude', args, {
       cwd,
-      shell: true,
       env: {
         ...process.env,
         GEMRAL_SUPABASE_URL: process.env.GEMRAL_SUPABASE_URL || '',
@@ -395,6 +441,10 @@ async function runViaClaude(
         SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL || '',
         SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN || '',
         RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+        // Identity gate context for the spawned MCP server
+        PAPERCLIP_AGENT_SLUG: config.slug,
+        PAPERCLIP_SESSION_KEY: sessionKey,
+        PAPERCLIP_CHANNEL_NAME: (config as any)._customerContext?.channel_name || '',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -439,44 +489,54 @@ async function runViaClaude(
         return;
       }
 
-      // Parse stream-json output (multiple JSON lines, last has result + session_id)
+      // Parse stream-json output (Claude CLI JSONL format)
+      // Format: {type:"system"}, {type:"assistant", message:{content:[{type:"text",text:"..."}]}},
+      //         {type:"result", result:"...", session_id:"..."}, etc.
       let reply = '';
       let newSessionId: string | null = null;
+      const textChunks: string[] = [];
       try {
         const lines = stdout.trim().split('\n').filter(l => l.trim());
         for (const line of lines) {
           try {
             const parsed = JSON.parse(line);
-            if (parsed.type === 'result' || parsed.result) {
+            // Session ID from any line
+            if (parsed.session_id) newSessionId = parsed.session_id;
+
+            // Final result (legacy + new format)
+            if (parsed.type === 'result' && parsed.result) {
               if (typeof parsed.result === 'string') {
                 reply = parsed.result;
               } else if (Array.isArray(parsed.result)) {
                 reply = parsed.result.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n');
               }
-              newSessionId = parsed.session_id || null;
             }
+            // Assistant message with content blocks
+            if (parsed.type === 'assistant' && parsed.message?.content) {
+              const blocks = Array.isArray(parsed.message.content) ? parsed.message.content : [parsed.message.content];
+              for (const b of blocks) {
+                if (b.type === 'text' && b.text) textChunks.push(b.text);
+              }
+            }
+            // Content block delta (streaming)
             if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-              reply += parsed.delta.text;
+              textChunks.push(parsed.delta.text);
             }
-            if (parsed.type === 'message_stop' && parsed.session_id) {
-              newSessionId = parsed.session_id;
+            // Message delta with text
+            if (parsed.type === 'message' && parsed.role === 'assistant' && parsed.content) {
+              textChunks.push(parsed.content);
             }
           } catch { /* skip non-JSON lines */ }
         }
 
-        // Fallback: try parsing entire stdout as single JSON
+        // Use result if available, otherwise combine text chunks
+        if (!reply && textChunks.length > 0) {
+          reply = textChunks.join('');
+        }
+        // Last resort: if nothing parsed, DON'T return raw JSON — return error message
         if (!reply) {
-          try {
-            const fullParsed = JSON.parse(stdout.trim());
-            reply = typeof fullParsed.result === 'string'
-              ? fullParsed.result
-              : Array.isArray(fullParsed.result)
-                ? fullParsed.result.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-                : stdout.trim();
-            newSessionId = fullParsed.session_id || null;
-          } catch {
-            reply = stdout.trim();
-          }
+          console.warn(`[Router] Claude JSONL parse: no text found in ${lines.length} lines`);
+          reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
         }
 
         // Save session ID
@@ -484,17 +544,28 @@ async function runViaClaude(
           await saveAgentSession(config.slug, newSessionId);
         }
 
-        console.log(`[Router] ${config.slug}: reply ${reply.length} chars, session=${newSessionId?.substring(0, 8) || 'none'}`);
+        // Expose session_id via side-channel so saveHistory() can stamp it
+        // onto each history entry's metadata (enables per-message drill-down
+        // in the Chat Drawer → Session Picker panel).
+        (config as any)._agent_session_id = newSessionId || sessionId || null;
+
+        console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars, session=${newSessionId?.substring(0, 8) || 'none'}`);
+
+        // ── Provider-agnostic post-processing: scrub + parse media markers ──
+        reply = postProcessReply(reply, config, mediaLib);
 
         // Track usage via RPC
-        await supabase.rpc('increment_agent_usage', {
-          p_slug: config.slug,
-          p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
-        }).catch(() => {});
+        try {
+          await supabase.rpc('increment_agent_usage', {
+            p_slug: config.slug,
+            p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
+          });
+        } catch { /* ignore */ }
 
-      } catch {
-        console.warn('[Router] Parse failed, using raw output');
-        reply = stdout.trim();
+      } catch (parseErr) {
+        console.warn('[Router] Parse failed:', parseErr);
+        // NEVER return raw JSON to customer — return safe fallback
+        reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
       }
 
       streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
@@ -520,7 +591,34 @@ async function getAgentSessionId(slug: string): Promise<string | null> {
     .eq('agent_slug', slug)
     .in('status', ['running', 'idle'])
     .single();
-  return data?.session_id || null;
+  const sessionId = data?.session_id || null;
+  if (!sessionId) return null;
+
+  // Defensive check: verify JSONL file still exists on disk. Claude CLI's
+  // cleanupPeriodDays or a crashed spawn can leave the DB row pointing at a
+  // ghost session — `--resume` would then fail or silently spawn a new session.
+  // If missing: mark stopped and return null so caller creates a fresh session.
+  try {
+    const { homedir } = await import('node:os');
+    const projectsRoot = pathResolve(homedir(), '.claude', 'projects');
+    if (existsSync(projectsRoot)) {
+      const dirs = readdirSync(projectsRoot);
+      for (const dir of dirs) {
+        if (existsSync(pathJoin(projectsRoot, dir, `${sessionId}.jsonl`))) {
+          return sessionId;
+        }
+      }
+    }
+    console.warn(`[Router] Ghost session for ${slug}: ${String(sessionId).substring(0, 8)}… — archiving, will create fresh`);
+    await supabase.from('agent_sessions')
+      .update({ status: 'stopped' })
+      .eq('agent_slug', slug)
+      .eq('session_id', sessionId);
+    return null;
+  } catch (err: any) {
+    console.warn(`[Router] Ghost-session check failed for ${slug}: ${err.message} — returning ID anyway`);
+    return sessionId;
+  }
 }
 
 async function saveAgentSession(slug: string, sessionId: string): Promise<void> {
@@ -563,6 +661,7 @@ async function runViaGemini(
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
+  sessionKey: string = '',
 ): Promise<string> {
   // Model from UI Cấu hình Agent → paperclip_agents.model (SSOT)
   const model = config.model || 'gemini-2.5-flash';
@@ -570,30 +669,56 @@ async function runViaGemini(
   // Session
   const sessionId = await getAgentSessionId(config.slug);
 
-  // Build prompt: instructions + history + message
-  // Gemini Core merges instructions into --prompt (no --append-system-prompt-file)
-  const fullPrompt = systemPrompt
-    ? [systemPrompt, '', buildFullPrompt(history, message)].join('\n')
-    : buildFullPrompt(history, message);
+  // Load media library (provider-agnostic — same helper as Claude)
+  const mediaLib = loadMediaLibrary(config.slug);
 
-  // Build args — matches Gemini Core buildArgs() (line 323-336)
+  // Augment system prompt with provider-agnostic override block:
+  //  - native MCP tool use (no [[CALL:...]] marker leak)
+  //  - media library catalog + [[SEND_MEDIA: id]] instructions
+  //  - no-phone-number rule
+  const augmentedSystemPrompt = systemPrompt
+    ? [systemPrompt, buildProviderOverride(config.slug, mediaLib)].join('\n')
+    : buildProviderOverride(config.slug, mediaLib);
+
+  // Build full prompt (system + history + message)
+  // [Khách:] prefix injected so any JSONL log viewer can extract customer identity.
+  const ctx = (config as any)._customerContext;
+  const contextLine = ctx?.name
+    ? `[Khách: ${ctx.name} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
+    : '';
+  const messageWithCtx = contextLine + message;
+  const fullPrompt = augmentedSystemPrompt
+    ? [augmentedSystemPrompt, '', buildFullPrompt(history, messageWithCtx)].join('\n')
+    : buildFullPrompt(history, messageWithCtx);
+
+  // Gemini CLI: pipe prompt via stdin, use -p to signal non-interactive mode
+  // Can't use -p with long prompts (Windows 8K cmd limit)
+  // Can't use @file (Gemini treats it as workspace file reference)
+  // Solution: pipe via stdin — gemini reads stdin when -p receives stdin content
   const args: string[] = [
-    '--output-format', 'stream-json',
+    '-o', 'stream-json',                      // --output-format
+    '-m', model,                               // --model
+    '-y',                                      // --yolo (auto-approve all)
   ];
 
+  // Session resume
   if (sessionId) {
-    args.push('--resume', sessionId);
+    args.push('-r', sessionId);
     console.log(`[Router] Gemini resuming session ${sessionId.substring(0, 8)}...`);
   }
 
-  if (model) {
-    args.push('--model', model);
-    console.log(`[Router] Gemini model from DB: ${model}`);
-  }
+  // Gemini CLI: -p reads prompt from argument OR stdin
+  // For long prompts (>7K chars): write to temp file, cat via stdin
+  // This avoids Windows cmd length limit AND @file misinterpretation
+  const promptFile = pathJoin(PROJECT_ROOT, '.gemini', 'tmp', `prompt-${config.slug}-${Date.now()}.txt`);
+  mkdirSync(pathJoin(PROJECT_ROOT, '.gemini', 'tmp'), { recursive: true });
+  writeFileSync(promptFile, fullPrompt, 'utf-8');
+  (config as any)._promptFile = promptFile;
 
-  args.push('--approval-mode', 'yolo');
-  args.push('--sandbox=none');
-  args.push('--prompt', fullPrompt);
+  // Pipe prompt file content as stdin, -p "" triggers non-interactive mode
+  args.push('-p', '');
+
+  console.log(`[Router] Gemini ${config.slug}: model=${model}, prompt=${fullPrompt.length} chars`);
 
   // CWD = project root
   const cwd = PROJECT_ROOT;
@@ -602,12 +727,30 @@ async function runViaGemini(
   streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('gemini', args, {
+    // spawnHidden — gemini is .cmd shim, so spawnHidden invokes cmd.exe with
+    // /d /s /c explicitly + windowsHide: true. No black console flash.
+    const child = spawnHidden('gemini', args, {
       cwd,
-      shell: true,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        // Identity gate context for any MCP server the Gemini CLI may spawn
+        PAPERCLIP_AGENT_SLUG: config.slug,
+        PAPERCLIP_SESSION_KEY: sessionKey,
+        PAPERCLIP_CHANNEL_NAME: (config as any)._customerContext?.channel_name || '',
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+
+    // Pipe prompt content via stdin (Gemini -p "" reads from stdin)
+    const pf = (config as any)._promptFile;
+    if (pf && child.stdin) {
+      const promptContent = readFileSync(pf, 'utf-8');
+      child.stdin.write(promptContent);
+      child.stdin.end();
+    }
+
+    // Clean up temp file after process exits
+    if (pf) child.on('exit', () => { try { rmSync(pf, { force: true }); } catch {} });
 
     let stdout = '';
     let stderr = '';
@@ -640,36 +783,56 @@ async function runViaGemini(
       }
 
       // Parse stream-json output (Gemini JSONL format)
+      // Gemini stream-json emits: {type:"init", session_id}, {type:"message", role:"assistant", content, delta:true}, {type:"result"}
       let reply = '';
       let newSessionId: string | null = null;
+      const assistantChunks: string[] = [];
       try {
         const lines = stdout.trim().split('\n');
         for (const line of lines) {
           try {
             const parsed = JSON.parse(line);
-            if (parsed.result) {
-              reply = typeof parsed.result === 'string'
-                ? parsed.result
-                : Array.isArray(parsed.result)
-                  ? parsed.result.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-                  : String(parsed.result);
+            // Session ID from init
+            if (parsed.type === 'init' && parsed.session_id) newSessionId = parsed.session_id;
+            if (parsed.session_id && !newSessionId) newSessionId = parsed.session_id;
+            // Assistant message chunks (delta or full)
+            if (parsed.type === 'message' && parsed.role === 'assistant' && parsed.content) {
+              assistantChunks.push(parsed.content);
             }
-            if (parsed.session_id) newSessionId = parsed.session_id;
-            if (parsed.type === 'content' && parsed.text) reply += parsed.text;
+            // Final result (some versions)
+            if (parsed.type === 'result' && parsed.response) {
+              reply = parsed.response;
+            }
+            // Legacy format
+            if (parsed.result && typeof parsed.result === 'string') {
+              reply = parsed.result;
+            }
+            if (parsed.type === 'content' && parsed.text) assistantChunks.push(parsed.text);
           } catch { /* skip non-JSON lines */ }
         }
+        // Combine assistant chunks if no final reply
+        if (!reply && assistantChunks.length > 0) reply = assistantChunks.join('');
         if (!reply) reply = stdout.trim();
         if (newSessionId && !sessionId) {
           await saveAgentSession(config.slug, newSessionId);
         }
-        console.log(`[Router] Gemini ${config.slug}: reply ${reply.length} chars`);
+
+        // Expose session_id via side-channel (see runViaClaude for rationale).
+        (config as any)._agent_session_id = newSessionId || sessionId || null;
+
+        console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars`);
+
+        // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] markers
+        reply = postProcessReply(reply, config, mediaLib);
       } catch {
         reply = stdout.trim();
       }
 
-      await supabase.rpc('increment_agent_usage', {
-        p_slug: config.slug, p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
-      }).catch(() => {});
+      try {
+        await supabase.rpc('increment_agent_usage', {
+          p_slug: config.slug, p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
+        });
+      } catch { /* ignore usage tracking errors */ }
 
       streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
       resolve(reply);
@@ -751,49 +914,864 @@ async function runViaOpenRouter(
 }
 
 /**
- * Run via Ollama API (fetch).
- * Uses localhost:11434 by default.
+ * Resolve a MediaFile to base64 (with mime sniffing).
+ * Accepts either a remote URL or a local filesystem path.
+ * Caps payload at 20 MB to avoid OOM.
+ *
+ * Returns null if download/read fails — caller should fall back to text-only.
  */
-async function runViaOllama(
+async function resolveMediaToBase64(media: {
+  url?: string;
+  path?: string;
+  mimeType?: string;
+}): Promise<{ base64: string; mimeType: string } | null> {
+  const MAX_BYTES = 20 * 1024 * 1024;
+  try {
+    let buffer: Buffer | null = null;
+
+    if (media.url) {
+      const res = await fetch(media.url);
+      if (!res.ok) {
+        console.warn(`[Router/media] fetch ${media.url} → ${res.status}`);
+        return null;
+      }
+      const arr = await res.arrayBuffer();
+      if (arr.byteLength > MAX_BYTES) {
+        console.warn(`[Router/media] ${media.url} too large: ${arr.byteLength} bytes`);
+        return null;
+      }
+      buffer = Buffer.from(arr);
+    } else if (media.path && existsSync(media.path)) {
+      const data = readFileSync(media.path);
+      if (data.length > MAX_BYTES) {
+        console.warn(`[Router/media] ${media.path} too large: ${data.length} bytes`);
+        return null;
+      }
+      buffer = data;
+    }
+
+    if (!buffer) return null;
+    return {
+      base64: buffer.toString('base64'),
+      mimeType: media.mimeType || 'application/octet-stream',
+    };
+  } catch (err: any) {
+    console.warn(`[Router/media] resolve failed:`, err.message);
+    return null;
+  }
+}
+
+// ─── Training log injection (Sprint B4) ──────────────────────────────────────
+
+const trainingLogCache = new Map<string, { content: string; expiresAt: number }>();
+
+/**
+ * Load agents/{slug}/training-log.md and return the LAST N entries as a
+ * compact in-context-learning section for the system prompt.
+ *
+ * Each "entry" is delimited by `---` lines (appended by training-reviewer.ts).
+ * We keep only the latest 30 entries to avoid context bloat.
+ */
+function loadTrainingLogForPrompt(agentSlug: string): string {
+  const cached = trainingLogCache.get(agentSlug);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.content;
+  }
+
+  const logPath = pathResolve(PROJECT_ROOT, 'agents', agentSlug, 'training-log.md');
+  let content = '';
+
+  // Quality filter: skip entries where overall score is below threshold
+  // (default 30/100). These are usually infra-failure sessions where the
+  // agent never spoke — their lessons are about the infra, not the agent.
+  const QUALITY_THRESHOLD = Number(process.env.PAPERCLIP_TRAINING_LOG_MIN_SCORE || 30);
+  // Limit how many lessons to inject (avoid context bloat)
+  const MAX_INJECT = Number(process.env.PAPERCLIP_TRAINING_LOG_MAX_INJECT || 10);
+
+  if (existsSync(logPath)) {
+    try {
+      const raw = readFileSync(logPath, 'utf-8');
+      // Split by `---` separator (keep only blocks with `## ` session header)
+      const blocks = raw
+        .split(/^---$/m)
+        .map((b) => b.trim())
+        .filter((b) => b.length > 0 && /^##\s+\d{4}-/m.test(b));
+
+      // Quality filter: parse `**Overall score**: N/100` from each block
+      const scoreRe = /\*\*Overall score\*\*:\s*(\d+)\/100/i;
+      const qualityBlocks = blocks.filter((b) => {
+        const m = b.match(scoreRe);
+        if (!m) return true; // unknown score → keep (legacy entries)
+        return Number(m[1]) >= QUALITY_THRESHOLD;
+      });
+
+      // Sort by recency (last entries are most recent, append-only file)
+      const recent = qualityBlocks.slice(-MAX_INJECT);
+
+      if (recent.length > 0) {
+        content = [
+          '',
+          '═══ TRAINING FEEDBACK — Bài học từ các training round trước ═══',
+          '',
+          `Bạn đã được CEO + Opus 4.6 review qua các session trước. Dưới đây là`,
+          `${recent.length} bài học chất lượng (score ≥ ${QUALITY_THRESHOLD}/100) bạn PHẢI áp dụng:`,
+          '',
+          ...recent,
+          '',
+          '═══════════════════════════════════════════════════',
+        ].join('\n');
+      }
+
+      // Diagnostic: log how many were filtered (one-time per cache cycle)
+      const filtered = blocks.length - qualityBlocks.length;
+      if (filtered > 0) {
+        console.log(
+          `[Router/training-log] ${agentSlug}: filtered ${filtered}/${blocks.length} low-quality entries (score < ${QUALITY_THRESHOLD}), inject ${recent.length}`,
+        );
+      }
+    } catch (err: any) {
+      console.warn(`[Router/training-log] Failed to read ${logPath}: ${err.message}`);
+    }
+  }
+
+  trainingLogCache.set(agentSlug, { content, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS });
+  return content;
+}
+
+// ─── Granted skills loader (per-agent, from skills-store + skill_grants) ─────
+
+/**
+ * Cache loaded skill SKILL.md content by agent slug. TTL 60s.
+ * The cache value is the FULL prompt-ready string with all granted skills
+ * joined and headed by section markers.
+ */
+const grantedSkillsCache = new Map<string, { content: string; expiresAt: number }>();
+
+/**
+ * Load all skills granted to this agent from skill_grants table, then read
+ * each SKILL.md from skills-store/<name>/<version>.<minor>.<patch>/SKILL.md
+ * and concatenate into a single prompt-ready block.
+ *
+ * The version directory is resolved by listing the skill folder and picking
+ * the highest version directory (semver-sorted). This avoids hardcoding
+ * "1.0.0" so future skill upgrades flow through automatically.
+ *
+ * Returns empty string if agent has no grants or skills-store missing.
+ */
+async function loadGrantedSkillsForPrompt(agentSlug: string): Promise<string> {
+  const cached = grantedSkillsCache.get(agentSlug);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.content;
+  }
+
+  let content = '';
+  try {
+    // Query skill_grants joined with skills to get name + file_path
+    const { data: grants, error } = await supabase
+      .from('skill_grants')
+      .select('skill_id, skills:skill_id(name, display_name, file_path, current_version)')
+      .eq('grantee_type', 'agent')
+      .eq('grantee_id', agentSlug)
+      .eq('permission', 'read');
+
+    if (error || !grants || grants.length === 0) {
+      grantedSkillsCache.set(agentSlug, { content: '', expiresAt: Date.now() + CONFIG_CACHE_TTL_MS });
+      return '';
+    }
+
+    const skillBlocks: string[] = [];
+    for (const g of grants) {
+      const skill = (g as any).skills as
+        | { name: string; display_name: string; file_path: string; current_version: number }
+        | null;
+      if (!skill || !skill.name) continue;
+
+      // Resolve the SKILL.md path. Prefer the file_path stored in DB; fall
+      // back to scanning skills-store/<name>/ for the highest semver dir.
+      let skillMdAbsPath: string | null = null;
+
+      if (skill.file_path) {
+        const candidate = pathResolve(PROJECT_ROOT, skill.file_path);
+        if (existsSync(candidate)) {
+          skillMdAbsPath = candidate;
+        }
+      }
+
+      if (!skillMdAbsPath) {
+        const skillDir = pathResolve(SKILLS_STORE, skill.name);
+        if (existsSync(skillDir)) {
+          try {
+            const versions = readdirSyncFS(skillDir).filter((entry) => /^\d+\.\d+\.\d+$/.test(entry));
+            // Pick the highest version (semver sort)
+            versions.sort((a, b) => {
+              const pa = a.split('.').map(Number);
+              const pb = b.split('.').map(Number);
+              for (let i = 0; i < 3; i++) {
+                if (pa[i] !== pb[i]) return pb[i] - pa[i];
+              }
+              return 0;
+            });
+            if (versions[0]) {
+              const candidate = pathResolve(skillDir, versions[0], 'SKILL.md');
+              if (existsSync(candidate)) skillMdAbsPath = candidate;
+            }
+          } catch {
+            /* skip */
+          }
+        }
+      }
+
+      if (!skillMdAbsPath) {
+        console.warn(`[Router/skills] ${agentSlug} grant for "${skill.name}" — SKILL.md not found`);
+        continue;
+      }
+
+      try {
+        const raw = readFileSync(skillMdAbsPath, 'utf-8');
+        // Strip YAML frontmatter (between leading --- and next ---) so the
+        // prompt only carries the body. Frontmatter is for metadata loaders.
+        const stripped = raw.replace(/^---[\s\S]*?---\s*/m, '').trim();
+        skillBlocks.push(
+          [
+            '',
+            `### SKILL: ${skill.display_name || skill.name}`,
+            '',
+            stripped,
+            '',
+            '─────────────────────────────────────────────',
+          ].join('\n'),
+        );
+      } catch (err: any) {
+        console.warn(`[Router/skills] Failed to read ${skillMdAbsPath}: ${err.message}`);
+      }
+    }
+
+    if (skillBlocks.length > 0) {
+      content = [
+        '',
+        '═══ GRANTED SKILLS — Procedural knowledge bạn có quyền dùng ═══',
+        '',
+        `Bạn đã được grant ${skillBlocks.length} skill dưới đây. Mỗi skill là 1 procedural`,
+        'guide cho 1 loại tình huống (sales conversation, identity verify, escalation, ...).',
+        'Áp dụng skill phù hợp dựa trên trigger phrase trong mỗi skill description.',
+        ...skillBlocks,
+        '═══════════════════════════════════════════════════',
+      ].join('\n');
+      console.log(`[Router/skills] ${agentSlug}: loaded ${skillBlocks.length} granted skills`);
+    }
+  } catch (err: any) {
+    console.warn(`[Router/skills] loadGrantedSkillsForPrompt failed for ${agentSlug}: ${err.message}`);
+  }
+
+  grantedSkillsCache.set(agentSlug, { content, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS });
+  return content;
+}
+
+// ─── Outbound media library (per-agent JSON) ─────────────────────────────────
+
+/**
+ * Cache parsed media libraries by agent slug. TTL 60s — same as configCache.
+ */
+const mediaLibraryCache = new Map<string, { lib: MediaLibrary | null; expiresAt: number }>();
+
+/**
+ * Load agents/{slug}/media-library.json — list of files this agent can SEND
+ * to users (PDFs, images, videos). Returns null if file missing.
+ *
+ * Cached 60s.
+ */
+function loadMediaLibrary(agentSlug: string): MediaLibrary | null {
+  const cached = mediaLibraryCache.get(agentSlug);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.lib;
+  }
+
+  const projectRoot = PROJECT_ROOT;
+  const libPath = pathResolve(projectRoot, 'agents', agentSlug, 'media-library.json');
+
+  let lib: MediaLibrary | null = null;
+  if (existsSync(libPath)) {
+    try {
+      const raw = readFileSync(libPath, 'utf-8');
+      lib = JSON.parse(raw) as MediaLibrary;
+    } catch (err: any) {
+      console.warn(`[Router/media] Failed to parse ${libPath}:`, err.message);
+    }
+  }
+
+  mediaLibraryCache.set(agentSlug, { lib, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS });
+  return lib;
+}
+
+/**
+ * Render the media library as a compact catalog for system prompt injection.
+ * Each item is one line with id + name + tags so Gemma can pick by id.
+ */
+function renderMediaLibraryForPrompt(lib: MediaLibrary): string {
+  if (!lib || !lib.items || lib.items.length === 0) return '';
+  const lines = lib.items.map((it) => {
+    const tags = (it.tags || []).join(', ');
+    return `- [[SEND_MEDIA: ${it.id}]] — ${it.name} (${it.type}) — ${it.description}${tags ? ` [tags: ${tags}]` : ''}`;
+  });
+  const instructions = lib.instructions_for_agent || '';
+  return [
+    '',
+    '═══ MEDIA LIBRARY — File/ảnh/video bạn có thể GỬI cho khách ═══',
+    instructions,
+    '',
+    '✅ ĐƯỢC PHÉP — Cú pháp duy nhất:',
+    '   [[SEND_MEDIA: id]]   ← chỉ dùng id có trong danh sách bên dưới',
+    '',
+    '🚫 TUYỆT ĐỐI KHÔNG ĐƯỢC:',
+    '   - KHÔNG bịa các marker khác như [[CALL: ...]], [[FUNCTION: ...]],',
+    '     [[TICKET: ...]], [[QUERY: ...]], [[API: ...]] — bạn KHÔNG có',
+    '     bất kỳ tool nào khác ngoài SEND_MEDIA. Mọi marker không thuộc',
+    '     danh sách bên dưới sẽ bị strip và KHÁCH SẼ THẤY bạn bịa.',
+    '   - KHÔNG bịa id media không có trong danh sách (vd [[SEND_MEDIA:',
+    '     non_existent_file]]) — sẽ bị xoá silent.',
+    '   - KHÔNG dùng SEND_MEDIA id chỉ vì câu hỏi nghe có vẻ liên quan;',
+    '     chỉ dùng khi item TRONG danh sách thực sự khớp ý khách.',
+    '',
+    '📋 KHI BẠN KHÔNG CÓ THÔNG TIN HOẶC CÔNG CỤ ĐỂ TRẢ LỜI:',
+    '   - KHÔNG giả vờ tạo ticket, không bịa "em sẽ chuyển team".',
+    '   - Nói THẲNG bằng tiếng Việt tự nhiên: "Em chưa tra được phần này',
+    '     ngay, để em báo lại chị Jennie / team vận hành rồi cập nhật lại',
+    '     cho chị sớm nhất nhé." (Hệ thống có người theo dõi inbox sẽ',
+    '     escalate; bạn KHÔNG cần — và KHÔNG ĐƯỢC — output bất kỳ marker',
+    '     command nào.)',
+    '',
+    'Danh sách media available (CHỈ dùng id trong list này):',
+    ...lines,
+    '═══════════════════════════════════════════════════',
+  ].join('\n');
+}
+
+/**
+ * Parse [[SEND_MEDIA: id]] markers out of a reply text.
+ * Returns the cleaned text + the list of resolved MediaFile objects.
+ *
+ * Markers that don't match a library id are silently dropped (logged warning).
+ */
+/**
+ * Per-chunk message piece used for the multi-message reply pattern.
+ * The agent splits its reply with [[MSG_BREAK]] markers; each chunk is sent
+ * as a separate message with a small delay so it feels like a real human typing.
+ * Each chunk can carry its own media attachments inline.
+ */
+export interface MessageChunk {
+  text: string;
+  media?: MediaFile[];
+}
+
+function parseMediaMarkers(
+  text: string,
+  lib: MediaLibrary | null,
+): { cleanedText: string; media: MediaFile[]; chunks: MessageChunk[] } {
+  if (!text) return { cleanedText: text, media: [], chunks: [{ text }] };
+
+  // ── Step 1: Split on [[MSG_BREAK]] BEFORE any other marker processing ──
+  // This must run first so that media markers stay with their chunk.
+  const MSG_BREAK_RE = /\[\[\s*MSG_BREAK\s*\]\]/gi;
+  const rawChunks = text.split(MSG_BREAK_RE);
+
+  const allMedia: MediaFile[] = [];
+  const seenGlobal = new Set<string>();
+  const chunks: MessageChunk[] = [];
+
+  // Match [[SEND_MEDIA: some_id]] (with or without spaces, case-insensitive)
+  const SEND_MEDIA_RE = /\[\[\s*SEND_MEDIA\s*:\s*([a-zA-Z0-9_\-]+)\s*\]\]/gi;
+  // Anti-leak: strip ANY remaining [[...]] marker the LLM might have hallucinated
+  // (CALL, FUNCTION, TICKET, QUERY, etc.) so the user never sees raw syntax.
+  const HALLUCINATED_MARKER_RE = /\[\[[\s\S]*?\]\]/g;
+
+  for (const rawChunk of rawChunks) {
+    const chunkMedia: MediaFile[] = [];
+
+    // Step 2a: extract SEND_MEDIA markers from THIS chunk
+    let chunkText = rawChunk.replace(SEND_MEDIA_RE, (_match, id: string) => {
+      if (!lib) {
+        console.warn(`[Router/media] [[SEND_MEDIA: ${id}]] but no media library loaded for this agent`);
+        return '';
+      }
+      const item = lib.items.find((x) => x.id === id);
+      if (!item) {
+        console.warn(`[Router/media] Marker [[SEND_MEDIA: ${id}]] — id not found in library "${lib.agent_slug}"`);
+        return '';
+      }
+      if (seenGlobal.has(id)) {
+        // Already added in a previous chunk — skip duplicate
+        return '';
+      }
+      seenGlobal.add(id);
+      const mediaFile: MediaFile = {
+        url: item.url || undefined,
+        path: item.path || undefined,
+        mimeType: item.mimeType,
+        filename: item.name,
+        caption: item.description,
+      };
+      chunkMedia.push(mediaFile);
+      allMedia.push(mediaFile);
+      return '';
+    });
+
+    // Step 2b: scrub any leftover hallucinated markers
+    const leakedMarkers = chunkText.match(HALLUCINATED_MARKER_RE);
+    if (leakedMarkers && leakedMarkers.length > 0) {
+      console.warn(
+        `[Router/media] Stripped ${leakedMarkers.length} hallucinated markers: `
+          + leakedMarkers.map((m) => m.substring(0, 60)).join(' | '),
+      );
+      chunkText = chunkText.replace(HALLUCINATED_MARKER_RE, '');
+    }
+
+    // Step 2c: tidy whitespace
+    const tidied = chunkText
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/ +\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    // Skip empty chunks (e.g. consecutive [[MSG_BREAK]][[MSG_BREAK]] or
+    // a chunk that contained only a media marker — media is preserved on
+    // the next non-empty chunk).
+    if (!tidied && chunkMedia.length === 0) continue;
+
+    chunks.push({
+      text: tidied,
+      ...(chunkMedia.length > 0 ? { media: chunkMedia } : {}),
+    });
+  }
+
+  // If splitting produced no usable chunks (e.g. agent only emitted markers),
+  // return at least one empty chunk so consumer.ts has something to send.
+  if (chunks.length === 0) {
+    chunks.push({ text: '' });
+  }
+
+  // Backward-compat: cleanedText is the chunks joined by double newlines.
+  // Existing call sites that don't yet support multi-message will still get
+  // a sensible single string.
+  const cleanedText = chunks.map((c) => c.text).filter(Boolean).join('\n\n');
+
+  return { cleanedText, media: allMedia, chunks };
+}
+
+// ─── Provider-agnostic helpers (used by all providers: Claude, Gemini, etc.) ─
+
+/**
+ * Build a provider-neutral override block that gets appended to the agent's
+ * base system prompt. It overrides any legacy `[[CALL: name(args)]]` marker
+ * instructions (which were designed for non-native-tool LLMs) and teaches
+ * the agent how to send media via `[[SEND_MEDIA: id]]` markers.
+ *
+ * Works for ANY provider with native MCP tool support (Claude, Gemini, etc.).
+ */
+function buildProviderOverride(agentSlug: string, mediaLib: MediaLibrary | null): string {
+  const mediaCatalog = mediaLib ? renderMediaLibraryForPrompt(mediaLib) : '';
+  return [
+    '',
+    '# ⚠️ NATIVE TOOL USE + MEDIA (OVERRIDE TOOLS.md / HEARTBEAT.md)',
+    '',
+    'Bạn đang chạy với NATIVE MCP tools (qua mcp.json).',
+    'CÁC HƯỚNG DẪN VỀ `[[CALL: name(args)]]` MARKER TRONG TOOLS.md/HEARTBEAT.md',
+    'ĐÃ LỖI THỜI — chúng chỉ dành cho LLMs không có native tool support.',
+    '',
+    'Quy tắc (BẮT BUỘC — override mọi instruction trước đó):',
+    '1. GỌI tool qua MCP protocol native — runtime tự xử lý tool call & result.',
+    '2. TUYỆT ĐỐI KHÔNG viết `[[CALL: ...]]`, `[CALL: ...]`, `[MCP_...]`,',
+    '   `[SEARCH: ...]`, `[TOOL: ...]`, `[FUNCTION: ...]` ra text reply cho khách.',
+    '3. Tool call & result SILENT — khách chỉ thấy câu trả lời cuối cùng.',
+    '4. Reply cho khách là TEXT THUẦN, không markdown, không bullet đặc biệt.',
+    '5. KHÔNG xin số điện thoại để gửi qua Zalo/Facebook — khách ĐÃ nhắn trực tiếp',
+    '   qua kênh đó rồi, gửi TRỰC TIẾP trong tin nhắn này.',
+    '',
+    '# 📸 GỬI HÌNH / FILE / VIDEO CHO KHÁCH',
+    '',
+    'Cách gửi file/hình/video: chèn marker `[[SEND_MEDIA: id]]` vào text reply.',
+    'Marker sẽ được router parse và gửi file kèm tin nhắn cho khách.',
+    'CHỈ dùng id có trong danh sách bên dưới. KHÔNG bịa id.',
+    '',
+    mediaCatalog || `(Agent "${agentSlug}" chưa có media library — chỉ reply text)`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * Post-process LLM reply before sending to customer. Runs across ALL providers:
+ *   1. scrubBannedPhrases — strips owner name, short-time promise, tool markers,
+ *      special chars, markdown, Insight blocks, internal system mentions.
+ *   2. parseMediaMarkers — extracts [[SEND_MEDIA: id]] and sets _outboundMedia
+ *      on config so consumer.ts can attach files to the outbound message.
+ *
+ * Returns the cleaned reply text (without markers, safe to send to customer).
+ */
+function postProcessReply(
+  reply: string,
+  config: AgentConfig,
+  mediaLib: MediaLibrary | null,
+): string {
+  if (!reply) return reply;
+
+  let cleaned = scrubBannedPhrases(reply, config.slug);
+
+  if (mediaLib) {
+    const mediaParsed = parseMediaMarkers(cleaned, mediaLib);
+    cleaned = mediaParsed.cleanedText;
+    if (mediaParsed.media.length > 0) {
+      (config as any)._outboundMedia = mediaParsed.media;
+      // MediaFile has `filename` (not `id` — id is on MediaLibraryItem).
+      // Log filename so we can see what's being dispatched in the logs.
+      console.log(
+        `[Router/${config.provider}] ${config.slug}: extracted ${mediaParsed.media.length} media file(s): `
+          + mediaParsed.media.map((m) => m.filename || m.url || '(unnamed)').join(', '),
+      );
+    }
+  }
+
+  return cleaned;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Escalation intent extracted from a [[ESCALATE: ...]] marker.
+ * Set when the agent decides the situation needs human handoff (angry customer,
+ * legal threat, public complaint, mental health concern, etc.).
+ *
+ * Downstream consumer.ts uses this to:
+ *   1. Mark channel_sessions.metadata.bot_paused = true (no more auto-replies)
+ *   2. Insert urgent crm_tickets row
+ *   3. Telegram-ping the operator (Jennie chat_id 6486938519)
+ */
+export interface EscalationIntent {
+  reason: string;          // e.g. "customer_hostile", "legal_threat", "prolonged_frustration"
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  summary: string;          // Short Vietnamese description for the ticket
+}
+
+const ESCALATION_REASON_WHITELIST = new Set([
+  'customer_hostile',
+  'legal_threat',
+  'public_complaint_threat',
+  'public_complaint_active',
+  'fraud_allegation',
+  'mental_health_concern',
+  'refund_dispute',
+  'identity_verification_failed',
+  'prolonged_frustration',
+  'compliance_request',
+  'ceo_request',
+]);
+
+/**
+ * Parse [[ESCALATE: reason="...", priority="...", summary="..."]] markers.
+ * Strips the marker from text and returns the escalation intent (or null).
+ *
+ * The marker accepts kwargs in any order. Unknown reasons get coerced to
+ * "customer_hostile" with a warning so the escalation still fires.
+ */
+
+/**
+ * Customer-facing hard-rule scrub. Defense-in-depth — system prompt rules can
+ * be ignored by small LLMs (Gemma 8B), so we enforce two NEVER rules at the
+ * router level before the message ever reaches the customer:
+ *
+ *   1. NEVER name the owner — "chị Jennie", "Jennie", "Dr. Jennie", "owner",
+ *      "sếp em", "boss em", "chị chủ" → replaced with "team chuyên môn cấp cao".
+ *
+ *   2. NEVER promise resolution faster than 24h — any "X phút", "X tiếng",
+ *      "ngay bây giờ", "ngay trong hôm nay" pattern in a resolution-promise
+ *      context → replaced with "trong vòng 24-48 tiếng".
+ *
+ * Logs a warning when a violation is scrubbed so we can audit prompt drift.
+ */
+function scrubBannedPhrases(text: string, agentSlug: string): string {
+  if (!text) return text;
+  let scrubbed = text;
+  const violations: string[] = [];
+
+  // Rule 1: owner name leak
+  const ownerNameRe = /(chị\s+jennie|dr\.?\s*jennie|jennie\s+uyên\s+chu|jennie(?!\s*team)|sếp\s+em|boss\s+em|chị\s+chủ|owner)/gi;
+  if (ownerNameRe.test(scrubbed)) {
+    violations.push('owner_name');
+    scrubbed = scrubbed.replace(ownerNameRe, 'team chuyên môn cấp cao');
+  }
+
+  // Rule 2: short-time promise. Match common resolution-time phrasings.
+  // Patterns: "trong X phút", "X phút nữa", "trong vòng X tiếng", "trong X giờ",
+  //           "ngay bây giờ chị chờ", "trong hôm nay", "trong vài tiếng".
+  const shortTimeRe = /(trong\s+(?:vòng\s+)?(?:khoảng\s+)?\d+\s*(?:[-–]\s*\d+\s*)?(?:phút|tiếng|giờ|h)|(?:khoảng\s+)?\d+\s*(?:phút|tiếng|giờ|h)\s+(?:nữa|tới|sau)|trong\s+vài\s+(?:phút|tiếng|giờ)|ngay\s+(?:bây\s+giờ|trong\s+hôm\s+nay|hôm\s+nay)|trong\s+hôm\s+nay)/gi;
+  if (shortTimeRe.test(scrubbed)) {
+    violations.push('short_time_promise');
+    scrubbed = scrubbed.replace(shortTimeRe, 'trong vòng 24-48 tiếng');
+  }
+
+  // Rule 3: Strip tool/MCP/function-call markers (machine-readable brackets)
+  // Catches: [MCP_xxx], [CALL: ...], [TOOL: ...], [FUNCTION: ...], [DEBUG: ...]
+  // EXCLUDED: SEND_MEDIA, MSG_BREAK, STAGE, ESCALATE — those are real markers
+  // parsed downstream by parseMediaMarkers / parseStageMarker / parseEscalationMarker.
+  const toolMarkerRe = /\[{1,2}\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\]]*\]{1,2}/gi;
+  if (toolMarkerRe.test(scrubbed)) {
+    violations.push('tool_markers');
+    scrubbed = scrubbed.replace(/\[{1,2}\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\]]*\]{1,2}/gi, '');
+  }
+
+  // Rule 4: Strip ALL special formatting characters (★, •, **, ##, etc.)
+  // Customer chat should be plain text only
+  if (/[★•]/.test(scrubbed)) {
+    violations.push('special_chars');
+    scrubbed = scrubbed.replace(/[★•]/g, '-');  // Replace with simple dash
+  }
+  // Strip markdown headers
+  if (/^#{1,3}\s/m.test(scrubbed)) {
+    violations.push('markdown_headers');
+    scrubbed = scrubbed.replace(/^#{1,3}\s+/gm, '');
+  }
+  // Strip bold/italic markers
+  if (/\*{1,2}[^*]+\*{1,2}/.test(scrubbed)) {
+    violations.push('markdown_bold');
+    scrubbed = scrubbed.replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1');
+  }
+
+  // Rule 4: Strip "Insight" sections entirely (Claude Code output style leak)
+  if (/Insight/i.test(scrubbed)) {
+    violations.push('insight_section');
+    // Remove from "Insight" to end, or just the line
+    scrubbed = scrubbed.replace(/[-★•]?\s*Insight[\s\S]*$/gi, '');
+  }
+
+  // Rule 5: Strip internal system mentions (CRM, tracking, database, etc.)
+  const internalPatterns = [
+    /[-•★]\s*(?:CRM|tracking|database|internal|system|hệ thống).*?(?:\n|$)/gi,
+    /[-•★]\s*Customer acknowledgement.*?(?:\n|$)/gi,
+    /[-•★]\s*Maintain natural conversation.*?(?:\n|$)/gi,
+  ];
+  for (const pattern of internalPatterns) {
+    if (pattern.test(scrubbed)) {
+      violations.push('internal_system_mention');
+      scrubbed = scrubbed.replace(pattern, '');
+    }
+  }
+
+  // Cleanup: remove multiple consecutive newlines
+  scrubbed = scrubbed.replace(/\n{3,}/g, '\n\n').trim();
+
+  if (violations.length > 0) {
+    console.warn(
+      `[Router/scrub] ${agentSlug}: scrubbed ${violations.join(', ')} from reply (defense-in-depth)`,
+    );
+  }
+  return scrubbed;
+}
+
+function parseEscalationMarker(
+  text: string,
+): { cleanedText: string; escalation: EscalationIntent | null } {
+  if (!text) return { cleanedText: text, escalation: null };
+
+  // Match the OUTER [[ESCALATE: ... ]] envelope. Args may span multiple lines.
+  const ESCALATE_RE = /\[\[\s*ESCALATE\s*:\s*([\s\S]*?)\s*\]\]/i;
+  const match = text.match(ESCALATE_RE);
+  if (!match) return { cleanedText: text, escalation: null };
+
+  const argsBlob = match[1];
+
+  // Pull each kwarg with a tolerant regex. Values may be quoted with " or '.
+  const extractKwarg = (key: string): string | null => {
+    const re = new RegExp(`${key}\\s*=\\s*["']([^"']*)["']`, 'i');
+    const m = argsBlob.match(re);
+    return m ? m[1] : null;
+  };
+
+  let reason = (extractKwarg('reason') || 'customer_hostile').trim();
+  if (!ESCALATION_REASON_WHITELIST.has(reason)) {
+    console.warn(`[Router/escalate] Unknown reason "${reason}" — coercing to customer_hostile`);
+    reason = 'customer_hostile';
+  }
+
+  let priority = (extractKwarg('priority') || 'high').trim().toLowerCase();
+  if (!['low', 'normal', 'high', 'urgent'].includes(priority)) {
+    priority = 'high';
+  }
+
+  const summary = (extractKwarg('summary') || `Escalation triggered: ${reason}`).trim();
+
+  // Strip the marker from the text. Note: any other [[...]] markers in the
+  // same text will be handled by parseMediaMarkers downstream — we only
+  // remove the ESCALATE envelope here.
+  const cleanedText = text.replace(ESCALATE_RE, '').trim();
+
+  return {
+    cleanedText,
+    escalation: {
+      reason,
+      priority: priority as EscalationIntent['priority'],
+      summary,
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Load tool execution context (verified customer + channel name) from
+ * channel_sessions.metadata. Returns a fresh context every call so verifications
+ * persist across multiple replies in the same session.
+ */
+async function loadToolExecutionContext(
+  agentSlug: string,
+  sessionKey: string,
+): Promise<ToolExecutionContext> {
+  const ctx: ToolExecutionContext = {
+    agentSlug,
+    sessionKey,
+    verifiedCustomerId: null,
+    channelName: null,
+  };
+
+  if (!sessionKey) return ctx;
+
+  try {
+    const { data } = await supabase
+      .from('channel_sessions')
+      .select('metadata, channel_name')
+      .eq('session_key', sessionKey)
+      .single();
+
+    if (data) {
+      ctx.channelName = data.channel_name || null;
+      const meta = (data.metadata || {}) as any;
+      const verifiedAt = meta.verified_at ? new Date(meta.verified_at).getTime() : 0;
+      const ageMs = Date.now() - verifiedAt;
+      const VERIFY_TTL_MS = 30 * 60 * 1000; // 30 phút
+      if (meta.verified_customer_id && ageMs < VERIFY_TTL_MS) {
+        ctx.verifiedCustomerId = meta.verified_customer_id;
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[Router] loadToolExecutionContext failed for ${sessionKey}: ${err.message}`);
+  }
+
+  return ctx;
+}
+
+/**
+ * Run via NVIDIA NIM API (cloud, free tier 1000 credits).
+ *
+ * Free hosted Gemma models on build.nvidia.com — same OpenAI-compatible
+ * /v1/chat/completions schema as OpenRouter / Ollama, but GPU-fast.
+ *
+ * Setup:
+ *   1. Sign up at https://build.nvidia.com → get nvapi-xxx key
+ *   2. Add to paperclip/server/.env: NVIDIA_API_KEY=nvapi-xxx
+ *   3. Set agent: provider='nvidia_nim', model='google/gemma-4-31b-it'
+ *
+ * Available Gemma models on NIM (as of 2026-04):
+ *   - google/gemma-4-31b-it     ← largest, best Vietnamese
+ *   - google/gemma-3-27b-it
+ *   - google/gemma-2-27b-it
+ *   - google/gemma-2-9b-it      ← faster, fewer credits
+ *   - google/gemma-2-2b-it
+ *
+ * Notes:
+ *   - Each request consumes credits (larger model = more).
+ *   - 401 = bad/missing key. 429 = quota exhausted → fall back to Ollama.
+ *   - Endpoint is OpenAI-compat → reuse messages[] format like Ollama /api/chat.
+ *   - Vietnamese: Gemma 4 has strong multilingual support, but we still
+ *     inject the language hint for safety.
+ */
+async function runViaNvidiaNim(
   config: AgentConfig,
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
 ): Promise<string> {
-  const fullPrompt = systemPrompt
-    ? `[System Instructions]\n${systemPrompt}\n\n${buildFullPrompt(history, message)}`
-    : buildFullPrompt(history, message);
+  const apiKey = process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      'NVIDIA_API_KEY not set. Sign up at https://build.nvidia.com → '
+        + 'paste key into paperclip/server/.env as NVIDIA_API_KEY=nvapi-xxx',
+    );
+  }
 
-  const model = config.model || 'gemma4:26b';
-  
+  const baseUrl = (process.env.NVIDIA_NIM_BASE_URL || 'https://integrate.api.nvidia.com/v1').replace(/\/$/, '');
+  const model = config.model || process.env.NVIDIA_NIM_MODEL || 'google/gemma-4-31b-it';
+
+  const languageHint = (config.language || 'vi') === 'vi'
+    ? '\n\nQUY TẮC NGÔN NGỮ: Bạn PHẢI trả lời bằng tiếng Việt có dấu đầy đủ, ngắn gọn, thân thiện. TUYỆT ĐỐI không dùng tiếng Anh trừ khi khách hàng hỏi bằng tiếng Anh trước.'
+    : '';
+
+  const finalSystem = (systemPrompt || '') + languageHint;
+
+  type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
+  const messages: ChatMsg[] = [];
+  if (finalSystem.trim()) {
+    messages.push({ role: 'system', content: finalSystem.trim() });
+  }
+  const historyLimit = config.history_limit || 20;
+  const recentHistory = history.slice(-historyLimit);
+  for (const h of recentHistory) {
+    if (h.role === 'user' || h.role === 'assistant') {
+      messages.push({ role: h.role, content: h.content });
+    }
+  }
+  messages.push({ role: 'user', content: message });
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
 
   try {
-    const res = await fetch('http://localhost:11434/api/generate', {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Accept': 'application/json',
       },
       body: JSON.stringify({
         model,
-        prompt: fullPrompt,
+        messages,
+        temperature: config.temperature ?? 0.7,
+        max_tokens: config.max_tokens || 1500,
+        top_p: 0.95,
         stream: false,
-        options: {
-          temperature: config.temperature,
-          num_predict: config.max_tokens,
-        }
       }),
       signal: controller.signal,
     });
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Ollama API error ${res.status}: ${body}`);
+      // 401 = bad key, 402/429 = quota exhausted
+      if (res.status === 401) {
+        throw new Error(`NVIDIA NIM 401: API key invalid or expired. Re-issue at https://build.nvidia.com.`);
+      }
+      if (res.status === 429 || res.status === 402) {
+        throw new Error(`NVIDIA NIM ${res.status}: free credits exhausted. Switch agent provider to 'claude' or 'gemini'.`);
+      }
+      throw new Error(`NVIDIA NIM ${baseUrl}/chat/completions ${res.status}: ${body.substring(0, 400)}`);
     }
 
-    const data = await res.json() as { response?: string };
-    return typeof data.response === 'string' ? data.response.trim() : '';
+    const data = await res.json() as {
+      choices?: Array<{ message?: { role?: string; content?: string }; finish_reason?: string }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      error?: { message?: string };
+    };
+
+    if (data.error) {
+      throw new Error(`NVIDIA NIM error: ${data.error.message || JSON.stringify(data.error)}`);
+    }
+
+    const content = (data.choices?.[0]?.message?.content || '').trim();
+
+    if (!content) {
+      console.warn(
+        `[Router/NIM] ${config.slug}: empty content (finish_reason=${data.choices?.[0]?.finish_reason}, `
+          + `tokens used=${data.usage?.total_tokens})`,
+      );
+    }
+
+    return content;
   } finally {
     clearTimeout(timeout);
   }
@@ -805,7 +1783,64 @@ async function runViaOllama(
  * Build system prompt from config.
  * Priority: system_prompt > persona_file content > generic fallback
  */
-function buildSystemPrompt(config: AgentConfig, customerContext?: any): string {
+/**
+ * Default company UUID (GEMRAL). Used when no explicit company context is
+ * available for the call. Single-tenant fallback for shared Goals SSOT.
+ */
+const DEFAULT_COMPANY_ID = process.env.DEFAULT_COMPANY_ID
+  || 'f78ffdea-e400-46be-8705-5f6cfbce1eb0'; // GEMRAL
+
+/**
+ * Fetch active company goals from the Supabase `goals` table and format them
+ * into a markdown block for system-prompt injection. Company-scoped. Returns
+ * empty string on any failure so prompt assembly never blocks.
+ *
+ * Hierarchy: root (level='company', parent_id IS NULL) → children (level in
+ * 'project'/'task'). Only active goals are included.
+ */
+async function fetchCompanyGoalsBlock(companyId: string): Promise<{ block: string; count: number }> {
+  try {
+    const { data: goals, error } = await supabase
+      .from('goals')
+      .select('id, title, description, level, status, parent_id, owner_agent_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true });
+
+    if (error || !goals || goals.length === 0) {
+      return { block: '', count: 0 };
+    }
+
+    // Build parent → children map
+    const byId = new Map<string, any>();
+    for (const g of goals) byId.set(g.id, g);
+    const roots = goals.filter((g: any) => !g.parent_id || !byId.has(g.parent_id));
+    const childrenOf = (parentId: string) => goals.filter((g: any) => g.parent_id === parentId);
+
+    const lines: string[] = ['# MỤC TIÊU & ĐỊNH HƯỚNG CÔNG TY (LIVE từ DB)'];
+    for (const root of roots) {
+      const prefix = root.level === 'company' ? '🎯' : root.level === 'project' ? '📁' : '•';
+      lines.push(`${prefix} **${root.title}**${root.description ? ` — ${root.description}` : ''}`);
+      const kids = childrenOf(root.id);
+      for (const k of kids) {
+        const kidPrefix = k.level === 'task' ? '  ☐' : '  •';
+        lines.push(`${kidPrefix} ${k.title}${k.description ? ` — ${k.description}` : ''}`);
+      }
+    }
+    lines.push('');
+    lines.push('→ MỌI agent trong hệ thống PHẢI biết và hỗ trợ các mục tiêu này khi trả lời khách hàng, tạo content, và xử lý công việc.');
+    return { block: lines.join('\n'), count: goals.length };
+  } catch (err) {
+    console.warn('[Router] fetchCompanyGoalsBlock failed:', (err as any)?.message);
+    return { block: '', count: 0 };
+  }
+}
+
+async function buildSystemPrompt(
+  config: AgentConfig,
+  customerContext?: any,
+  companyId: string = DEFAULT_COMPANY_ID,
+): Promise<string> {
   const projectRoot = PROJECT_ROOT;
   const agentsDir = pathResolve(
     process.env.AGENTS_DIR || pathResolve(projectRoot, 'agents'),
@@ -840,10 +1875,17 @@ function buildSystemPrompt(config: AgentConfig, customerContext?: any): string {
   const agentMemoryPath = pathResolve(projectRoot, 'memory', 'agents', config.slug, 'MEMORY.md');
   tryLoad(agentMemoryPath, 'KIẾN THỨC CÁ NHÂN');
 
-  // 2.5 Company Goals and Directions (SSOT for all agents)
-  const goalsFilePath = pathResolve(projectRoot, 'memory', 'goals.md');
+  // 2.5 Company Goals and Directions — SSOT live from Supabase `goals` table.
+  // File fallback (memory/goals.md) only used if DB returns nothing.
+  const dbGoals = await fetchCompanyGoalsBlock(companyId);
+  if (dbGoals.block) {
+    parts.push(dbGoals.block);
+    loadedFiles.push(`DB goals (${dbGoals.count} live)`);
+  } else {
+    const goalsFilePath = pathResolve(projectRoot, 'memory', 'goals.md');
+    tryLoad(goalsFilePath, 'MỤC TIÊU & ĐỊNH HƯỚNG CÔNG TY');
+  }
   const projectsFilePath = pathResolve(projectRoot, 'memory', 'projects.md');
-  tryLoad(goalsFilePath, 'MỤC TIÊU & ĐỊNH HƯỚNG CÔNG TY');
   tryLoad(projectsFilePath, 'DỰ ÁN ĐANG CHẠY');
 
   // 3. Relevant SOPs
@@ -895,7 +1937,16 @@ function buildSystemPrompt(config: AgentConfig, customerContext?: any): string {
     `- Bạn là ${config.display_name} của Gemral. KHÔNG xưng là Jennie hay bất kỳ ai khác.`,
     '- Nếu không biết câu trả lời → nói thật, đề nghị chuyển cho người phụ trách.',
     '- Nếu khách tức giận → "Em chuyển chuyên viên nhé!" → DỪNG.',
-    '- KHÔNG dùng markdown formatting (**, ##, etc.) — chỉ text thuần.',
+    '- CHỈ TEXT THUẦN. KHÔNG ★, •, **, ##, backticks, headers, bullets đặc biệt.',
+    '- Dùng dấu gạch ngang (-) nếu cần list. Viết như tin nhắn bình thường.',
+    '- TUYỆT ĐỐI KHÔNG nhắc: Insight, CRM, tracking, database, system, internal, meta-commentary.',
+    '- KHÔNG giải thích cách bạn suy nghĩ hay process. Chỉ trả lời khách.',
+    '- KHÁCH ĐANG NHẮN TIN TRỰC TIẾP QUA ZALO/FACEBOOK. KHÔNG hỏi SĐT để gửi qua Zalo — họ ĐÃ Ở ĐÂY.',
+    '- Muốn gửi hình/link → gửi TRỰC TIẾP trong tin nhắn này, không cần xin SĐT.',
+    '- Bạn CÓ MCP tools (check order, CRM, search product, Shopify...). GỌI tools qua MCP protocol đúng cách.',
+    '- TUYỆT ĐỐI KHÔNG viết tool call syntax ra text reply: KHÔNG "[CALL: ...]", KHÔNG "[MCP_...]", KHÔNG "[SEARCH: ...]".',
+    '- Tool call xảy ra SILENT qua MCP — chỉ dùng RESULT của tool để soạn reply text thuần cho khách.',
+    '- Khách KHÔNG cần thấy bạn đang gọi tool nào — chỉ thấy câu trả lời cuối cùng.',
     '- Sản phẩm chính: 6 khóa học, GEM Scanner, Crystal (YinyangMasters), App Gemral.',
     `- Có thể escalate tới: ${(config.can_escalate_to || []).join(', ') || 'CEO'}`,
   ].join('\n'));
@@ -957,29 +2008,49 @@ async function loadHistory(
 
 /**
  * Save user message and agent reply to session history.
+ * Stamps each entry's metadata with agent_session_id (from side-channel set
+ * by runViaClaude / runViaGemini) so the Chat Drawer can drill down into
+ * the exact JSONL session that handled this turn.
+ *
+ * This is the SINGLE WRITER for `channel_sessions.history` on the channel
+ * flow. Consumer.ts no longer calls session.appendMessage separately —
+ * that was the duplicate-write bug (BUG-047).
  */
 async function saveHistory(
   sessionKey: string,
   userMessage: string,
   agentReply: string,
   config: AgentConfig,
+  senderName?: string | null,
 ): Promise<void> {
   const now = new Date().toISOString();
+  const agentSessionId = (config as any)._agent_session_id as string | null | undefined;
+  const metadata = agentSessionId ? { agent_session_id: agentSessionId } : undefined;
 
-  // Fetch current session
+  // Fetch current session — may be null for training/test sessions which have
+  // no live channel row. We UPSERT below so the first turn creates the row.
   const { data: session } = await supabase
     .from('channel_sessions')
     .select('history, history_count')
     .eq('session_key', sessionKey)
     .single();
 
-  if (!session) return; // Session not found, skip saving
-
-  let history = (session.history || []) as SessionMessage[];
+  let history = ((session?.history as SessionMessage[] | null) || []) as SessionMessage[];
 
   history.push(
-    { role: 'user', content: userMessage, timestamp: now },
-    { role: 'assistant', content: agentReply, timestamp: now },
+    {
+      role: 'user',
+      content: userMessage,
+      timestamp: now,
+      ...(senderName ? { senderName } : {}),
+      ...(metadata ? { metadata } : {}),
+    },
+    {
+      role: 'assistant',
+      content: agentReply,
+      timestamp: now,
+      ...(metadata ? { metadata } : {}),
+    },
   );
 
   // Trim to history limit
@@ -988,14 +2059,33 @@ async function saveHistory(
     history = history.slice(history.length - limit);
   }
 
-  await supabase
-    .from('channel_sessions')
-    .update({
-      history,
-      history_count: history.length,
-      agent_slug: config.slug,
-      last_message_at: now,
-      updated_at: now,
-    })
-    .eq('session_key', sessionKey);
+  // If row exists, UPDATE (preserves real chat_id from channel ingestion).
+  // If row missing (training/test sessions), INSERT with synthetic chat_id.
+  // Without this insert path, loadHistory always returns [] for training →
+  // agent has zero context → repeats the same canned reply every turn
+  // (the "robot agent" bug).
+  if (session) {
+    await supabase
+      .from('channel_sessions')
+      .update({
+        history,
+        history_count: history.length,
+        agent_slug: config.slug,
+        last_message_at: now,
+        updated_at: now,
+      })
+      .eq('session_key', sessionKey);
+  } else {
+    await supabase
+      .from('channel_sessions')
+      .insert({
+        session_key: sessionKey,
+        chat_id: sessionKey, // synthetic — satisfies NOT NULL for training/test
+        history,
+        history_count: history.length,
+        agent_slug: config.slug,
+        last_message_at: now,
+        updated_at: now,
+      });
+  }
 }

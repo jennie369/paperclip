@@ -12,6 +12,8 @@ import { supabase } from './zalo-personal/supabase.js';
 import { CustomerResolver } from './crm/customer-resolver.js';
 import { ContextBuilder } from './crm/context-builder.js';
 import { AISummarizer } from './crm/ai-summarizer.js';
+import { handleEscalation, isSessionPaused, type EscalationContext } from './crm/escalation-handler.js';
+import { persistPurchaseStage, type PurchaseStage } from './crm/purchase-stage-handler.js';
 import { extractEntitiesAsync } from './kg-extractor.js';
 import type {
   InboundMessage,
@@ -95,7 +97,7 @@ async function processMessage(
   msg: InboundMessage,
   pendingId?: string
 ): Promise<void> {
-  const peerLabel = msg.peerKind === 'group' ? 'GROUP' : 'DM';
+  const peerLabel = msg.peerKind === 'group' ? 'GROUP' : msg.peerKind === 'comment' ? 'COMMENT' : 'DM';
   const logPrefix = `[Consumer:${msg.channel}] ${peerLabel} "${msg.senderName}"→${msg.chatId}`;
 
   // ── Step 1: Deduplication ──
@@ -278,14 +280,9 @@ async function processMessage(
     metadata: isGroup ? { is_group: true, group_name: merged.metadata?.groupName } : {},
   });
 
-  // Append user message to session history
-  await session.appendMessage(
-    sessionKey,
-    'user',
-    merged.content,
-    channelConfig.history_limit,
-    merged.senderName
-  );
+  // NOTE: user message is persisted to channel_sessions.history inside
+  // router.saveHistory() as the SINGLE writer. Writing here again caused
+  // BUG-047 (duplicate entries ~300ms apart).
 
   // Update conversation metadata for Unified Inbox
   const sessionUpdate: Record<string, any> = {
@@ -333,7 +330,7 @@ async function processMessage(
   let customerContext = '';
   if (customerId) {
     try {
-      customerContext = await contextBuilder.build(customerId);
+      customerContext = await contextBuilder.build(customerId, sessionKey);
     } catch (err: any) {
       console.warn(`${logPrefix} CRM context build failed (non-blocking): ${err.message}`);
     }
@@ -369,9 +366,29 @@ async function processMessage(
       }
     } catch { /* non-blocking */ }
   }
+  // Fallback: always set _customerContext from message metadata so log viewer
+  // can display sender name + channel even when customer isn't in CRM yet.
+  if (!(merged as any)._customerContext) {
+    (merged as any)._customerContext = {
+      name: merged.senderName || null,
+      stage: 'new',
+      channel_name: merged.channel,
+    };
+  }
 
   // ── Step 9: Route to agent (Claude CLI) ──
   if (agentSlug) {
+    // Escalation gate: if a previous turn fired [[ESCALATE: ...]], the session
+    // is paused. Skip auto-reply entirely — a human must un-pause from the UI.
+    const paused = await isSessionPaused(sessionKey);
+    if (paused) {
+      console.warn(`${logPrefix} ⏸ Session is bot_paused (prior escalation) — skipping auto-reply`);
+      if (pendingId) {
+        await bus.markHandled(pendingId, 'human', 'skipped', 'escalated_bot_paused');
+      }
+      return;
+    }
+
     console.log(`${logPrefix} → Routing to agent: ${agentSlug}${customerId ? ` (CRM: ${customerId.substring(0, 8)})` : ''} | msg: "${merged.content.substring(0, 60)}"`);
 
     // Mark as processing
@@ -391,28 +408,126 @@ async function processMessage(
       history
     );
 
-    // Append assistant reply to session history
-    await session.appendMessage(
-      sessionKey,
-      'assistant',
-      replyText,
-      channelConfig.history_limit
-    );
+    // NOTE: assistant reply is persisted to channel_sessions.history inside
+    // router.saveHistory() (single writer). Removed duplicate appendMessage
+    // that caused BUG-047.
 
     // ── Step 10: Publish outbound reply ──
-    const outbound: OutboundMessage = {
-      channel: merged.channel,
-      chatId: merged.chatId,
-      content: replyText,
-      replyToMessageId: merged.id,
-      metadata: {
+    // Pull outbound media (if any) extracted from [[SEND_MEDIA: id]] markers
+    // by the agent's media-library lookup in runViaOllama.
+    const outboundMedia = (merged as any)._outboundMedia as
+      | { url?: string; path?: string; mimeType: string; filename?: string; caption?: string }[]
+      | undefined;
+
+    // Multi-message reply: if router split the reply into chunks via
+    // [[MSG_BREAK]], send each chunk as a separate outbound message with a
+    // small typing delay. Each chunk can carry its own media (extracted from
+    // inline [[SEND_MEDIA]] markers within that chunk).
+    const messageChunks = (merged as any)._messageChunks as
+      | Array<{ text: string; media?: typeof outboundMedia }>
+      | undefined;
+
+    if (messageChunks && messageChunks.length > 1) {
+      console.log(`${logPrefix} Multi-message reply: ${messageChunks.length} chunks`);
+      for (let i = 0; i < messageChunks.length; i++) {
+        const chunk = messageChunks[i];
+        const chunkMedia = chunk.media;
+        const chunkOutbound: OutboundMessage = {
+          channel: merged.channel,
+          chatId: merged.chatId,
+          content: chunk.text,
+          contentType: chunkMedia && chunkMedia.length > 0 ? 'image' : 'text',
+          media: chunkMedia && chunkMedia.length > 0 ? chunkMedia : undefined,
+          // Only the FIRST chunk replies-to the customer message; subsequent
+          // chunks are standalone follow-ups so threads don't look spammy.
+          replyToMessageId: i === 0 ? merged.id : undefined,
+          metadata: {
+            agentSlug,
+            sessionKey,
+            processingTime: Date.now() - merged.timestamp.getTime(),
+            mediaCount: chunkMedia?.length || 0,
+            chunkIndex: i,
+            chunkTotal: messageChunks.length,
+            peerKind: merged.peerKind,
+            comment_id: merged.metadata?.comment_id,
+          },
+        };
+        bus.publishOutbound(chunkOutbound);
+
+        // Inter-chunk typing delay: 1.5–2.5s, randomized so it feels human.
+        // No delay after the last chunk.
+        if (i < messageChunks.length - 1) {
+          const delayMs = 1500 + Math.floor(Math.random() * 1000);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    } else {
+      const outbound: OutboundMessage = {
+        channel: merged.channel,
+        chatId: merged.chatId,
+        content: replyText,
+        contentType: outboundMedia && outboundMedia.length > 0 ? 'image' : 'text',
+        media: outboundMedia && outboundMedia.length > 0 ? outboundMedia : undefined,
+        replyToMessageId: merged.id,
+        metadata: {
+          agentSlug,
+          sessionKey,
+          processingTime: Date.now() - merged.timestamp.getTime(),
+          mediaCount: outboundMedia?.length || 0,
+          peerKind: merged.peerKind,
+          comment_id: merged.metadata?.comment_id,
+        },
+      };
+
+      if (outboundMedia && outboundMedia.length > 0) {
+        console.log(`${logPrefix} Outbound has ${outboundMedia.length} media: ${outboundMedia.map(m => m.filename).join(', ')}`);
+      }
+
+      bus.publishOutbound(outbound);
+    }
+
+    // ── Step 10a: Persist purchase journey stage if marker was emitted ──
+    const newStage = (merged as any)._purchaseStage as PurchaseStage | undefined;
+    if (newStage) {
+      // Fire-and-forget — handler is best-effort and never throws.
+      persistPurchaseStage({
+        sessionKey,
+        customerId: customerId || null,
+        agentSlug,
+        newStage,
+      }).catch((err) => {
+        console.error(`${logPrefix} purchase-stage persist unexpected throw: ${err.message}`);
+      });
+    }
+
+    // ── Step 10b: Fire escalation handler if marker was emitted ──
+    // The router sets `_escalation` on the merged config side-channel when
+    // the agent emits a [[ESCALATE: ...]] marker. We process it AFTER the
+    // calming reply has been published so the customer sees the empathy
+    // message first, then the bot goes silent.
+    const escalation = (merged as any)._escalation as
+      | { reason: string; priority: 'low' | 'normal' | 'high' | 'urgent'; summary: string }
+      | undefined;
+    if (escalation) {
+      const escalationCtx: EscalationContext = {
         agentSlug,
         sessionKey,
-        processingTime: Date.now() - merged.timestamp.getTime(),
-      },
-    };
-
-    bus.publishOutbound(outbound);
+        channelName: merged.channel,
+        chatId: merged.chatId,
+        customerId: customerId || null,
+        customerName: ((merged as any)._customerContext?.name as string) || null,
+        reason: escalation.reason,
+        priority: escalation.priority,
+        summary: escalation.summary,
+        triggerMessage: merged.content,
+        agentReply: replyText,
+      };
+      // Fire-and-forget — escalation handler does its own error handling and
+      // never throws, so we don't await its full chain blocking the consumer.
+      handleEscalation(escalationCtx).catch((err) => {
+        console.error(`${logPrefix} Escalation handler unexpected throw: ${err.message}`);
+      });
+    }
 
     // ── Step 11: Update pending message status + cooldown ──
     if (pendingId) {
