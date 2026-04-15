@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   X, RefreshCw, Loader2, Search, MessageSquare, User as UserIcon,
   Bot, CircleAlert, Calendar, Filter, ExternalLink, FileText,
+  Sparkles, PanelRightOpen, PanelRightClose, FolderOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +26,27 @@ interface ChatMessage {
   senderName: string;
   timestamp: string | null;
   metadata: Record<string, any> | null;
+}
+
+interface SessionFile {
+  session_id: string;
+  short_id: string;
+  fileKind: 'claude-jsonl' | 'gemini-json';
+  file_path: string;
+  started_at: string;
+  last_activity_at: string;
+  turn_count: number;
+  first_user_snippet: string | null;
+  size_bytes: number;
+}
+
+interface SessionFilesResponse {
+  slug: string;
+  total: number;
+  returned: number;
+  claude_count: number;
+  gemini_count: number;
+  files: SessionFile[];
 }
 
 interface ChatHistoryResponse {
@@ -191,6 +213,11 @@ export function CustomerChatDrawer({
 
   const canQuery = !!sessionKey || !!(channelName && senderId);
 
+  // Session Picker panel state
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
+  type Timeframe = 'chat' | 'week' | 'month' | 'all';
+  const [sessionTimeframe, setSessionTimeframe] = useState<Timeframe>('chat');
+
   const { data, isLoading, isFetching, refetch, error } = useQuery<ChatHistoryResponse>({
     queryKey: ['customer-chat', agentSlug, sessionKey, channelName, senderId, debouncedSearch],
     queryFn: async () => {
@@ -219,7 +246,7 @@ export function CustomerChatDrawer({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="chat-drawer-title">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-full max-w-5xl h-[88vh] bg-background rounded-2xl border shadow-2xl flex flex-col overflow-hidden mx-4">
+      <div className="relative w-full max-w-6xl h-[88vh] bg-background rounded-2xl border shadow-2xl flex flex-col overflow-hidden mx-4">
 
         {/* ─── HEADER ─────────────────────────────────────────── */}
         <div className="px-6 py-4 border-b shrink-0">
@@ -269,14 +296,6 @@ export function CustomerChatDrawer({
                     Agent: <span className="font-medium text-foreground/80">{data?.agent_display_name || agentSlug}</span>
                     {data?.agent_model && <span className="ml-1 font-mono text-muted-foreground/50">({data.agent_model})</span>}
                   </span>
-                  <button
-                    onClick={onClose}
-                    className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline inline-flex items-center gap-0.5"
-                    title="Đóng drawer để xem danh sách Phiên Agent (tất cả sessions JSONL của agent này, gồm cả Claude + Gemini từ trước)"
-                  >
-                    <FileText className="h-3 w-3" />
-                    Xem tất cả sessions của agent →
-                  </button>
                   {data?.fullHistoryCount !== undefined && (
                     <>
                       <span className="text-muted-foreground/40">·</span>
@@ -347,6 +366,20 @@ export function CustomerChatDrawer({
             />
           </div>
           <div className="flex-1" />
+          {/* Session Picker toggle */}
+          <button
+            onClick={() => setSessionPanelOpen(!sessionPanelOpen)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium select-none border transition-colors',
+              sessionPanelOpen
+                ? 'bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800'
+                : 'bg-muted text-muted-foreground/70 border-transparent hover:text-foreground',
+            )}
+            title={sessionPanelOpen ? 'Đóng panel session logs' : 'Mở panel session logs (Claude + Gemini JSONL files)'}
+          >
+            {sessionPanelOpen ? <PanelRightClose className="h-3 w-3" /> : <FolderOpen className="h-3 w-3" />}
+            Sessions
+          </button>
           <div
             className={cn(
               'flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium cursor-pointer select-none',
@@ -373,6 +406,9 @@ export function CustomerChatDrawer({
             </span>
           )}
         </div>
+
+        {/* ─── Split layout: chat + session picker ────────────── */}
+        <div className="flex-1 flex overflow-hidden min-h-0">
 
         {/* ─── BODY ───────────────────────────────────────────── */}
         <div ref={scrollRef} className="flex-1 overflow-auto px-6 py-4">
@@ -494,6 +530,22 @@ export function CustomerChatDrawer({
           )}
         </div>
 
+        {/* ─── SESSION PICKER PANEL (right side) ──────────────── */}
+        {sessionPanelOpen && (
+          <SessionPickerPanel
+            agentSlug={agentSlug}
+            agentDisplayName={data?.agent_display_name || agentSlug}
+            timeframe={sessionTimeframe}
+            onTimeframeChange={setSessionTimeframe}
+            chatFirstMsgAt={data?.messages[0]?.timestamp || null}
+            chatLastMsgAt={data?.messages[data.messages.length - 1]?.timestamp || data?.lastMessageAt || null}
+            onOpenSession={(sessionId) => onOpenSessionLog?.(sessionId)}
+            onClose={() => setSessionPanelOpen(false)}
+          />
+        )}
+        </div>
+        {/* ─── /Split layout ────────────────────────────────── */}
+
         {/* ─── FOOTER ─────────────────────────────────────────── */}
         {data && data.messages.length > 0 && (
           <div className="px-6 py-2 border-t text-[11px] text-muted-foreground flex items-center justify-between shrink-0">
@@ -612,8 +664,8 @@ function ChatBubble({
         {/* Drill-down only when message has agent_session_id tracking.
             Per-message session_id tracking lands in v2 (writer-side patch of
             consumer.ts + router.ts). Until then, old messages have no
-            precise session link — use header "Xem session logs" button
-            to browse all sessions of this agent. */}
+            precise session link — use the Sessions panel in the toolbar
+            to browse all JSONL sessions of this agent. */}
         {!isCustomer && onOpenSessionLog && message.metadata?.agent_session_id && (
           <button
             onClick={() => onOpenSessionLog(message.metadata?.agent_session_id || null)}
@@ -626,5 +678,230 @@ function ChatBubble({
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Session Picker Panel ───────────────────────────────────────────
+// Collapsible right panel showing Claude + Gemini session JSONL files for
+// this agent, filterable by timeframe. Each file click opens AgentLogDrawer
+// overlay (Mode B) via onOpenSession callback.
+
+function SessionPickerPanel({
+  agentSlug,
+  agentDisplayName,
+  timeframe,
+  onTimeframeChange,
+  chatFirstMsgAt,
+  chatLastMsgAt,
+  onOpenSession,
+  onClose,
+}: {
+  agentSlug: string;
+  agentDisplayName: string;
+  timeframe: 'chat' | 'week' | 'month' | 'all';
+  onTimeframeChange: (t: 'chat' | 'week' | 'month' | 'all') => void;
+  chatFirstMsgAt: string | null;
+  chatLastMsgAt: string | null;
+  onOpenSession: (sessionId: string) => void;
+  onClose: () => void;
+}) {
+  // Compute date range based on timeframe
+  const { fromISO, toISO } = useMemo(() => {
+    const now = Date.now();
+    if (timeframe === 'chat' && chatFirstMsgAt) {
+      const first = new Date(chatFirstMsgAt).getTime();
+      const last = chatLastMsgAt ? new Date(chatLastMsgAt).getTime() : now;
+      // ±12h padding
+      return {
+        fromISO: new Date(first - 12 * 3600 * 1000).toISOString(),
+        toISO: new Date(last + 12 * 3600 * 1000).toISOString(),
+      };
+    }
+    if (timeframe === 'week') {
+      return { fromISO: new Date(now - 7 * 86400 * 1000).toISOString(), toISO: new Date(now).toISOString() };
+    }
+    if (timeframe === 'month') {
+      return { fromISO: new Date(now - 30 * 86400 * 1000).toISOString(), toISO: new Date(now).toISOString() };
+    }
+    return { fromISO: '', toISO: '' }; // all
+  }, [timeframe, chatFirstMsgAt, chatLastMsgAt]);
+
+  const { data, isLoading, error } = useQuery<SessionFilesResponse>({
+    queryKey: ['session-files', agentSlug, fromISO, toISO],
+    queryFn: async () => {
+      const p = new URLSearchParams();
+      if (fromISO) p.set('from', fromISO);
+      if (toISO) p.set('to', toISO);
+      p.set('limit', '100');
+      const resp = await fetch(`/api/channels/agent-configs/${encodeURIComponent(agentSlug)}/session-files?${p}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
+    },
+    enabled: !!agentSlug,
+  });
+
+  const claudeFiles = useMemo(() => (data?.files || []).filter((f) => f.fileKind === 'claude-jsonl'), [data]);
+  const geminiFiles = useMemo(() => (data?.files || []).filter((f) => f.fileKind === 'gemini-json'), [data]);
+
+  // Check if session might match a customer message (within ±10min of chat range)
+  const isNearChat = (f: SessionFile): boolean => {
+    if (!chatFirstMsgAt || !chatLastMsgAt) return false;
+    const sessTs = new Date(f.last_activity_at).getTime();
+    const firstTs = new Date(chatFirstMsgAt).getTime();
+    const lastTs = new Date(chatLastMsgAt).getTime();
+    return sessTs >= firstTs - 10 * 60 * 1000 && sessTs <= lastTs + 10 * 60 * 1000;
+  };
+
+  return (
+    <div className="w-80 shrink-0 border-l bg-muted/20 flex flex-col overflow-hidden">
+      {/* Panel header */}
+      <div className="px-4 py-3 border-b flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold truncate">Session logs</div>
+            <div className="text-[10px] text-muted-foreground">
+              {data ? `${data.claude_count} Claude · ${data.gemini_count} Gemini` : 'Đang tải...'}
+            </div>
+          </div>
+        </div>
+        <Button size="icon" variant="ghost" onClick={onClose} className="h-6 w-6 shrink-0" aria-label="Đóng panel">
+          <PanelRightClose className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {/* Timeframe filter */}
+      <div className="px-4 py-2 border-b flex items-center gap-1.5 shrink-0 text-[10px]">
+        <Filter className="h-3 w-3 text-muted-foreground/60" />
+        {(['chat', 'week', 'month', 'all'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => onTimeframeChange(t)}
+            className={cn(
+              'px-1.5 py-0.5 rounded border transition-colors',
+              timeframe === t
+                ? 'bg-foreground/10 text-foreground border-border'
+                : 'text-muted-foreground/60 border-transparent hover:text-foreground',
+            )}
+            title={
+              t === 'chat' ? 'Trong khoảng thời gian chat ±12h'
+              : t === 'week' ? '7 ngày gần nhất'
+              : t === 'month' ? '30 ngày gần nhất'
+              : 'Tất cả (không filter)'
+            }
+          >
+            {t === 'chat' ? 'Chat range' : t === 'week' ? '7d' : t === 'month' ? '30d' : 'All'}
+          </button>
+        ))}
+      </div>
+
+      {/* File list */}
+      <div className="flex-1 overflow-auto">
+        {isLoading && (
+          <div className="p-4 text-center text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1.5" />
+            <p className="text-xs">Đang scan disk...</p>
+          </div>
+        )}
+        {error && (
+          <div className="p-4 text-center text-destructive">
+            <CircleAlert className="h-4 w-4 mx-auto mb-1.5" />
+            <p className="text-xs">Không load được: {error instanceof Error ? error.message : 'Error'}</p>
+          </div>
+        )}
+        {!isLoading && !error && data && data.total === 0 && (
+          <div className="p-4 text-center text-muted-foreground">
+            <FolderOpen className="h-6 w-6 mx-auto mb-2 opacity-30" />
+            <p className="text-xs font-medium">Không có session file nào</p>
+            <p className="text-[10px] mt-1">
+              Thử chuyển timeframe qua <span className="font-mono">All</span> hoặc dùng agent khác.
+            </p>
+          </div>
+        )}
+
+        {!isLoading && !error && data && data.total > 0 && (
+          <>
+            {claudeFiles.length > 0 && (
+              <div>
+                <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 bg-muted/30 sticky top-0">
+                  <FileText className="inline h-3 w-3 mr-1" />
+                  Claude ({claudeFiles.length})
+                </div>
+                {claudeFiles.map((f) => (
+                  <SessionFileRow key={f.session_id} file={f} nearChat={isNearChat(f)} onClick={() => onOpenSession(f.session_id)} />
+                ))}
+              </div>
+            )}
+            {geminiFiles.length > 0 && (
+              <div>
+                <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 bg-muted/30 sticky top-0">
+                  <Sparkles className="inline h-3 w-3 mr-1" />
+                  Gemini ({geminiFiles.length})
+                </div>
+                {geminiFiles.map((f) => (
+                  <SessionFileRow key={f.session_id} file={f} nearChat={isNearChat(f)} onClick={() => onOpenSession(f.session_id)} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Panel footer */}
+      <div className="px-4 py-2 border-t text-[10px] text-muted-foreground/60 shrink-0">
+        Agent: <span className="font-medium text-foreground/80">{agentDisplayName}</span>
+        {data && data.total > data.returned && (
+          <span className="ml-2">· Hiển thị {data.returned}/{data.total}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SessionFileRow({
+  file,
+  nearChat,
+  onClick,
+}: {
+  file: SessionFile;
+  nearChat: boolean;
+  onClick: () => void;
+}) {
+  const date = new Date(file.last_activity_at);
+  const dateStr = date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+  const timeStr = date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+  const sizeKB = Math.round(file.size_bytes / 1024);
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'w-full px-4 py-2 border-b border-border/30 text-left hover:bg-accent/50 transition-colors',
+        nearChat && 'bg-blue-50/40 dark:bg-blue-950/10',
+      )}
+      title={`Open JSONL: ${file.short_id}…  ${file.turn_count} turns · ${sizeKB}KB`}
+    >
+      <div className="flex items-center justify-between gap-2 mb-0.5">
+        <span className="font-mono text-[11px] text-foreground/80 truncate">{file.short_id}…</span>
+        <span className="text-[10px] tabular-nums text-muted-foreground/60 shrink-0">
+          {dateStr} {timeStr}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
+        <span>{file.turn_count} turns</span>
+        <span>·</span>
+        <span>{sizeKB}KB</span>
+        {nearChat && (
+          <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-blue-100/50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700">
+            match
+          </Badge>
+        )}
+      </div>
+      {file.first_user_snippet && (
+        <div className="mt-0.5 text-[10px] text-muted-foreground/50 line-clamp-2 leading-tight">
+          {file.first_user_snippet}
+        </div>
+      )}
+    </button>
   );
 }
