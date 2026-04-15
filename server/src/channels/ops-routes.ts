@@ -4,9 +4,19 @@
 
 import { Router } from 'express';
 import { supabase } from './zalo-personal/supabase.js';
+import { createClient } from '@supabase/supabase-js';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+
+// Dedicated Realtime client — service_role key + realtime config
+const REALTIME_URL = 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
+const REALTIME_KEY = process.env.GEMRAL_SUPABASE_SERVICE_KEY
+  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZmtiY256cW96emtvaHdiZ2JrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjE3NzUzNiwiZXhwIjoyMDc3NzUzNTM2fQ.pI9VjPhcl0sds1mcPsa5nnRv6ODDHbI29Q1ViMLoEQg';
+const realtimeClient = createClient(REALTIME_URL, REALTIME_KEY, {
+  realtime: { params: { eventsPerSecond: 5 } },
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
 const router = Router();
 
@@ -16,6 +26,70 @@ const CPS_ROOT = 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
 const CC_CWD = 'D:/Claude Projects/App Content Jennie/gem-content-center';
 
 // Phase 1: CC Supabase removed — batch_processor now writes directly to Main Supabase
+
+// ═══════════════════════════════════════════════════════
+// PUBLISH QUEUE REALTIME LISTENER (hybrid with 5m polling)
+// Subscribes to cc_publish_queue INSERT → call BE endpoint instantly
+// Gives <1s latency; polling cron (Gemral_PublishQueue 5m) is safety net.
+// ═══════════════════════════════════════════════════════
+
+const REALTIME_DEBOUNCE_MS = 3000; // coalesce bursts within 3s
+const recentInserts = new Set<string>();
+let realtimeSub: any = null;
+
+async function handlePublishInsert(row: any) {
+  const qid = row.id;
+  if (!qid || recentInserts.has(String(qid))) return;
+  recentInserts.add(String(qid));
+  setTimeout(() => recentInserts.delete(String(qid)), REALTIME_DEBOUNCE_MS);
+
+  const tt = row.trigger_type;
+  const sid = row.script_id;
+  console.log(`[PublishRealtime] event trigger=${tt} script=${sid} qid=${qid}`);
+
+  try {
+    if (tt === 'immediate' || tt === 'manual') {
+      const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3101}/api/ops/content-pipeline/scripts/${sid}/publish-now`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      console.log(`[PublishRealtime] publish-now(${sid}) → ${r.status}`);
+    } else if (tt === 'threshold') {
+      const body = row.channel_target ? JSON.stringify({ channel_target: row.channel_target }) : '{}';
+      const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3101}/api/ops/content-pipeline/publish-batch`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+      });
+      console.log(`[PublishRealtime] publish-batch → ${r.status}`);
+    }
+  } catch (err: any) {
+    console.error(`[PublishRealtime] handler error: ${err.message}`);
+  }
+}
+
+function startPublishRealtime() {
+  if (realtimeSub) return;
+  try {
+    realtimeSub = realtimeClient
+      .channel('publish-queue-inserts')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'cc_publish_queue' },
+        (payload: any) => handlePublishInsert(payload.new))
+      .subscribe((status: string, err?: Error) => {
+        console.log(`[PublishRealtime] channel status: ${status}${err ? ' err=' + err.message : ''}`);
+        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          realtimeSub = null;
+          setTimeout(startPublishRealtime, 10000); // retry after 10s
+        }
+      });
+    console.log('[PublishRealtime] Subscribing to cc_publish_queue INSERT events (Realtime)');
+  } catch (err: any) {
+    console.error('[PublishRealtime] failed to subscribe:', err.message);
+    realtimeSub = null;
+    setTimeout(startPublishRealtime, 10000);
+  }
+}
+
+// Kick off subscription on module load (after express router init below)
+setTimeout(startPublishRealtime, 2000);
 
 // ═══════════════════════════════════════════════════════
 // CONTENT PIPELINE — REAL DATA, NO HARDCODE
@@ -116,6 +190,17 @@ router.delete('/content-pipeline/scripts/:id', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Bulk delete
+router.post('/content-pipeline/scripts/bulk-delete', async (req, res) => {
+  try {
+    const { script_ids } = req.body;
+    if (!script_ids?.length) return res.status(400).json({ error: 'Không có script_ids' });
+    const { error } = await supabase.from('cc_scripts').delete().in('id', script_ids);
+    if (error) throw error;
+    res.json({ success: true, deleted: script_ids.length });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 // 1B: Editable schedule — PUT /content-pipeline/scripts/:key/schedule
@@ -907,12 +992,16 @@ router.post('/content-pipeline/planner/parse-plan', async (req, res) => {
   const { data: planner } = await supabase.from('cc_scripts').select('id, body').eq('id', planner_script_id).single();
   if (!planner?.body) return res.status(404).json({ error: 'Không tìm thấy plan hoặc body trống' });
 
-  // Parse markdown table
-  const lines = (planner.body as string).split('\n').filter((l: string) => l.includes('|') && !l.includes(':---') && !l.includes('---'));
-  if (lines.length < 2) return res.status(400).json({ error: 'Không parse được bảng markdown — cần ít nhất header + 1 data row' });
+  // Parse markdown table — find header via separator line (|---|---|)
+  const allLines = (planner.body as string).split('\n');
+  const sepIdx = allLines.findIndex((l: string) => l.includes('|') && /[-]{3,}/.test(l) && l.replace(/[\s|:-]/g, '').length === 0);
+  if (sepIdx < 1) return res.status(400).json({ error: 'Không parse được bảng markdown — không tìm thấy separator line (|---|---|)' });
 
-  const headers = lines[0].split('|').map((h: string) => h.trim()).filter(Boolean);
-  const rows = lines.slice(1).map((line: string) => {
+  const headers = allLines[sepIdx - 1].split('|').map((h: string) => h.trim()).filter(Boolean);
+  const dataLines = allLines.slice(sepIdx + 1).filter((l: string) => l.includes('|') && l.trim().length > 3);
+  if (dataLines.length === 0) return res.status(400).json({ error: 'Không parse được bảng markdown — không có data row nào' });
+
+  const rows = dataLines.map((line: string) => {
     const cells = line.split('|').map((c: string) => c.trim()).filter(Boolean);
     const row: Record<string, string> = {};
     headers.forEach((h: string, i: number) => { row[h] = cells[i] || ''; });
@@ -926,18 +1015,28 @@ router.post('/content-pipeline/planner/parse-plan', async (req, res) => {
     else if (/tình yêu|ritual|crystal|spiritual|7 ngày|vision/.test(topic)) account = 'profile_jennie';
 
     const rawPillar = row['Pillar'] || row['Chủ đề'] || '';
+    const rawType = (row['Loại'] || row['Type'] || '').toLowerCase();
+    // Allowed: social_post, news, email, push_notification, sms, latc, tmt, short_clip, content_planner, etc.
+    const contentType = /blog|bài viết|seo/.test(rawType) ? 'news'
+      : /email/.test(rawType) ? 'email'
+      : /push/.test(rawType) ? 'push_notification'
+      : /sms/.test(rawType) ? 'sms'
+      : /clip|video|reel/.test(rawType) ? 'short_clip'
+      : 'social_post';
     return {
-      title: row['Tiêu đề'] || row['Tieu de'] || row['Chủ đề'] || 'Không có tiêu đề',
-      content_type: 'social_post',
+      title: row['Tiêu đề'] || row['Tieu de'] || row['Title'] || row['Chủ đề'] || 'Không có tiêu đề',
+      content_type: contentType,
       track: 'wealth',
       pillar: topicToPillar(rawPillar),
       persona: 'jennie_mentor',
       writing_mode: 'mode_1_calm',
       status: 'topic',
       metadata: {
-        scheduled_date: row['Ngày'] || row['Ngay'] || null,
-        scheduled_time: row['Giờ đăng'] || row['Gio dang'] || '10:00',
+        // Don't auto-assign date — let user drag into calendar slots
+        suggested_date: row['Ngày'] || row['Ngay'] || null,
+        suggested_time: row['Giờ đăng'] || row['Gio dang'] || '10:00',
         target_account: row['Account'] || account,
+        platform: row['Nền tảng'] || row['Platform'] || '',
         topic_summary: row['Tóm tắt'] || row['Tom tat'] || '',
         hashtags: row['Hashtags'] || '',
         plan_id: planner_script_id,
@@ -961,7 +1060,7 @@ router.post('/content-pipeline/planner/generate', async (req, res) => {
   let query = supabase
     .from('cc_scripts')
     .select('id, title, pillar, content_type, metadata')
-    .is('body', null)
+    .or('body.is.null,body.eq.')
     .eq('status', 'topic');
 
   if (script_ids?.length) query = query.in('id', script_ids);
@@ -993,7 +1092,7 @@ router.post('/content-pipeline/planner/generate', async (req, res) => {
         provider: 'claude',
         target_script_id: t.id,
       },
-      created_by: 'board',
+      created_by: '01fe99b8-ef1b-4cdd-892a-3e976d6b1881', // system/board user
     };
   });
 
@@ -1069,10 +1168,13 @@ router.post('/content-pipeline/planner/import', async (req, res) => {
       return row;
     }).filter((r: Record<string, string>) => Object.values(r).some(v => v.length > 0));
   } else {
-    const lines = (content as string).split('\n').filter((l: string) => l.includes('|') && !l.includes(':---') && !l.match(/^[\s|:-]+$/));
-    if (lines.length >= 2) {
-      const headers = lines[0].split('|').map((h: string) => h.trim()).filter(Boolean);
-      rows = lines.slice(1).map((line: string) => {
+    // Find header via separator line (|---|---|)
+    const allMdLines = (content as string).split('\n');
+    const sepIdx = allMdLines.findIndex((l: string) => l.includes('|') && /[-]{3,}/.test(l) && l.replace(/[\s|:-]/g, '').length === 0);
+    if (sepIdx >= 1) {
+      const headers = allMdLines[sepIdx - 1].split('|').map((h: string) => h.trim()).filter(Boolean);
+      const dataLines = allMdLines.slice(sepIdx + 1).filter((l: string) => l.includes('|') && l.trim().length > 3);
+      rows = dataLines.map((line: string) => {
         const cells = line.split('|').map((c: string) => c.trim()).filter(Boolean);
         const row: Record<string, string> = {};
         headers.forEach((h: string, i: number) => { row[h] = cells[i] || ''; });
@@ -1086,7 +1188,7 @@ router.post('/content-pipeline/planner/import', async (req, res) => {
   // Tạo plan parent script
   const { data: planScript, error: planError } = await supabase.from('cc_scripts').insert({
     title: `Imported Plan ${new Date().toLocaleDateString('vi')}`,
-    content_type: 'social_post',
+    content_type: 'content_planner',
     track: 'wealth',
     pillar: 'integration',
     persona: 'jennie_mentor',
@@ -1186,6 +1288,342 @@ router.post('/content-pipeline/planner/delegate-ceo', async (req, res) => {
   } catch (err: any) {
     send({ type: 'error', text: `Không tìm thấy claude CLI: ${err.message}` });
     res.end();
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// JOB LOGS — GET /content-pipeline/jobs/:id/logs + SSE stream
+// Data source: cc_job_logs (nếu có) + fallback cc_generation_jobs.output_data/metadata
+// ═══════════════════════════════════════════════════════
+
+function normalizeJobLogs(job: any, dbLogs: any[]): any[] {
+  const events: any[] = [];
+  // Synthetic events from job status
+  if (job?.created_at) {
+    events.push({ ts: job.created_at, level: 'info', stage: 'queued',
+      message: `Job created — type=${job.job_type} content=${job.content_type || ''} model=${job.model_used || '?'}` });
+  }
+  if (job?.started_at) {
+    events.push({ ts: job.started_at, level: 'info', stage: 'started',
+      message: `Processor acquired: ${job.processor || '(unknown)'}` });
+  }
+  // DB logs from cc_job_logs
+  for (const row of dbLogs || []) {
+    events.push({
+      ts: row.ts,
+      level: row.level || 'info',
+      stage: row.stage || '',
+      message: row.message || '',
+      metadata: row.metadata || null,
+    });
+  }
+  // Output data.logs (if batch_processor wrote timestamped array)
+  let outData: any = {};
+  try {
+    outData = typeof job?.output_data === 'string' ? JSON.parse(job.output_data) : (job?.output_data || {});
+  } catch {}
+  if (Array.isArray(outData?.logs)) {
+    for (const entry of outData.logs) {
+      events.push({
+        ts: entry.ts || entry.timestamp || job.updated_at,
+        level: entry.level || 'info',
+        stage: entry.stage || 'batch',
+        message: entry.message || String(entry),
+      });
+    }
+  }
+  if (job?.error_message) {
+    events.push({ ts: job.completed_at || job.updated_at, level: 'error', stage: 'error',
+      message: job.error_message, metadata: { code: job.error_code } });
+  }
+  if (job?.completed_at) {
+    const label = job.status === 'completed' ? 'completed' : job.status;
+    events.push({ ts: job.completed_at, level: job.status === 'failed' ? 'error' : 'info', stage: label,
+      message: `Job ${label} — duration ${job.generation_time_ms || 0}ms, tokens ${job.total_tokens || 0}` });
+  }
+  // Sort ascending by ts
+  events.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  return events;
+}
+
+router.get('/content-pipeline/jobs/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sinceParam = req.query.since as string | undefined;
+    const since = sinceParam ? new Date(sinceParam) : null;
+
+    const [{ data: job, error: jobErr }, logsRes] = await Promise.all([
+      supabase.from('cc_generation_jobs').select('*').eq('id', id).single(),
+      (async () => {
+        let q = supabase.from('cc_job_logs').select('*').eq('job_id', id).order('ts', { ascending: true }).limit(2000);
+        if (since) q = q.gt('ts', since.toISOString());
+        return q;
+      })(),
+    ]);
+
+    if (jobErr && jobErr.code !== 'PGRST116') throw jobErr;
+    if (logsRes.error) throw logsRes.error;
+
+    const events = normalizeJobLogs(job, logsRes.data || []);
+    const filtered = since ? events.filter((e) => new Date(e.ts).getTime() > since.getTime()) : events;
+
+    // input_params is jsonb but PostgREST sometimes returns it as a JSON string — normalize
+    let inputParams: any = job?.input_params ?? null;
+    if (typeof inputParams === 'string') {
+      try { inputParams = JSON.parse(inputParams); } catch { /* leave as string */ }
+    }
+    let metadata: any = job?.metadata ?? null;
+    if (typeof metadata === 'string') {
+      try { metadata = JSON.parse(metadata); } catch {}
+    }
+    let outputData: any = job?.output_data ?? null;
+    if (typeof outputData === 'string') {
+      try { outputData = JSON.parse(outputData); } catch {}
+    }
+
+    res.json({
+      job: job ? {
+        id: job.id,
+        status: job.status,
+        job_type: job.job_type,
+        content_type: job.content_type,
+        track: job.track,
+        pillar: job.pillar,
+        persona: job.persona,
+        writing_mode: job.writing_mode,
+        model_used: job.model_used,
+        progress: job.progress,
+        priority: job.priority,
+        created_at: job.created_at,
+        started_at: job.started_at,
+        completed_at: job.completed_at,
+        prompt_tokens: job.prompt_tokens,
+        completion_tokens: job.completion_tokens,
+        total_tokens: job.total_tokens,
+        generation_time_ms: job.generation_time_ms,
+        retry_count: job.retry_count,
+        max_retries: job.max_retries,
+        entity_type: job.entity_type,
+        entity_id: job.entity_id,
+        processor: job.processor,
+        error_message: job.error_message,
+        error_code: job.error_code,
+        output_error: job.output_error,
+        input_params: inputParams,
+        metadata,
+        output_data: outputData,
+      } : null,
+      events: filtered,
+      lastTs: filtered.length > 0 ? filtered[filtered.length - 1].ts : (since ? since.toISOString() : null),
+      isLive: job?.status === 'queued' || job?.status === 'processing',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi tải logs' });
+  }
+});
+
+router.get('/content-pipeline/jobs/:id/logs/stream', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const send = (obj: any) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  const { id } = req.params;
+  let lastTs: string | null = null;
+  let closed = false;
+
+  const poll = async () => {
+    if (closed) return;
+    try {
+      let logsQuery = supabase.from('cc_job_logs').select('*').eq('job_id', id).order('ts', { ascending: true }).limit(500);
+      if (lastTs) logsQuery = logsQuery.gt('ts', lastTs);
+      const [{ data: job }, { data: dbLogs }] = await Promise.all([
+        supabase.from('cc_generation_jobs').select('*').eq('id', id).single(),
+        logsQuery,
+      ]);
+      const events = normalizeJobLogs(job, dbLogs || []);
+      const fresh = lastTs ? events.filter((e) => new Date(e.ts).getTime() > new Date(lastTs!).getTime()) : events;
+      for (const ev of fresh) send({ type: 'event', event: ev });
+      if (fresh.length > 0) lastTs = fresh[fresh.length - 1].ts;
+      if (job && (job.status === 'completed' || job.status === 'failed')) {
+        send({ type: 'done', status: job.status });
+        closed = true; res.end();
+        return;
+      }
+    } catch (err: any) {
+      send({ type: 'error', text: err.message || 'poll error' });
+    }
+  };
+
+  // Initial flush
+  await poll();
+  const interval = setInterval(poll, 2000);
+  req.on('close', () => { closed = true; clearInterval(interval); });
+});
+
+// ═══════════════════════════════════════════════════════
+// PUBLISH TRIGGERS — Immediate + Batch + Queue polling
+// ═══════════════════════════════════════════════════════
+
+const SCHEDULER_CWD = CPS_ROOT;
+const SCHEDULER_SCRIPT = 'scripts/schedule_meta_business_suite.py';
+
+function spawnPublisher(args: string[], label: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn('python', [SCHEDULER_SCRIPT, ...args], { cwd: SCHEDULER_CWD, env: { ...process.env, PYTHONUTF8: '1' } });
+    let stdout = '', stderr = '';
+    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.on('close', (code: number) => {
+      console.log(`[Publisher:${label}] exit=${code} stdout=${stdout.length} stderr=${stderr.length}`);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+// POST /content-pipeline/scripts/:id/publish-now — đăng 1 bài liền, bypass cron
+router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Enqueue with trigger_type=manual
+    const { data: script, error: sErr } = await supabase
+      .from('cc_scripts')
+      .update({ status: 'approved', publish_mode: 'immediate', publish_ready_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, channel_target, status')
+      .single();
+    if (sErr) throw sErr;
+
+    await supabase.from('cc_publish_queue').insert({
+      script_id: id,
+      trigger_type: 'manual',
+      channel_target: script.channel_target,
+      metadata: { source: 'api_publish_now', user: req.headers['x-user'] || 'unknown' },
+    });
+
+    // Spawn Playwright single-publish async (don't wait for full upload)
+    spawnPublisher(['--single', id], `single-${id.slice(0, 8)}`).then((r) => {
+      supabase.from('cc_publish_queue')
+        .update({
+          status: r.code === 0 ? 'done' : 'failed',
+          published_at: r.code === 0 ? new Date().toISOString() : null,
+          error_message: r.code !== 0 ? r.stderr.slice(0, 2000) : null,
+        })
+        .eq('script_id', id).eq('status', 'pending')
+        .then(() => {});
+    });
+
+    res.json({ message: 'Đang publish ngay — check Log Viewer hoặc cc_publish_queue để track', script_id: id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi publish-now' });
+  }
+});
+
+// POST /content-pipeline/publish-batch — đăng tất cả approved với publish_mode=threshold_5 hoặc manual batch
+router.post('/content-pipeline/publish-batch', async (req, res) => {
+  try {
+    const channelTarget = req.body?.channel_target as string | undefined;
+    const forceAll = req.body?.force_all === true;
+
+    let query = supabase
+      .from('cc_scripts')
+      .select('id, channel_target, publish_mode')
+      .eq('status', 'approved')
+      .is('published_at', null);
+    if (!forceAll) query = query.eq('publish_mode', 'threshold_5');
+    if (channelTarget) query = query.eq('channel_target', channelTarget);
+
+    const { data: scripts, error: sErr } = await query;
+    if (sErr) throw sErr;
+    if (!scripts || scripts.length === 0) {
+      return res.json({ message: 'Không có bài nào đủ điều kiện publish', count: 0 });
+    }
+
+    const ids = scripts.map((s) => s.id);
+    await supabase.from('cc_publish_queue').insert(
+      ids.map((sid) => ({
+        script_id: sid,
+        trigger_type: 'manual' as const,
+        channel_target: channelTarget,
+        metadata: { source: 'api_publish_batch', batch_size: ids.length },
+      }))
+    );
+    await supabase.from('cc_scripts')
+      .update({ publish_queued_at: new Date().toISOString(), publish_ready_at: new Date().toISOString() })
+      .in('id', ids);
+
+    spawnPublisher(['--batch-approved', ...(channelTarget ? ['--channel', channelTarget] : [])], `batch-${ids.length}`).then((r) => {
+      supabase.from('cc_publish_queue')
+        .update({
+          status: r.code === 0 ? 'done' : 'failed',
+          published_at: r.code === 0 ? new Date().toISOString() : null,
+          error_message: r.code !== 0 ? r.stderr.slice(0, 2000) : null,
+        })
+        .in('script_id', ids).eq('status', 'pending')
+        .then(() => {});
+    });
+
+    res.json({ message: `Đã enqueue ${ids.length} bài để publish batch`, count: ids.length, script_ids: ids });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi publish-batch' });
+  }
+});
+
+// GET /content-pipeline/publish-queue — status của queue
+router.get('/content-pipeline/publish-queue', async (req, res) => {
+  try {
+    const status = (req.query.status as string) || '';
+    const limit = parseInt((req.query.limit as string) || '50');
+    let q = supabase.from('cc_publish_queue').select('*').order('enqueued_at', { ascending: false }).limit(limit);
+    if (status) q = q.in('status', status.split(','));
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ queue: data || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /content-pipeline/scripts/:id/publish-mode — đổi publish_mode
+router.put('/content-pipeline/scripts/:id/publish-mode', async (req, res) => {
+  const { id } = req.params;
+  const { publish_mode } = req.body;
+  if (!['scheduled', 'immediate', 'threshold_5'].includes(publish_mode)) {
+    return res.status(400).json({ error: 'publish_mode phải là scheduled | immediate | threshold_5' });
+  }
+  try {
+    const { error } = await supabase.from('cc_scripts').update({ publish_mode }).eq('id', id);
+    if (error) throw error;
+    res.json({ message: `Đã đổi publish_mode → ${publish_mode}`, script_id: id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Recent jobs — dùng cho Log Viewer list ở trang CCAIGen
+router.get('/content-pipeline/jobs/recent', async (req, res) => {
+  try {
+    const limit = parseInt((req.query.limit as string) || '10');
+    const { data, error } = await supabase
+      .from('cc_generation_jobs')
+      .select('id, job_type, content_type, status, model_used, progress, created_at, started_at, completed_at, total_tokens, generation_time_ms, error_message, output_error, input_params')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    const jobs = (data || []).map((j: any) => {
+      let params: any = {};
+      try { params = typeof j.input_params === 'string' ? JSON.parse(j.input_params) : (j.input_params || {}); } catch {}
+      return {
+        ...j,
+        topic: params.userPrompt?.slice(0, 100) || params.topic || '',
+        _provider: params.provider || '',
+        _model: params.model || j.model_used || '',
+      };
+    });
+    res.json({ jobs });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi tải recent jobs' });
   }
 });
 
