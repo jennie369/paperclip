@@ -63,6 +63,7 @@ import { useCreateScript, useCreateSocialPost } from '@gem/hooks/useQueryHooks';
 import { useJobSubscription } from '@gem/hooks/useJobSubscription';
 import CCSelect from './CCSelect';
 import ContentPlannerSidebar from './ContentPlannerSidebar';
+import JobLogViewerPanel from './JobLogViewerPanel';
 
 // ============================================================================
 // Constants — Loại nội dung
@@ -83,6 +84,11 @@ const OUTPUT_TYPE_OPTIONS = [
   { value: 'news_article', label: 'Bài Tin Tức / Blog SEO', jobType: 'news', contentType: 'news' },
   { value: 'email_html', label: 'Email Marketing HTML', jobType: 'email', contentType: 'email' },
   { value: 'content_planner', label: 'Content Planner (Lịch Nội Dung)', jobType: 'content_planner', contentType: 'content_planner' },
+  { value: 'outline_latc', label: 'Outline Kịch Bản LATC (Đề cương trước)', jobType: 'outline', contentType: 'latc' },
+  { value: 'outline_tmt', label: 'Outline Kịch Bản TMT (Đề cương trước)', jobType: 'outline', contentType: 'tmt' },
+  { value: 'brainstorm', label: 'Brainstorm Chủ Đề (Gợi ý topic từ trends)', jobType: 'brainstorm', contentType: '' },
+  { value: 'repurpose', label: 'Repurpose (Tái chế content cũ → format mới)', jobType: 'repurpose', contentType: '' },
+  { value: 'image_prompt', label: 'Image Prompt (Prompt tạo hình minh họa)', jobType: 'image_prompt', contentType: '' },
 ];
 
 // ============================================================================
@@ -1099,6 +1105,19 @@ export default function AiGenPage() {
   const [plannerContentTypes, setPlannerContentTypes] = useState(['social_post']);
   const [plannerTopics, setPlannerTopics] = useState(['app_features', 'trading_mindset']);
 
+  // -- Content Planner: Account & Schedule Config (P19, 2026-04-10) --
+  const PLANNER_ACCOUNTS = [
+    { id: 'page_jennie', name: 'Page Jennie', voice: 'jennie', pillars: 'triệu_phú, trading_mindset, lifestyle', login: 'zaochou224', dest: 'facebook.com/jennieuyenchufb' },
+    { id: 'page_gemral', name: 'Page Gemral', voice: 'generic', pillars: 'trading_technical, app_product, education', login: 'zaochou224', dest: 'facebook.com/gemralofficial' },
+    { id: 'profile_jennie', name: 'Profile Jennie', voice: 'jennie', pillars: 'tình_yêu, ritual, crystal, 7_ngày, spiritual', login: 'ygivingorg2', dest: 'facebook.com/jennie.uyen.chu.795603' },
+    { id: 'forum_gemral', name: 'Forum Gemral', voice: 'generic', pillars: 'All content types', login: 'Supabase API', dest: 'gemral.com (forumService)' },
+  ];
+  const PLANNER_TIME_SLOTS = ['10:00', '17:00', '19:45'];
+  const [plannerAccounts, setPlannerAccounts] = useState(['page_jennie', 'page_gemral', 'profile_jennie']);
+  const [plannerPostsPerDay, setPlannerPostsPerDay] = useState(3);
+  const [plannerTimeSlots, setPlannerTimeSlots] = useState([...PLANNER_TIME_SLOTS]);
+  const plannerTotalPosts = plannerAccounts.length * parseInt(plannerDuration) * plannerPostsPerDay;
+
   // -- Target Audience & Tone --
   const [targetAudience, setTargetAudience] = useState('all');
   const [contentTone, setContentTone] = useState('auto');
@@ -1186,6 +1205,8 @@ export default function AiGenPage() {
   // -- Content Planner sidebar (Supabase-synced) --
   const [plannerData, setPlannerData] = useState({});
   const [plannerCollapsed, setPlannerCollapsed] = useState(false);
+  const [logViewerJobId, setLogViewerJobId] = useState(null);
+  const [logViewerOpen, setLogViewerOpen] = useState(false);
   const fileInputRef = useRef(null);
   const abortRef = useRef(null);
   const isRestoringRef = useRef(false);
@@ -1806,6 +1827,20 @@ QUY TẮC FACEBOOK COMPLIANCE (BẮT BUỘC — ĐỂ TRÁNH BỊ GIẢM REACH):
     const userPromptParts = [
       `LOẠI NỘI DUNG: ${selectedOption.label}`,
     ];
+
+    // USE-CASE FIRST rule — UNIVERSAL, inject cho MỌI output type
+    userPromptParts.push(`
+
+🔴 QUY TẮC VIẾT — USE-CASE FIRST (ÁP DỤNG MỌI LOẠI NỘI DUNG)
+KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI viết kiểu use-case:
+1. TRƯỚC: khổ thế nào? (pain point cụ thể, khoảnh khắc thật, giờ giấc, cảm xúc)
+2. KHI: làm gì cụ thể? (hành động vài giây/phút, thao tác rõ ràng)
+3. SAU: kết quả + cảm giác? (thành công, nhẹ nhõm, tự tin, +Xtr, -Y kg stress)
+
+❌ SAI: "Scanner giúp phát hiện pattern nến nhanh"
+✅ ĐÚNG: "2h sáng chart BTC vẽ H&S mà bạn ngủ say — app ping, mở lên thấy entry/SL/TP vẽ sẵn, đặt lệnh 30 giây rồi ngủ tiếp, sáng +3R, không còn FOMO."
+
+Áp dụng cho mọi chủ đề: app features, trading mindset, tâm linh, tin tức, email, chatbot.`);
     if (batchCount > 1) {
       userPromptParts.push(`\nSỐ LƯỢNG BÀI CẦN TẠO: ${batchCount} (phân cách mỗi bài bằng dòng "===BÀI MỚI===")`);
     }
@@ -1901,6 +1936,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
         persona: persona !== 'auto' ? persona : undefined,
         writingMode: writingMode !== 'auto' ? writingMode : undefined,
         brandVoice,
+        contentTopic: isSocialPost ? socialTopic : undefined,
         onStream: (chunk) => {
           setOutput(chunk);
           setPipelineStep('processing');
@@ -3194,6 +3230,21 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
 
       {/* Main AI Gen content */}
       <div className="space-y-6 flex-1 min-w-0">
+      {/* Log Viewer Toggle */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setLogViewerOpen((v) => !v)}
+          className="text-xs px-3 py-1.5 rounded-md border border-border bg-card hover:bg-accent/30 flex items-center gap-2"
+        >
+          <span>{logViewerOpen ? '📖' : '📜'}</span>
+          <span>{logViewerOpen ? 'Ẩn' : 'Hiện'} Log Viewer</span>
+          <span className="text-[10px] text-muted-foreground/70">(theo dõi job batch_processor + generation realtime)</span>
+        </button>
+      </div>
+      {logViewerOpen && (
+        <JobLogViewerPanel selectedJobId={logViewerJobId} onSelectJob={setLogViewerJobId} />
+      )}
       {/* Calendar → AI Gen linked banner */}
       {linkedEventId && (
         <div className="p-3 rounded-card bg-emerald/10 border border-emerald/20 flex items-center gap-2">
@@ -3344,13 +3395,19 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
               />
 
               {socialTopic === 'app_features' && (
-                <CheckboxGroup
-                  label="Tính năng App (chọn nhiều)"
-                  options={SOCIAL_APP_FEATURE_OPTIONS}
-                  selected={socialTopicDetails}
-                  onChange={setSocialTopicDetails}
-                  disabled={generating}
-                />
+                <>
+                  <div className="text-xs p-2 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300">
+                    🔴 <b>USE-CASE FIRST</b>: AI sẽ viết theo kiểu lợi ích + cảm giác + thành công sau khi dùng,
+                    KHÔNG liệt kê tính năng đơn thuần. Ba câu hỏi: (1) Trước khi dùng khổ thế nào? (2) Khi dùng làm gì cụ thể? (3) Kết quả + cảm giác ra sao?
+                  </div>
+                  <CheckboxGroup
+                    label="Tính năng App (chọn nhiều)"
+                    options={SOCIAL_APP_FEATURE_OPTIONS}
+                    selected={socialTopicDetails}
+                    onChange={setSocialTopicDetails}
+                    disabled={generating}
+                  />
+                </>
               )}
 
               {socialTopic === 'trading_mindset' && (
@@ -3467,9 +3524,98 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                 disabled={generating}
               />
 
+              {/* ── Account & Schedule Config (interactive checkboxes) ── */}
+              <div className="space-y-3 pt-2 border-t border-border/50">
+                <label className="block text-xs font-semibold text-txt-2 uppercase tracking-wider">
+                  Tài khoản đăng bài (chọn accounts)
+                </label>
+                <div className="space-y-1.5">
+                  {PLANNER_ACCOUNTS.map((acc) => {
+                    const checked = plannerAccounts.includes(acc.id);
+                    return (
+                      <label key={acc.id} className={`flex items-start gap-2.5 p-2 rounded border cursor-pointer transition-all ${checked ? 'border-primary/40 bg-primary/5' : 'border-border bg-glass-bg hover:border-border-2'} ${generating ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setPlannerAccounts(prev => checked ? prev.filter(x => x !== acc.id) : [...prev, acc.id])}
+                          disabled={generating}
+                          className="mt-0.5 accent-primary"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold">{acc.name}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${acc.voice === 'jennie' ? 'bg-pink-500/10 text-pink-500' : 'bg-violet-500/10 text-violet-500'}`}>{acc.voice}</span>
+                          </div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">{acc.pillars}</div>
+                          <div className="text-[9px] text-muted-foreground/60 font-mono mt-0.5">{acc.login} → {acc.dest}</div>
+                        </div>
+                        {checked && (
+                          <div className="text-right shrink-0">
+                            <div className="text-[10px] text-muted-foreground">Tổng</div>
+                            <div className="text-sm font-bold text-primary font-mono">{parseInt(plannerDuration) * plannerPostsPerDay}</div>
+                          </div>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* Posts per day */}
+                <div className="flex items-center gap-3">
+                  <label className="text-[10px] font-semibold text-txt-2 whitespace-nowrap">Số bài/ngày mỗi account:</label>
+                  <div className="flex gap-1.5">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        disabled={generating}
+                        onClick={() => setPlannerPostsPerDay(n)}
+                        className={`w-8 h-8 text-xs font-bold rounded border transition-all ${plannerPostsPerDay === n ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-border-2'} ${generating ? 'opacity-50' : 'cursor-pointer'}`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Time slots */}
+                <div>
+                  <label className="block text-[10px] font-semibold text-txt-2 mb-1.5">Khung giờ đăng (chọn nhiều):</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {['07:00', '08:30', '10:00', '12:00', '14:00', '17:00', '19:00', '19:45', '21:00'].map((t) => {
+                      const checked = plannerTimeSlots.includes(t);
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          disabled={generating}
+                          onClick={() => setPlannerTimeSlots(prev => checked ? prev.filter(x => x !== t) : [...prev, t].sort())}
+                          className={`px-2.5 py-1 text-[10px] font-mono rounded border transition-all ${checked ? 'border-primary/40 bg-primary/10 text-primary font-semibold' : 'border-border text-muted-foreground hover:border-border-2'} ${generating ? 'opacity-50' : 'cursor-pointer'}`}
+                        >
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Summary calculation */}
+                <div className="p-2.5 rounded bg-primary/5 border border-primary/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-primary">Tổng bài cần generate:</span>
+                    <span className="text-lg font-bold text-primary font-mono">{plannerTotalPosts}</span>
+                  </div>
+                  <p className="text-[9px] text-primary/60 mt-1">
+                    = {plannerAccounts.length} accounts × {plannerDuration} ngày × {plannerPostsPerDay} bài/ngày
+                    {plannerTimeSlots.length > 0 && ` · Khung giờ: ${plannerTimeSlots.join(', ')}`}
+                    · Pillars xen kẽ round-robin (tránh dính chùm)
+                  </p>
+                </div>
+              </div>
+
               <div className="p-2.5 rounded bg-[#FFBD59]/5 border border-[#FFBD59]/20">
                 <p className="text-[10px] text-[#FFBD59]/80 leading-relaxed">
-                  Output sẽ ở dạng Markdown Table — copy trực tiếp vào Notion, Google Sheets hoặc bất kỳ app nào hỗ trợ Markdown.
+                  Output: Markdown Table {plannerTotalPosts} bài. Copy vào Notion/Sheets.
                 </p>
               </div>
             </div>
@@ -4330,27 +4476,27 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-card bg-glass-bg border border-border mb-4">
+            <div className="p-4 rounded-card bg-card border border-border mb-4">
               {isEditing ? (
                 <textarea
                   value={output}
                   onChange={(e) => setOutput(e.target.value)}
-                  className="w-full bg-transparent text-sm text-txt-2 leading-relaxed focus:outline-none resize-none min-h-[300px] font-sans"
+                  className="w-full bg-transparent text-sm text-foreground leading-relaxed focus:outline-none resize-none min-h-[300px] font-sans"
                   style={{ minHeight: `${Math.max(300, output.split('\n').length * 22)}px` }}
                 />
               ) : (
-                <div className="prose prose-invert prose-sm max-w-none">
+                <div className="prose dark:prose-invert prose-sm max-w-none text-foreground">
                   {output.split('\n').map((line, i) => {
                     if (line.startsWith('## ')) {
                       return (
-                        <h2 key={i} className="font-heading text-lg text-gold font-semibold mt-4 mb-2">
+                        <h2 key={i} className="font-heading text-lg text-amber-700 dark:text-gold font-semibold mt-4 mb-2">
                           {line.replace(/^##\s+/, '')}
                         </h2>
                       );
                     }
                     if (line.startsWith('### ')) {
                       return (
-                        <h3 key={i} className="font-heading text-md text-txt font-semibold mt-3 mb-1">
+                        <h3 key={i} className="font-heading text-md text-foreground font-semibold mt-3 mb-1">
                           {line.replace(/^###\s+/, '')}
                         </h3>
                       );
@@ -4362,13 +4508,13 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                       const parts = text.split(/(\*\*.*?\*\*)/g);
                       return parts.map((part, index) => {
                         if (part.startsWith('**') && part.endsWith('**')) {
-                          return <strong key={index} className="text-txt font-bold">{part.slice(2, -2)}</strong>;
+                          return <strong key={index} className="text-foreground font-bold">{part.slice(2, -2)}</strong>;
                         }
                         return <span key={index}>{part}</span>;
                       });
                     };
                     return (
-                      <p key={i} className="text-sm text-txt-2 leading-relaxed mb-3">
+                      <p key={i} className="text-sm text-foreground leading-relaxed mb-3">
                         {renderBold(line)}
                       </p>
                     );
