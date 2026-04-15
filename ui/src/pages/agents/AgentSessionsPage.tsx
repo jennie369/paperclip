@@ -27,9 +27,34 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
-import { ClipboardList } from "lucide-react";
+import { ClipboardList, FileText } from "lucide-react";
+import { AgentLogDrawer } from "./AgentLogDrawer";
 
 type StatusFilter = "all" | "running" | "idle" | "stopped";
+
+// ── Local-only "hide row from table" — does NOT delete session data ──
+// Hidden IDs persist in localStorage so reload keeps them hidden.
+// Per-browser only (intentional — paperclip dashboard is single-machine).
+const HIDDEN_SESSIONS_KEY = "paperclip:hiddenSessionIds";
+
+function loadHiddenIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_SESSIONS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveHiddenIds(ids: Set<string>): void {
+  try {
+    localStorage.setItem(HIDDEN_SESSIONS_KEY, JSON.stringify([...ids]));
+  } catch {
+    // localStorage full or disabled — silent fallback (state still in memory)
+  }
+}
 
 // ── Types for Smart Routing ──
 interface IgnoredChat {
@@ -54,33 +79,6 @@ interface AgentOverride {
   created_at: string;
 }
 
-interface RoutingActivity {
-  id: string;
-  created_at: string;
-  channel_name: string | null;
-  session_key: string | null;
-  status: string | null;
-  skip_reason: string | null;
-  agent_slug: string | null;
-  sender_name: string | null;
-  body: string | null;
-}
-
-const SKIP_REASON_LABELS: Record<string, string> = {
-  ignored_chat: "Chat bị ignore (Tầng 1)",
-  override_ignore: "Override bỏ qua (Tầng 2)",
-  no_agent_assigned: "Kênh chưa gán agent",
-  no_channel: "Kênh không tồn tại",
-  channel_disabled: "Kênh đã tắt",
-  group_chat: "Tin nhắn nhóm",
-  group_no_mention: "Nhóm không @mention",
-  rate_limited: "Vượt quota",
-  agent_paused: "Agent tạm dừng",
-  duplicate_message: "Tin nhắn trùng (debounce)",
-  duplicate: "Trùng lặp",
-  stale_on_restart: "Cũ khi khởi động lại",
-  policy_rejected: "Vi phạm chính sách",
-};
 
 const MATCH_TYPE_LABELS: Record<string, string> = {
   sender_id: "Sender ID",
@@ -163,6 +161,21 @@ export function AgentSessionsPage() {
   const { pushToast } = useToast();
   const [filter, setFilter] = useState<StatusFilter>("all");
 
+  // ── Hidden rows (UI-only, not destructive) ──
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenIds());
+  const hideRow = useCallback((id: string) => {
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      saveHiddenIds(next);
+      return next;
+    });
+  }, []);
+  const restoreAll = useCallback(() => {
+    setHiddenIds(new Set());
+    saveHiddenIds(new Set());
+  }, []);
+
   // ── Modal state: Add Ignore ──
   const [showAddIgnore, setShowAddIgnore] = useState(false);
   const [newIgnoreChatId, setNewIgnoreChatId] = useState("");
@@ -183,6 +196,25 @@ export function AgentSessionsPage() {
   const [newKwKeywords, setNewKwKeywords] = useState("");
   const [newKwAgentSlug, setNewKwAgentSlug] = useState("");
   const [newKwReason, setNewKwReason] = useState("");
+
+  // ── Agent log drawer state ──
+  const [logDrawer, setLogDrawer] = useState<{
+    open: boolean;
+    slug: string;
+    context: string;
+  }>({ open: false, slug: "", context: "" });
+
+  const openLogForEntry = (entry: any) => {
+    const slug = entry.handled_by || entry.agent_slug || "";
+    if (!slug) return;
+    const channel = entry.channel_name || "—";
+    const sender = entry.sender_name || entry.from_uid || entry.sender_id || "—";
+    setLogDrawer({
+      open: true,
+      slug,
+      context: `Hội thoại: ${sender} · ${channel}`,
+    });
+  };
 
   // Sessions query — auto-refresh every 10s
   const {
@@ -216,19 +248,6 @@ export function AgentSessionsPage() {
   const { data: keywordRules = [], refetch: refetchKeywords } = useQuery<AgentOverride[]>({
     queryKey: ["routing-keywords"],
     queryFn: () => fetch("/api/channels/routing/keywords").then((r) => r.json()),
-  });
-
-  const { data: routingActivity = [], isLoading: routingActivityLoading } = useQuery<RoutingActivity[]>({
-    queryKey: ["routing-activity"],
-    queryFn: () => fetch("/api/channels/routing/activity?limit=30").then((r) => r.json()),
-    refetchInterval: 15_000,
-  });
-
-  const clearMut = useMutation({
-    mutationFn: (slug: string) => agentConfigsApi.clearSession(slug),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["agent-sessions"] });
-    },
   });
 
   const clearAllMut = useMutation({
@@ -313,10 +332,12 @@ export function AgentSessionsPage() {
     setNewOvReason("");
   };
 
+  const visibleSessions = sessions.filter((s) => !hiddenIds.has(s.id));
   const filtered =
     filter === "all"
-      ? sessions
-      : sessions.filter((s) => s.status === filter);
+      ? visibleSessions
+      : visibleSessions.filter((s) => s.status === filter);
+  const hiddenCount = sessions.length - visibleSessions.length;
 
   const activeCount = sessions.filter((s) => s.status === "running").length;
 
@@ -455,10 +476,34 @@ export function AgentSessionsPage() {
         </div>
       )}
 
+      {/* Restore-hidden banner (only when something is hidden) */}
+      {hiddenCount > 0 && (
+        <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-muted/40 border border-dashed text-xs">
+          <span className="text-muted-foreground">
+            Đã ẩn {hiddenCount} phiên khỏi bảng (data vẫn còn nguyên — chỉ ẩn UI)
+          </span>
+          <button
+            type="button"
+            onClick={restoreAll}
+            className="text-primary hover:underline font-medium"
+          >
+            Hiện lại tất cả
+          </button>
+        </div>
+      )}
+
       {/* Sessions Table */}
       {!isLoading && filtered.length > 0 && (
         <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <colgroup>
+              <col className="w-[24%]" />{/* Agent */}
+              <col className="w-[26%]" />{/* Session ID */}
+              <col className="w-[10%]" />{/* Trạng thái */}
+              <col className="w-[12%]" />{/* Bắt đầu */}
+              <col className="w-[12%]" />{/* Hoạt động */}
+              <col className="w-[16%]" />{/* Hành động */}
+            </colgroup>
             <thead>
               <tr className="border-b bg-muted/50">
                 <th className="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">
@@ -476,12 +521,6 @@ export function AgentSessionsPage() {
                 <th className="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">
                   Hoạt động gần nhất
                 </th>
-                <th className="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">
-                  Tokens
-                </th>
-                <th className="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">
-                  Chi phí
-                </th>
                 <th className="text-right px-4 py-2.5 font-medium text-muted-foreground text-xs">
                   Hành động
                 </th>
@@ -492,13 +531,9 @@ export function AgentSessionsPage() {
                 <SessionRow
                   key={session.id}
                   session={session}
-                  onClear={() => clearMut.mutate(session.agent_slug)}
+                  onHide={() => hideRow(session.id)}
                   onViewConfig={() =>
                     navigate(`/agents-config/${session.agent_slug}/edit`)
-                  }
-                  isClearing={
-                    clearMut.isPending &&
-                    clearMut.variables === session.agent_slug
                   }
                   pushToast={pushToast}
                 />
@@ -683,102 +718,6 @@ export function AgentSessionsPage() {
           </div>
         </div>
 
-        {/* Routing Activity Log */}
-        <div className="space-y-2">
-          <h3 className="text-xs font-semibold flex items-center gap-2 text-muted-foreground">
-            <Clock className="h-3.5 w-3.5" />
-            Hoạt động định tuyến gần đây
-          </h3>
-          {routingActivityLoading && (
-            <div className="space-y-1.5">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-8 rounded-md" />
-              ))}
-            </div>
-          )}
-          {!routingActivityLoading && routingActivity.length === 0 && (
-            <div className="border border-dashed rounded-lg p-4 text-center">
-              <p className="text-xs text-muted-foreground">Chưa có dữ liệu định tuyến</p>
-            </div>
-          )}
-          {!routingActivityLoading && routingActivity.length > 0 && (
-            <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Thời gian</th>
-                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Kênh</th>
-                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Người gửi</th>
-                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Nội dung</th>
-                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Agent</th>
-                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Trạng thái / Lý do</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {routingActivity.map((entry) => {
-                    const isSkipped = entry.status === "skipped";
-                    const skipLabel = entry.skip_reason
-                      ? (SKIP_REASON_LABELS[entry.skip_reason] || entry.skip_reason)
-                      : null;
-                    return (
-                      <tr
-                        key={entry.id}
-                        className="border-b border-border/30 last:border-0 hover:bg-muted/20 transition-colors"
-                      >
-                        <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
-                          {timeAgo(entry.created_at)}
-                        </td>
-                        <td className="px-3 py-2">
-                          {entry.channel_name ? (
-                            <Badge variant="outline" className="text-[10px] px-1">
-                              {entry.channel_name}
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 truncate max-w-[100px] text-muted-foreground">
-                          {entry.sender_name || "—"}
-                        </td>
-                        <td className="px-3 py-2 truncate max-w-[200px]">
-                          {entry.body || "—"}
-                        </td>
-                        <td className="px-3 py-2">
-                          {entry.agent_slug ? (
-                            <span className="font-mono text-primary">{entry.agent_slug}</span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {isSkipped && skipLabel ? (
-                            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                              <Ban className="w-3 h-3 shrink-0" />
-                              {skipLabel}
-                            </span>
-                          ) : (
-                            <Badge
-                              variant={
-                                entry.status === "handled"
-                                  ? "default"
-                                  : entry.status === "skipped"
-                                    ? "secondary"
-                                    : "outline"
-                              }
-                              className="text-[10px]"
-                            >
-                              {entry.status || "—"}
-                            </Badge>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Recent Activity Log (existing) */}
@@ -818,6 +757,9 @@ export function AgentSessionsPage() {
                   </th>
                   <th className="text-left px-4 py-2 font-medium text-muted-foreground text-xs">
                     Hội thoại
+                  </th>
+                  <th className="text-left px-4 py-2 font-medium text-muted-foreground text-xs">
+                    Khách hàng
                   </th>
                   <th className="text-left px-4 py-2 font-medium text-muted-foreground text-xs">
                     Tin nhắn
@@ -886,6 +828,9 @@ export function AgentSessionsPage() {
                             <span className="truncate">{senderName}</span>
                           </div>
                         </td>
+                        <td className="px-4 py-2 text-xs truncate max-w-[120px]">
+                          {(entry as any).customer_name || "—"}
+                        </td>
                         <td
                           className="px-4 py-2 text-xs truncate max-w-[250px] cursor-pointer hover:text-primary"
                           onClick={() => {
@@ -901,9 +846,20 @@ export function AgentSessionsPage() {
                           {entry.body || entry.message || "—"}
                         </td>
                         <td className="px-4 py-2">
-                          <Badge variant="secondary" className="text-[10px]">
-                            {entry.handled_by}
-                          </Badge>
+                          {entry.handled_by ? (
+                            <button
+                              onClick={() => openLogForEntry(entry)}
+                              className="group inline-flex items-center gap-1 hover:bg-primary/10 rounded px-1.5 py-0.5 transition-colors"
+                              title="Xem log phiên agent"
+                            >
+                              <Badge variant="secondary" className="text-[10px] group-hover:bg-primary group-hover:text-primary-foreground">
+                                {entry.handled_by}
+                              </Badge>
+                              <FileText className="h-3 w-3 text-muted-foreground group-hover:text-primary" />
+                            </button>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-2">
                           <Badge
@@ -1134,21 +1090,27 @@ export function AgentSessionsPage() {
           </div>
         </div>
       )}
+
+      {/* ── Agent Session Log Drawer ── */}
+      <AgentLogDrawer
+        open={logDrawer.open}
+        onClose={() => setLogDrawer({ ...logDrawer, open: false })}
+        agentSlug={logDrawer.slug}
+        contextLabel={logDrawer.context}
+      />
     </div>
   );
 }
 
 function SessionRow({
   session,
-  onClear,
+  onHide,
   onViewConfig,
-  isClearing,
   pushToast,
 }: {
   session: AgentSession;
-  onClear: () => void;
+  onHide: () => void;
   onViewConfig: () => void;
-  isClearing: boolean;
   pushToast: (t: any) => void;
 }) {
   return (
@@ -1214,40 +1176,9 @@ function SessionRow({
         {timeAgo(session.last_activity_at ?? session.last_poll_at)}
       </td>
 
-      {/* Tokens */}
-      <td className="px-4 py-3 text-xs font-mono">
-        {(session as any).total_requests > 0 ? (
-          <div>
-            <span className="text-muted-foreground">
-              {((session as any).total_input_tokens || 0).toLocaleString()} in
-            </span>
-            <span className="mx-1 text-muted-foreground/50">/</span>
-            <span>
-              {((session as any).total_output_tokens || 0).toLocaleString()} out
-            </span>
-            <div className="text-[10px] text-muted-foreground">
-              {(session as any).total_requests} lượt
-            </div>
-          </div>
-        ) : (
-          <span className="text-muted-foreground">--</span>
-        )}
-      </td>
-
-      {/* Cost */}
-      <td className="px-4 py-3 text-xs font-mono">
-        {(session as any).total_cost_usd > 0 ? (
-          <span className="text-orange-500 font-medium">
-            ${Number((session as any).total_cost_usd).toFixed(4)}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">--</span>
-        )}
-      </td>
-
       {/* Actions */}
       <td className="px-4 py-3 text-right">
-        <div className="flex items-center gap-1 justify-end">
+        <div className="flex items-center gap-1 justify-end flex-wrap">
           <Button
             variant="ghost"
             size="sm"
@@ -1340,14 +1271,11 @@ function SessionRow({
             variant="ghost"
             size="sm"
             className="h-7 text-xs text-destructive hover:text-destructive"
-            onClick={onClear}
-            disabled={isClearing}
+            onClick={onHide}
+            title="Ẩn dòng này khỏi bảng — session vẫn được giữ nguyên (data + history). Reload trình duyệt sẽ vẫn ẩn. Có nút 'Hiện lại tất cả' ở banner phía trên."
           >
-            {isClearing ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Trash2 className="h-3 w-3" />
-            )}
+            <Trash2 className="h-3 w-3 mr-1" />
+            Ẩn
           </Button>
         </div>
       </td>
