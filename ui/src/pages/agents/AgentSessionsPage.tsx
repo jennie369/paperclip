@@ -252,15 +252,21 @@ export function AgentSessionsPage() {
   // Click activity row → open Mode A (customer chat history)
   const openLogForEntry = (entry: any) => {
     const slug = entry.handled_by || entry.agent_slug || "";
-    if (!slug) return;
+    if (!slug || slug === "skipped" || slug === "manual" || slug === "human") {
+      pushToast({
+        variant: "info",
+        title: "Hoạt động không do agent xử lý",
+        description: `${entry.handled_by || "Manual / skipped"} — không có chat log để hiển thị.`,
+      });
+      return;
+    }
     const channelRaw = entry.channel_raw || entry.channel_name || null;
     const channelDisplay = entry.channel_name || channelRaw;
     const senderId = entry.sender_id || entry.from_uid || null;
     const customerName = entry.customer_name || entry.sender_name || null;
-    if (!senderId || !channelRaw) {
-      pushToast({ variant: "error", title: "Thiếu thông tin", description: "Không có sender_id hoặc channel để load chat." });
-      return;
-    }
+
+    // Follow-up rows lack channel/sender — open drawer anyway with informative
+    // empty state (customer name shown if available)
     setChatDrawer({
       open: true,
       agentSlug: slug,

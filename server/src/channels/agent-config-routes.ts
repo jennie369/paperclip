@@ -637,7 +637,9 @@ function extractContentBlocks(content: any): {
  * GET /api/channels/agent-configs/sessions/activity
  * Recent consumer activity — messages handled by agents.
  */
-router.get('/sessions/activity', async (_req, res) => {
+router.get('/sessions/activity', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 300, 1000);
+  const perTableLimit = Math.ceil(limit * 0.6); // generous per-table budget
   // Fetch recent activity from BOTH pending_messages (inbound handled) and sent_messages (outbound)
   const [{ data: handled }, { data: sent }] = await Promise.all([
     supabase
@@ -645,13 +647,13 @@ router.get('/sessions/activity', async (_req, res) => {
       .select('id, channel_name, thread_id, from_uid, sender_name, body, status, agent_slug, handled_by, handled_at, created_at, customer_id')
       .not('handled_by', 'is', null)
       .order('handled_at', { ascending: false })
-      .limit(30),
+      .limit(perTableLimit),
     supabase
       .from('channel_sent_messages')
       .select('id, channel_name, thread_id, to_uid, body, status, sent_by, created_at')
       .in('status', ['sent', 'failed', 'archived'])
       .order('created_at', { ascending: false })
-      .limit(30),
+      .limit(perTableLimit),
   ]);
 
   // Resolve customer names from crm_customers
@@ -716,7 +718,7 @@ router.get('/sessions/activity', async (_req, res) => {
       message: m.body?.substring(0, 100),
     })),
   ].sort((a, b) => (b.handled_at || '').localeCompare(a.handled_at || ''))
-   .slice(0, 50);
+   .slice(0, limit);
 
   res.json(activity);
 });
@@ -960,6 +962,66 @@ router.get('/:slug/chat-history', async (req, res) => {
   let history: any[] = Array.isArray(sessionRow.history) ? sessionRow.history : [];
   const fullHistoryCount = history.length;
 
+  // STEP 1: Strip context-injection prefix from user messages.
+  // router.ts prepends CRM context blocks like:
+  //   [HỒ SƠ KHÁCH HÀNG — JN]
+  //   • Trạng thái: ... | Lead: ...
+  //   • SĐT: ...
+  //   [TÓM TẮT AI] ...
+  //   [HƯỚNG DẪN TOOLS] ...
+  //   [PURCHASE JOURNEY STATE] ...
+  //   [TIN NHẮN MỚI]
+  //   <actual customer message>
+  // into user content (persisted verbatim by session.appendMessage).
+  // Extract only the part after [TIN NHẮN MỚI]. Context-only rows with NO
+  // [TIN NHẮN MỚI] section (older format) get their full content replaced
+  // with an explanatory placeholder so the user row isn't missing.
+  const TIN_NHAN_MOI_RE = /\[TIN\s+NH[ẮA]N\s+M[ỚO]I\]\s*\n?/i;
+  history = history.map((m: any) => {
+    if (m.role !== 'user') return m;
+    const c = (m.content || '').trim();
+    if (!c.startsWith('[')) return m; // real message, no prefix
+    const match = c.match(TIN_NHAN_MOI_RE);
+    if (match && match.index !== undefined) {
+      const real = c.slice(match.index + match[0].length).trim();
+      return { ...m, content: real || c, _hadContextPrefix: true };
+    }
+    // No [TIN NHẮN MỚI] marker — leave content but flag for UI to style as context
+    return { ...m, _contextOnly: true };
+  });
+  // Drop context-only user rows that have NO real message after stripping —
+  // these are pure CRM-context pseudo-messages from older format.
+  history = history.filter((m: any) => !m._contextOnly);
+  const contextStrippedCount = history.filter((m: any) => m._hadContextPrefix).length;
+  if (contextStrippedCount > 0) {
+    console.log(`[chat-history] ${slug} ${sessionRow.session_key}: stripped context prefix from ${contextStrippedCount} user messages`);
+  }
+
+  // STEP 2: Dedupe near-simultaneous duplicate writes.
+  // Consumer/router has a writer bug (BUG-047, v2 fix pending):
+  //   - Assistant replies persisted twice (~300ms apart)
+  //   - User messages persisted twice: once raw (consumer.ts) + once enriched
+  //     (some other path), which after prefix-strip look identical.
+  // Dedupe window: 2s for same role+content (catches millisec duplicates).
+  // Wider window: 5 minutes for user role if the duplicate carries the
+  // "_hadContextPrefix" flag (enriched re-write from context-builder path).
+  const deduped: any[] = [];
+  for (const m of history) {
+    const last = deduped[deduped.length - 1];
+    if (last && last.role === m.role && last.content === m.content) {
+      const dt = Math.abs(
+        new Date(last.timestamp || 0).getTime() - new Date(m.timestamp || 0).getTime()
+      );
+      const windowMs = (m.role === 'user' && (m._hadContextPrefix || last._hadContextPrefix))
+        ? 5 * 60 * 1000  // 5min window for enriched user dupes
+        : 2000;          // 2s window for regular writer dupes
+      if (dt < windowMs) continue;
+    }
+    deduped.push(m);
+  }
+  history = deduped;
+
+  // STEP 3: Apply user filters
   if (search) {
     history = history.filter((m: any) => typeof m.content === 'string' && m.content.toLowerCase().includes(search));
   }

@@ -189,6 +189,8 @@ export function CustomerChatDrawer({
     return p.toString();
   }, [sessionKey, channelName, senderId, debouncedSearch]);
 
+  const canQuery = !!sessionKey || !!(channelName && senderId);
+
   const { data, isLoading, isFetching, refetch, error } = useQuery<ChatHistoryResponse>({
     queryKey: ['customer-chat', agentSlug, sessionKey, channelName, senderId, debouncedSearch],
     queryFn: async () => {
@@ -196,7 +198,7 @@ export function CustomerChatDrawer({
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.json();
     },
-    enabled: open && (!!sessionKey || !!(channelName && senderId)),
+    enabled: open && canQuery,
     refetchInterval: autoRefresh && open ? 5000 : false,
   });
 
@@ -366,7 +368,19 @@ export function CustomerChatDrawer({
 
         {/* ─── BODY ───────────────────────────────────────────── */}
         <div ref={scrollRef} className="flex-1 overflow-auto px-6 py-4">
-          {isLoading && (
+          {!canQuery && !isLoading && (
+            <div className="py-16 text-center">
+              <CircleAlert className="h-10 w-10 mx-auto mb-3 text-muted-foreground/40" />
+              <p className="text-sm font-medium text-foreground/80">Thiếu thông tin để load chat</p>
+              <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
+                Hoạt động này không có <code className="bg-muted px-1 rounded">sender_id</code> hoặc{' '}
+                <code className="bg-muted px-1 rounded">channel_name</code> (ví dụ: follow-up scheduled, manual send).
+                Click vào row của tin nhắn inbound/outbound để xem chat history.
+              </p>
+            </div>
+          )}
+
+          {canQuery && isLoading && (
             <div className="flex items-center justify-center py-16 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
               <span className="text-sm">Đang tải lịch sử chat...</span>
@@ -572,15 +586,29 @@ function ChatBubble({
           </div>
         )}
 
-        {/* Drill-down to session log (agent messages only) */}
-        {!isCustomer && onOpenSessionLog && (
+        {/* Drill-down to session log — only when message has agent_session_id tracking.
+            Old messages (pre-tracking) don't have metadata.agent_session_id, so the
+            session log would fall back to the newest session which is misleading.
+            Hide the button instead of showing wrong data. */}
+        {!isCustomer && onOpenSessionLog && message.metadata?.agent_session_id && (
           <button
             onClick={() => onOpenSessionLog(message.metadata?.agent_session_id || null)}
             className="mt-1 text-[10px] text-muted-foreground/60 hover:text-foreground underline-offset-2 hover:underline inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+            title={`Xem JSONL session: ${String(message.metadata.agent_session_id).slice(0, 8)}…`}
           >
             <FileText className="h-2.5 w-2.5" />
             Xem session log
           </button>
+        )}
+        {/* Indicator when tracking is missing (old message) */}
+        {!isCustomer && !message.metadata?.agent_session_id && (
+          <div
+            className="mt-1 text-[10px] text-muted-foreground/40 inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity cursor-help"
+            title="Tin nhắn này không có tracking agent_session_id (v2 sẽ fix writer). Xem agent hiện tại qua menu Phiên Agent."
+          >
+            <FileText className="h-2.5 w-2.5" />
+            Không có session log
+          </div>
         )}
       </div>
     </div>
