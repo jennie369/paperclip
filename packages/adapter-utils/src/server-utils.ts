@@ -789,6 +789,10 @@ export async function runChildProcess(
           env: mergedEnv,
           shell: false,
           stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
+          // GEMRAL FIX 2026-04-06: Prevent console window popup on Windows for
+          // all heartbeat/cron spawned processes (Claude CLI, Gemini CLI, etc.)
+          // Per Jennie msg #1920 — "terminal đen không tự động pop-up trên màn hình"
+          windowsHide: true,
         }) as ChildProcessWithEvents;
         const startedAt = new Date().toISOString();
 
