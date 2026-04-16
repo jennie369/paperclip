@@ -3158,7 +3158,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
         content_type: contentType ?? 'social_post',
         track: 'integration',
         pillar: 'lifestyle',
-        persona: (persona !== 'auto' ? persona : 'jennie_mentor'),
+        persona: (persona !== 'auto' ? persona : (brandVoice === 'generic' ? 'jennie_educator' : 'jennie_mentor')),
         writing_mode: (writingMode !== 'auto' ? writingMode : 'mode_1_calm'),
         priority: 'medium',
         scheduled_date: calendarScheduleDate,
