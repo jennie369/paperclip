@@ -5,8 +5,13 @@ import { supabase } from './zalo-personal/supabase.js';
 import { spawn } from 'child_process';
 import path from 'path';
 import type { Response } from 'express';
+import { loadAgentConfig, runAgentWithConfig } from './router.js';
 
 const PROJECT_ROOT = path.resolve(process.cwd(), '..');
+
+// Default company UUID (GEMRAL) for single-tenant agent calls from the SOP executor.
+const DEFAULT_COMPANY_ID = process.env.DEFAULT_COMPANY_ID
+  || 'f78ffdea-e400-46be-8705-5f6cfbce1eb0';
 
 // ═══ Types ═══
 
@@ -243,6 +248,7 @@ async function executeScriptStep(step: StepDef, ctx: ExecutionContext, base: Omi
       shell: true,
       cwd: workDir,
       env: { ...process.env, PYTHONUTF8: '1' },
+      windowsHide: true,
     });
 
     const timer = setTimeout(() => {
@@ -286,20 +292,123 @@ async function executeScriptStep(step: StepDef, ctx: ExecutionContext, base: Omi
   });
 }
 
-// ═══ Agent step: placeholder (will be integrated with Paperclip agents later) ═══
+// ═══ Agent step: real agent invocation via router ═══
+//
+// Fixed 2026-04-08 — was a stub returning mock success, causing "no agent
+// actually works when SOPs run" (BUG-028). Now calls runAgentWithConfig()
+// from router.ts with the same buildSystemPrompt pipeline as channel replies,
+// so the agent sees Goals + SOUL + TOOLS + HEARTBEAT + MEMORY + company
+// context. Every step uses a stable session key `sop:{execId}:{stepOrder}`
+// so multi-step SOPs preserve conversation memory across turns.
 
-async function executeAgentStep(step: StepDef, _ctx: ExecutionContext, base: Omit<StepResult, 'status'>): Promise<StepResult> {
-  const { agent_slug, prompt } = step.config;
-  console.log(`[SOP Executor] Agent step: ${agent_slug} — "${prompt?.slice(0, 100)}"`);
+async function executeAgentStep(
+  step: StepDef,
+  ctx: ExecutionContext,
+  base: Omit<StepResult, 'status'>,
+): Promise<StepResult> {
+  const { agent_slug, prompt, timeout = 120000 } = step.config;
 
-  // Placeholder: log and return mock success
-  // TODO: Route to real Paperclip agent via consumer or direct API
-  return {
-    ...base,
-    status: 'success',
-    output: `[Placeholder] Agent "${agent_slug}" sẽ thực hiện: ${prompt || step.name}`,
-    completedAt: new Date().toISOString(),
-  };
+  if (!agent_slug) {
+    return {
+      ...base,
+      status: 'failed',
+      error: 'Thiếu agent_slug trong step.config',
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  // Load agent config from paperclip_agents table (SSOT)
+  const config = await loadAgentConfig(agent_slug);
+  if (!config) {
+    return {
+      ...base,
+      status: 'failed',
+      error: `Không tìm thấy agent "${agent_slug}" trong paperclip_agents`,
+      completedAt: new Date().toISOString(),
+    };
+  }
+  if (!config.enabled) {
+    return {
+      ...base,
+      status: 'skipped',
+      output: `Agent "${agent_slug}" đang bị disable. Skip step.`,
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  // Inject company context so buildSystemPrompt can fetch Goals from DB
+  (config as any)._companyId = DEFAULT_COMPANY_ID;
+
+  // Stable session key — lets multi-step SOPs preserve conversation memory
+  const sessionKey = `sop:${ctx.executionId}:${step.order}`;
+
+  // Build the prompt with context from previous steps (so step N can reference
+  // step N-1's output naturally). Trimmed to last 3 previous results to avoid
+  // prompt explosion.
+  const prevResults = ctx.stepResults.slice(-3)
+    .map((r) => `## Step ${r.order}: ${r.name}\n${(r.output || '').slice(0, 500)}`)
+    .join('\n\n');
+
+  const userMessage = [
+    prevResults ? `# CONTEXT TỪ CÁC BƯỚC TRƯỚC\n${prevResults}` : '',
+    `# YÊU CẦU BƯỚC HIỆN TẠI: ${step.name}`,
+    prompt || step.config.instructions || `Hoàn thành bước: ${step.name}`,
+  ].filter(Boolean).join('\n\n');
+
+  sendSSE(ctx.sseRes, 'step:agent_start', {
+    step: step.order,
+    agent: agent_slug,
+    sessionKey,
+  });
+
+  // Invoke the agent with a hard timeout. We race the agent call against a
+  // timer so a hung provider doesn't stall the entire SOP run.
+  let timedOut = false;
+  const timeoutPromise = new Promise<string>((_, reject) => {
+    setTimeout(() => {
+      timedOut = true;
+      reject(new Error(`Agent step timeout sau ${timeout}ms`));
+    }, timeout);
+  });
+
+  try {
+    const reply = await Promise.race([
+      runAgentWithConfig(config, sessionKey, userMessage),
+      timeoutPromise,
+    ]);
+
+    // Stream a summarized version of the reply back via SSE so the UI can
+    // show live output. We also include the full reply in the step result.
+    sendSSE(ctx.sseRes, 'step:stdout', {
+      step: step.order,
+      text: reply,
+    });
+    sendSSE(ctx.sseRes, 'step:agent_complete', {
+      step: step.order,
+      agent: agent_slug,
+    });
+
+    return {
+      ...base,
+      status: 'success',
+      output: reply,
+      completedAt: new Date().toISOString(),
+    };
+  } catch (err: any) {
+    const message = timedOut
+      ? `Timeout sau ${timeout}ms — agent "${agent_slug}" không phản hồi`
+      : err?.message || String(err);
+    sendSSE(ctx.sseRes, 'step:stderr', {
+      step: step.order,
+      text: message,
+    });
+    return {
+      ...base,
+      status: 'failed',
+      error: message,
+      completedAt: new Date().toISOString(),
+    };
+  }
 }
 
 // ═══ API step: HTTP call ═══

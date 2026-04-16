@@ -358,6 +358,7 @@ router.post('/content-pipeline/execute/:script', (req, res) => {
   const proc = spawn('python', [scriptPath, ...config.args, ...extraArgs], {
     cwd: config.cwd,
     env: { ...process.env, PYTHONUTF8: '1' },
+    windowsHide: true,
   });
 
   res.write(`data: ${JSON.stringify({ type: 'start', script: scriptKey, path: scriptPath })}\n\n`);
@@ -491,6 +492,7 @@ router.post('/content-pipeline/delegate', (req, res) => {
     env: { ...process.env },
     shell: true,
     timeout: 600_000,
+    windowsHide: true,
   });
 
   proc.stdout?.on('data', (chunk: Buffer) => { res.write(`data: ${JSON.stringify({ type: 'stdout', text: chunk.toString() })}\n\n`); });
@@ -1279,6 +1281,7 @@ router.post('/content-pipeline/planner/delegate-ceo', async (req, res) => {
       cwd: agentCwdExists ? agentCwd : process.cwd(),
       shell: true,
       env: { ...process.env },
+      windowsHide: true,
     });
 
     proc.stdout?.on('data', (d: Buffer) => send({ type: 'stdout', text: d.toString() }));
@@ -1471,7 +1474,7 @@ const SCHEDULER_SCRIPT = 'scripts/schedule_meta_business_suite.py';
 
 function spawnPublisher(args: string[], label: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const proc = spawn('python', [SCHEDULER_SCRIPT, ...args], { cwd: SCHEDULER_CWD, env: { ...process.env, PYTHONUTF8: '1' } });
+    const proc = spawn('python', [SCHEDULER_SCRIPT, ...args], { cwd: SCHEDULER_CWD, env: { ...process.env, PYTHONUTF8: '1' }, windowsHide: true });
     let stdout = '', stderr = '';
     proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });

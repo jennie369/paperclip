@@ -265,6 +265,7 @@ async function executeProcess(input: {
       cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: input.env ?? process.env,
+      windowsHide: true,
     });
     let stdout = "";
     let stderr = "";
@@ -1365,6 +1366,7 @@ async function startLocalRuntimeService(input: {
     env,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   });
   let stderrExcerpt = "";
   let stdoutExcerpt = "";

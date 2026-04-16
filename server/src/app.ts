@@ -35,6 +35,7 @@ import channelRoutes from "./channels/routes.js";
 import agentConfigRoutes from "./channels/agent-config-routes.js";
 import qaRoutes from "./channels/qa-routes.js";
 import facebookWebhook from "./channels/facebook/webhook.js";
+import youtubeRoutes from "./channels/youtube/routes.js";
 import crmRoutes from "./channels/crm/crm-routes.js";
 import ticketRoutes from "./channels/crm/ticket-routes.js";
 import orderRoutes from "./channels/crm/order-routes.js";
@@ -43,8 +44,11 @@ import trackingRoutes from "./channels/crm/tracking/tracking-routes.js";
 import conversationRoutes from "./channels/conversation-routes.js";
 import opsRoutes from "./channels/ops-routes.js";
 import sopEngineRoutes from "./channels/sop-engine-routes.js";
+import cronRegistryRoutes from "./channels/cron-registry-routes.js";
+import registryMarketplaceRoutes from "./channels/registry-marketplace-routes.js";
 import kgRoutes from "./channels/kg-routes.js";
 import socialRoutes from "./channels/social-routes.js";
+import socialAnalyticsRoutes from "./channels/social-analytics-routes.js";
 import systemRoutes from "./routes/system-routes.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -243,6 +247,7 @@ export async function createApp(
     }),
   );
   api.use("/channels/facebook", facebookWebhook);
+  api.use("/channels/youtube", youtubeRoutes);
   api.use("/channels/zalo-personal", zaloPersonalRoutes);
   api.use("/channels/agent-configs", agentConfigRoutes);
   api.use("/channels/qa", qaRoutes);
@@ -254,10 +259,114 @@ export async function createApp(
   api.use("/channels/conversations", conversationRoutes);
   api.use("/ops", opsRoutes);
   api.use("/ops/sop-engine", sopEngineRoutes);
+  api.use("/registry/crons", cronRegistryRoutes);
+  api.use("/registry", registryMarketplaceRoutes);
   api.use("/ops/kg", kgRoutes);
   api.use("/", socialRoutes); // /api/social/publish, /api/news/publish, /api/social/pages
+  api.use("/social-analytics", socialAnalyticsRoutes);
+
+  // Phong Thuy De Vuong AI Chat — Claude CLI spawn via tunnel
+  api.post("/ai/phong-thuy-chat", async (req, res) => {
+    const { spawn } = await import("child_process");
+    const { message, context, history, model: requestModel } = req.body;
+    if (!message) return res.status(400).json({ error: "Missing message" });
+
+    // CORS for Vercel frontend
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    // Build prompt
+    const parts = [
+      "# Phong Thuỷ Đế Vương — Trợ Lý Tâm Linh AI\n",
+      "Bạn là trợ lý AI chuyên về Phong Thuỷ, Tử Vi, Bát Tự, và tâm linh Việt Nam.",
+      "Trả lời bằng tiếng Việt có dấu. Dùng markdown format đẹp.",
+      "Tone: Uyên bác nhưng gần gũi.\n",
+    ];
+    if (context?.contextLabel) {
+      parts.push(`## Bối cảnh\nNgười dùng đang xem: **${context.contextLabel}**`);
+    }
+    if (context?.contextData) {
+      const d = context.contextData;
+      const info = [d.full_name, d.gender, d.date_of_birth, d.menh, d.cung_menh].filter(Boolean).join(", ");
+      if (info) parts.push(`Dữ liệu: ${info}`);
+    }
+    const historyText = (history || []).slice(-10).map((m: any) => `${m.role === "user" ? "Người dùng" : "Trợ lý"}: ${m.content}`).join("\n");
+    if (historyText) parts.push(`\n## Lịch sử\n${historyText}`);
+    parts.push(`\nNgười dùng: ${message}`);
+    const fullPrompt = parts.join("\n");
+
+    // Resolve CLI binary based on model
+    const selectedModel = requestModel || "claude-opus-4-6";
+    const isGemini = selectedModel.startsWith("gemini");
+    const cliBin = isGemini
+      ? (process.env.GEMINI_BIN || "C:/nvm4w/nodejs/gemini.cmd")
+      : (process.env.CLAUDE_BIN || "C:/Users/Jennie Chu/.local/bin/claude.exe");
+    const chatCwd = process.env.PROJECT_ROOT || "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương";
+    console.log(`[PTDV-Chat] Spawning ${cliBin} (model=${selectedModel}) in ${chatCwd}, prompt ${fullPrompt.length} chars`);
+
+    const cliArgs = isGemini
+      ? ["-o", "stream-json", "-m", selectedModel, "-y", "-p", fullPrompt.length < 7000 ? fullPrompt : ""]
+      : ["--print", "-", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--model", selectedModel, "--max-turns", "5"];
+
+    const child = spawn(cliBin, cliArgs, {
+      cwd: chatCwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, PATH: process.env.PATH + ";C:/Users/Jennie Chu/.local/bin" },
+      windowsHide: true,
+    });
+
+    // For Claude: pipe prompt via stdin (--print -)
+    // For Gemini: prompt already in -p flag (short) or pipe via stdin (long)
+    if (!isGemini) {
+      child.stdin.write(fullPrompt);
+    } else if (fullPrompt.length >= 7000) {
+      child.stdin.write(fullPrompt);
+    }
+    child.stdin.end();
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      const err = chunk.toString("utf-8");
+      console.log(`[PTDV-Chat] stderr: ${err.slice(0, 200)}`);
+    });
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString("utf-8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const p = JSON.parse(line);
+          let c = "";
+          if (p.type === "assistant" && p.message?.content) {
+            for (const b of (Array.isArray(p.message.content) ? p.message.content : [p.message.content])) {
+              if (b.type === "text" && b.text) c += b.text;
+            }
+          }
+          if (p.type === "content_block_delta" && p.delta?.text) c = p.delta.text;
+          if (p.type === "message" && p.role === "assistant" && p.content) c = p.content;
+          if (p.type === "result" && typeof p.result === "string") c = p.result;
+          if (c) res.write(`data: ${JSON.stringify({ text: c })}\n\n`);
+        } catch {}
+      }
+    });
+
+    child.on("close", () => { res.write(`data: ${JSON.stringify({ done: true })}\n\n`); res.end(); });
+    child.on("error", (err) => { res.write(`data: ${JSON.stringify({ error: (err as Error).message })}\n\n`); res.end(); });
+    setTimeout(() => { try { child.kill(); } catch {} }, 280_000);
+  });
+
+  // CORS preflight for phong-thuy-chat
+  api.options("/ai/phong-thuy-chat", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.status(204).end();
+  });
   api.use("/system", systemRoutes);
   api.use("/channels", channelRoutes);
+  // Training Room (Sprint B + C) — REST endpoints; WS upgrade is wired in index.ts
+  const { trainingRouter } = await import("./training/training-routes.js");
+  api.use("/training", trainingRouter);
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
@@ -271,6 +380,79 @@ export async function createApp(
       .then(() => console.log("[Startup] Stale agent sessions reset to idle"));
   });
 
+  // On startup: one-shot sync of DB goals → memory/goals.md so Claude CLI
+  // sessions outside Paperclip see the same goals as reply agents. No cron,
+  // no timer — this runs exactly once per server boot.
+  import("./services/goals-disk-sync.js").then(({ syncGoalsToDiskImmediate }) => {
+    syncGoalsToDiskImmediate()
+      .then((r) => {
+        if (r.success) {
+          console.log(`[Startup] Goals synced to disk: ${r.goalsWritten} goals → ${r.filePath}`);
+        } else {
+          console.warn(`[Startup] Goals sync skipped: ${r.error}`);
+        }
+      })
+      .catch((err) => console.warn("[Startup] Goals sync error:", err?.message));
+  });
+
+  // On startup: seed the 8 pipeline templates into gem_pipelines table
+  // (idempotent — upsert on pipeline_id, only touches is_template=true rows,
+  // so user-cloned pipelines are safe).
+  import("./channels/seed-pipelines.js").then(async ({ seedPipelineTemplates }) => {
+    try {
+      const result = await seedPipelineTemplates();
+      console.log(`[Startup] Pipeline templates seeded: ${result.seeded}${result.errors.length ? ` (${result.errors.length} errors)` : ''}`);
+      if (result.errors.length > 0) {
+        console.warn('[Startup] Pipeline seed errors:', result.errors.slice(0, 3));
+      }
+    } catch (err: any) {
+      console.warn('[Startup] Pipeline seed failed:', err?.message);
+    }
+  });
+
+  // On startup: one-shot scan of ~/.claude/ to reconcile Registry Marketplace
+  // with disk. NO cron — only startup + manual trigger via UI button.
+  // Safe to run concurrently with seedKnownSchedulers below.
+  import("./services/registry-disk-sync.js").then(async ({ scanRegistryDisk }) => {
+    try {
+      const result = await scanRegistryDisk();
+      const total = Object.values(result.upserted).reduce((a, b) => a + b, 0);
+      console.log(
+        `[Startup] Registry disk scan: ${total} items synced (${result.upserted.skills} skills, ` +
+        `${result.upserted.mcp} MCP, ${result.upserted.commands} commands, ${result.upserted.hooks} hooks, ` +
+        `${result.upserted.plugins} plugins) in ${result.duration_ms}ms`,
+      );
+      if (result.stale_marked > 0) {
+        console.log(`[Startup] Registry disk scan: ${result.stale_marked} stale rows marked disabled`);
+      }
+    } catch (err: any) {
+      console.warn("[Startup] Registry disk scan failed:", err?.message);
+    }
+  });
+
+  // On startup: seed the Cron Registry with all known scheduled work
+  // (pg_cron jobs on Supabase + Node setInterval timers in this server
+  // + Windows schtasks via scanOsTasks). This makes EVERY scheduled unit
+  // visible in the Paperclip UI with full metadata: owner, schedule,
+  // humanized text, linked entity, setup_by. User control landing point
+  // for BUG-027 prevention.
+  import("./services/cron-registry.js").then(async ({ seedKnownSchedulers, scanOsTasks }) => {
+    try {
+      const seeded = await seedKnownSchedulers();
+      console.log(`[Startup] Cron registry seeded: ${seeded.pgcron} pg_cron + ${seeded.nodeTimers} node timers`);
+    } catch (err: any) {
+      console.warn("[Startup] Cron registry seed failed:", err?.message);
+    }
+    try {
+      const scanned = await scanOsTasks('paperclip_startup');
+      if (scanned.imported > 0) {
+        console.log(`[Startup] Cron registry OS scan: ${scanned.imported}/${scanned.scanned} Windows tasks imported`);
+      }
+    } catch (err: any) {
+      console.warn("[Startup] Cron registry OS scan failed:", err?.message);
+    }
+  });
+
   // Restore Zalo channels + start consumer on startup
   restoreChannels().then(async () => {
     console.log("[ZaloPersonal] Channel restore complete");
@@ -281,6 +463,32 @@ export async function createApp(
       console.log("[Consumer] Inbound consumer started — agent auto-reply active");
     } catch (err: any) {
       console.warn("[Consumer] Failed to start:", err.message);
+    }
+    // Start the YouTube comment poller (poll-based, no webhooks)
+    try {
+      const { startYouTubeCommentPoller } = await import("./channels/youtube/comments.js");
+      startYouTubeCommentPoller();
+      console.log("[YouTube] Comment poller started");
+    } catch (err: any) {
+      console.warn("[YouTube] Failed to start comment poller:", err.message);
+    }
+    // Start the auto follow-up cron (D9.4) — bám đuổi khách stuck trong funnel
+    try {
+      const { startFollowUpCron } = await import("./channels/crm/follow-up-cron.js");
+      startFollowUpCron();
+      console.log("[FollowUpCron] Auto follow-up cron started");
+    } catch (err: any) {
+      console.warn("[FollowUpCron] Failed to start:", err.message);
+    }
+    // Reconcile agent_sessions DB rows against JSONL files on disk (every 30min)
+    // Marks rows as 'stopped' when Claude CLI cleaned up their JSONL —
+    // prevents router from --resume'ing ghost sessions.
+    try {
+      const { startAgentSessionReconcileCron } = await import("./channels/agent-session-reconcile-cron.js");
+      startAgentSessionReconcileCron();
+      console.log("[SessionReconcile] Agent session reconcile cron started");
+    } catch (err: any) {
+      console.warn("[SessionReconcile] Failed to start:", err.message);
     }
   }).catch((err) => {
     console.warn("[ZaloPersonal] Channel restore failed:", err.message);

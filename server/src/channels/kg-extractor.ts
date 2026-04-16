@@ -92,6 +92,7 @@ function callGeminiCli(message: string): Promise<string> {
     const proc = spawn('gemini', args, {
       timeout: 30_000,
       env: { ...process.env },
+      windowsHide: true,
     });
 
     let stdout = '';
