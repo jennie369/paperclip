@@ -101,6 +101,11 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
       }
       return <pre {...preProps}>{preChildren}</pre>;
     },
+    table: ({ node: _node, children: tableChildren, ...tableProps }) => (
+      <div className="overflow-x-auto">
+        <table {...tableProps}>{tableChildren}</table>
+      </div>
+    ),
     a: ({ href, children: linkChildren }) => {
       const parsed = href ? parseMentionChipHref(href) : null;
       if (parsed) {

@@ -447,7 +447,15 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
 
 .paperclip-mdxeditor-content img {
   max-height: 18rem;
+  max-width: 100%;
   border-radius: calc(var(--radius) - 2px);
+}
+
+/* Responsive tables: scroll horizontally on narrow viewports (mobile) */
+.paperclip-mdxeditor-content table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .paperclip-mdxeditor-content blockquote {
@@ -703,7 +711,7 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
 }
 
 .paperclip-markdown table {
-  width: 100%;
+  min-width: 100%;
 }
 
 .paperclip-markdown th {
