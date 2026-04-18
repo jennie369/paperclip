@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -420,9 +421,52 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+
+  // 2026-04-18 — Explicit wake-focus notice.
+  // Observed bug: CEO was woken by an @mention comment on GEM-105 / GEM-172
+  // but transcripts showed it checking GEM-174 (the previous task) and
+  // reporting "no new work". Root cause: Claude --resume keeps the
+  // conversational context from the prior turn, and the agent's HEARTBEAT.md
+  // rule ("read wake comment first") is in the system prompt but gets
+  // out-weighed by the resumed convo's momentum.
+  //
+  // Fix: prepend a high-priority turn-level directive to stdin so the LATEST
+  // message in the conversation explicitly tells Claude which issue + comment
+  // to focus on. Only emitted when we have a real wake target; otherwise the
+  // prompt is unchanged.
+  const wakeFocusNotice = (() => {
+    if (!wakeReason) return "";
+    if (wakeReason !== "issue_comment_mentioned" && wakeReason !== "issue_assigned") return "";
+    const taskLine = wakeTaskId ? `Issue ID: ${wakeTaskId}` : "";
+    const commentLine = wakeCommentId ? `Comment ID: ${wakeCommentId}` : "";
+    const focusLines = [taskLine, commentLine].filter((line) => line.length > 0);
+    if (focusLines.length === 0) return "";
+    const action =
+      wakeReason === "issue_comment_mentioned"
+        ? [
+            "YOU WERE WOKEN BECAUSE A NEW COMMENT MENTIONS YOU.",
+            "Your first action THIS TURN must be to read that specific comment and respond to its request.",
+            "Do NOT scan other issues or report 'no new work' until you have read and addressed this comment.",
+            "GET /api/issues/<ID> and GET /api/issues/<ID>/comments, find the wake comment, then act on it.",
+          ].join(" ")
+        : [
+            "YOU WERE WOKEN BECAUSE A NEW ISSUE WAS ASSIGNED TO YOU.",
+            "Your first action THIS TURN must be to read that issue and begin working it.",
+            "Do NOT continue a previous task until you have read the newly assigned issue.",
+          ].join(" ");
+    return [
+      "## Wake focus (DO THIS FIRST)",
+      ...focusLines,
+      `Wake reason: ${wakeReason}`,
+      "",
+      action,
+    ].join("\n");
+  })();
+
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     sessionHandoffNote,
+    wakeFocusNotice,
     renderedPrompt,
   ]);
   const promptMetrics = {
@@ -444,6 +488,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--append-system-prompt-file", effectiveInstructionsFilePath);
     }
     args.push("--add-dir", skillsDir);
+
+    // GEMRAL FIX 2026-04-06: Load MCP configs so heartbeat agents get same
+    // tools as chat-path agents (which router.ts already handles).
+    // Merges project root .mcp.json (defaults like Supabase) with per-agent
+    // mcp.json (overrides like CRM MCP). Last config wins on key conflict.
+    // Fixes: all heartbeat agents (CTO/CFO/financial/sales-closer/...) had
+    // no Supabase MCP access, only CEO worked (via chat path).
+    // 1. Project root .mcp.json (provides Supabase HTTP MCP for ALL agents)
+    const projectRootMcp = path.join(cwd, ".mcp.json");
+    if (existsSync(projectRootMcp)) {
+      args.push("--mcp-config", projectRootMcp);
+    }
+    // 2. Per-agent mcp.json (optional override/extend, e.g. CRM MCP)
+    if (instructionsFilePath) {
+      const agentDir = path.dirname(instructionsFilePath);
+      const agentMcp = path.join(agentDir, "mcp.json");
+      if (existsSync(agentMcp)) {
+        args.push("--mcp-config", agentMcp);
+      }
+    }
+
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
   };

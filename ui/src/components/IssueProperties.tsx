@@ -491,6 +491,15 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
   return (
     <div className="space-y-4">
       <div className="space-y-1">
+        {/* 2026-04-18 — Jennie asked for the issue key (GEM-NNN) at the top
+            of the Properties panel so it can be copied/referenced without
+            scrolling to the title bar. Read-only row. */}
+        <PropertyRow label="Issue ID">
+          <span className="text-sm font-mono text-foreground">
+            {issue.humanId || issue.id}
+          </span>
+        </PropertyRow>
+
         <PropertyRow label="Status">
           <StatusIcon
             status={issue.status}

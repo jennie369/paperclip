@@ -771,6 +771,29 @@ export function IssuesList({
                           )}
                         </span>
                       )}
+                      {/* 2026-04-18 — Created by column (read-only). Jennie
+                          asked to see the creator next to the assignee in the
+                          list so she can tell at a glance which agent or user
+                          filed the issue. Mirrors what AgentDetail's Recent
+                          Issues row now shows. */}
+                      <span
+                        className="hidden w-[120px] shrink-0 items-center justify-end text-[11px] text-muted-foreground md:inline-flex"
+                        title={
+                          issue.createdByAgentId
+                            ? `Created by ${agentName(issue.createdByAgentId) ?? issue.createdByAgentId.slice(0, 8)}`
+                            : issue.createdByUserId
+                              ? `Created by ${formatAssigneeUserLabel(issue.createdByUserId, currentUserId) ?? "User"}`
+                              : "Unknown creator"
+                        }
+                      >
+                        <span className="truncate">
+                          {issue.createdByAgentId
+                            ? (agentName(issue.createdByAgentId) ?? issue.createdByAgentId.slice(0, 8))
+                            : issue.createdByUserId
+                              ? (formatAssigneeUserLabel(issue.createdByUserId, currentUserId) ?? "User")
+                              : "—"}
+                        </span>
+                      </span>
                       <Popover
                         open={assigneePickerIssueId === issue.id}
                         onOpenChange={(open) => {

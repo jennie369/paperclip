@@ -43,7 +43,16 @@ export function queueIssueAssignmentWakeup(input: {
       payload: { issueId: input.issue.id, mutation: input.mutation },
       requestedByActorType: input.requestedByActorType,
       requestedByActorId: input.requestedByActorId ?? null,
-      contextSnapshot: { issueId: input.issue.id, source: input.contextSource },
+      // wakeReason drives shouldResetTaskSessionForWake in heartbeat.ts —
+      // without it the agent resumes its previous Claude session and
+      // answers the wrong topic (observed 2026-04-18: assigning GEM-175
+      // to CTO replayed a stale MCP watchdog discussion instead of
+      // working the new issue).
+      contextSnapshot: {
+        issueId: input.issue.id,
+        source: input.contextSource,
+        wakeReason: "issue_assigned",
+      },
     })
     .catch((err) => {
       logger.warn({ err, issueId: input.issue.id }, "failed to wake assignee on issue assignment");

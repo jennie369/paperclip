@@ -4,8 +4,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type AgentKey, type ClaudeLoginResult, type AvailableSkill } from "../api/agents";
 import { budgetsApi } from "../api/budgets";
 import AgentRelationsTab from "@/components/knowledge-graph/AgentRelationsTab";
+import { AgentActivityLogTab } from "@/components/AgentActivityLogTab";
 import { heartbeatsApi } from "../api/heartbeats";
-import { ApiError } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
@@ -188,7 +189,7 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "configuration" | "skills" | "runs" | "budget" | "relations";
+type AgentDetailView = "dashboard" | "configuration" | "skills" | "runs" | "budget" | "relations" | "activity-log";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "configure" || value === "configuration") return "configuration";
@@ -196,6 +197,7 @@ function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "budget") return value;
   if (value === "runs") return value;
   if (value === "relations") return value;
+  if (value === "activity-log") return value;
   return "dashboard";
 }
 
@@ -575,7 +577,7 @@ export function AgentDetail() {
     if (!agent) return;
     if (urlRunId) {
       if (routeAgentRef !== canonicalAgentRef) {
-        navigate(`/agents/${canonicalAgentRef}/runs/${urlRunId}`, { replace: true });
+        navigate(`/${companyPrefix}/agents/${canonicalAgentRef}/runs/${urlRunId}`, { replace: true });
       }
       return;
     }
@@ -588,9 +590,13 @@ export function AgentDetail() {
             ? "runs"
             : activeView === "budget"
               ? "budget"
-            : "dashboard";
+              : activeView === "relations"
+                ? "relations"
+                : activeView === "activity-log"
+                  ? "activity-log"
+                  : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
-      navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
+      navigate(`/${companyPrefix}/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
       return;
     }
   }, [agent, routeAgentRef, canonicalAgentRef, urlRunId, urlTab, activeView, navigate]);
@@ -623,7 +629,7 @@ export function AgentDetail() {
         }
       }
       if (action === "invoke" && data && typeof data === "object" && "id" in data) {
-        navigate(`/agents/${canonicalAgentRef}/runs/${(data as HeartbeatRun).id}`);
+        navigate(`/${companyPrefix}/agents/${canonicalAgentRef}/runs/${(data as HeartbeatRun).id}`);
       }
     },
     onError: (err) => {
@@ -697,9 +703,9 @@ export function AgentDetail() {
     if (activeView === "dashboard" && !urlRunId) {
       crumbs.push({ label: agentName });
     } else {
-      crumbs.push({ label: agentName, href: `/agents/${canonicalAgentRef}/dashboard` });
+      crumbs.push({ label: agentName, href: `/${companyPrefix}/agents/${canonicalAgentRef}/dashboard` });
       if (urlRunId) {
-        crumbs.push({ label: "Runs", href: `/agents/${canonicalAgentRef}/runs` });
+        crumbs.push({ label: "Runs", href: `/${companyPrefix}/agents/${canonicalAgentRef}/runs` });
         crumbs.push({ label: `Run ${urlRunId.slice(0, 8)}` });
       } else if (activeView === "configuration") {
         crumbs.push({ label: "Configuration" });
@@ -733,7 +739,7 @@ export function AgentDetail() {
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
   if (!agent) return null;
   if (!urlRunId && !urlTab) {
-    return <Navigate to={`/agents/${canonicalAgentRef}/dashboard`} replace />;
+    return <Navigate to={`/${companyPrefix}/agents/${canonicalAgentRef}/dashboard`} replace />;
   }
   const isPendingApproval = agent.status === "pending_approval";
   const showConfigActionBar = activeView === "configuration" && (configDirty || configSaving);
@@ -801,7 +807,7 @@ export function AgentDetail() {
           <span className="hidden sm:inline"><StatusBadge status={agent.status} /></span>
           {mobileLiveRun && (
             <Link
-              to={`/agents/${canonicalAgentRef}/runs/${mobileLiveRun.id}`}
+              to={`/${companyPrefix}/agents/${canonicalAgentRef}/runs/${mobileLiveRun.id}`}
               className="sm:hidden flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 transition-colors no-underline"
             >
               <span className="relative flex h-2 w-2">
@@ -858,7 +864,7 @@ export function AgentDetail() {
       {!urlRunId && (
         <Tabs
           value={activeView}
-          onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
+          onValueChange={(value) => navigate(`/${companyPrefix}/agents/${canonicalAgentRef}/${value}`)}
         >
           <PageTabBar
             items={[
@@ -866,11 +872,12 @@ export function AgentDetail() {
               { value: "configuration", label: "Configuration" },
               { value: "skills", label: "Skills" },
               { value: "runs", label: "Runs" },
+              { value: "activity-log", label: "Nhật ký" },
               { value: "budget", label: "Budget" },
               { value: "relations", label: "Quan hệ" },
             ]}
             value={activeView}
-            onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
+            onValueChange={(value) => navigate(`/${companyPrefix}/agents/${canonicalAgentRef}/${value}`)}
           />
         </Tabs>
       )}
@@ -988,7 +995,13 @@ export function AgentDetail() {
 
       {activeView === "relations" && agent ? (
         <div className="max-w-4xl">
-          <AgentRelationsTab agentSlug={agent.slug ?? agent.name ?? ""} />
+          <AgentRelationsTab agentSlug={(agent as any).slug ?? agent.name ?? ""} />
+        </div>
+      ) : null}
+
+      {activeView === "activity-log" && agent ? (
+        <div className="max-w-4xl">
+          <AgentActivityLogTab agentSlug={canonicalAgentRef} />
         </div>
       ) : null}
     </div>
@@ -1007,6 +1020,7 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
 }
 
 function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentId: string; issues?: { id: string; identifier?: string | null }[] }) {
+  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   if (runs.length === 0) return null;
 
   const sorted = [...runs].sort(
@@ -1035,7 +1049,7 @@ function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentI
           {isLive ? "Live Run" : "Latest Run"}
         </h3>
         <Link
-          to={issues && issues.length > 0 ? `/issues/${issues[0].identifier ?? issues[0].id}` : `/agents/${agentId}/runs`}
+          to={issues && issues.length > 0 ? `/${companyPrefix}/issues/${issues[0].identifier ?? issues[0].id}` : `/${companyPrefix}/agents/${agentId}/runs`}
           className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors no-underline"
         >
           {issues && issues.length > 0 ? `${issues[0].identifier} →` : "View details →"}
@@ -1043,7 +1057,7 @@ function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentI
       </div>
 
       <Link
-        to={issues && issues.length > 0 ? `/issues/${issues[0].identifier ?? issues[0].id}` : `/agents/${agentId}/runs/${run.id}`}
+        to={issues && issues.length > 0 ? `/${companyPrefix}/issues/${issues[0].identifier ?? issues[0].id}` : `/${companyPrefix}/agents/${agentId}/runs/${run.id}`}
         className={cn(
           "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
@@ -1113,6 +1127,9 @@ function AgentOverview({
         </ChartCard>
       </div>
 
+      {/* Channel Activity — router/chat activity (distinct from heartbeat runs above) */}
+      <ChannelActivityCard agentSlug={agentRouteId} />
+
       {/* Recent Issues */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
@@ -1125,15 +1142,50 @@ function AgentOverview({
           <p className="text-sm text-muted-foreground">No assigned issues.</p>
         ) : (
           <div className="border border-border rounded-lg">
-            {assignedIssues.slice(0, 10).map((issue) => (
-              <EntityRow
-                key={issue.id}
-                identifier={issue.identifier ?? issue.id.slice(0, 8)}
-                title={issue.title}
-                to={`/issues/${issue.identifier ?? issue.id}`}
-                trailing={<StatusBadge status={issue.status} />}
-              />
-            ))}
+            {assignedIssues.slice(0, 10).map((issue) => {
+              // 2026-04-18 — Jennie asked to surface Created by + Created time
+              // on this row so triage doesn't need an extra click into each
+              // issue. createdByAgentId resolves to a known agent name when
+              // possible; createdByUserId falls back to "User".
+              const creatorAgent = issue.createdByAgentId
+                ? (allAgents ?? []).find((a) => a.id === issue.createdByAgentId)
+                : undefined;
+              const creatorLabel = creatorAgent
+                ? (creatorAgent.displayName ?? creatorAgent.slug ?? "Agent")
+                : issue.createdByAgentId
+                  ? issue.createdByAgentId.slice(0, 8)
+                  : issue.createdByUserId
+                    ? "User"
+                    : "—";
+              const createdLabel = issue.createdAt
+                ? new Date(issue.createdAt).toLocaleDateString("vi-VN", {
+                    day: "2-digit",
+                    month: "2-digit",
+                  })
+                : "—";
+              return (
+                <EntityRow
+                  key={issue.id}
+                  identifier={issue.identifier ?? issue.id.slice(0, 8)}
+                  title={issue.title}
+                  to={`/issues/${issue.identifier ?? issue.id}`}
+                  trailing={
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="text-[11px] text-muted-foreground min-w-[80px] text-right truncate"
+                        title={`Created by ${creatorLabel}`}
+                      >
+                        {creatorLabel}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                        {createdLabel}
+                      </span>
+                      <StatusBadge status={issue.status} />
+                    </div>
+                  }
+                />
+              );
+            })}
             {assignedIssues.length > 10 && (
               <div className="px-3 py-2 text-xs text-muted-foreground text-center border-t border-border">
                 +{assignedIssues.length - 10} more issues
@@ -1147,6 +1199,54 @@ function AgentOverview({
       <div className="space-y-3">
         <h3 className="text-sm font-medium">Costs</h3>
         <CostsSection runtimeState={runtimeState} runs={runs} />
+      </div>
+    </div>
+  );
+}
+
+/* ---- Channel Activity Card (router / chat — NOT heartbeat) ---- */
+
+function ChannelActivityCard({ agentSlug }: { agentSlug: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['agent-activity-summary', agentSlug],
+    queryFn: () => api.get<{ slug: string; total: number; items: { kind: string; status: string; ts: string }[] }>(
+      `/channels/agent-configs/${encodeURIComponent(agentSlug)}/activity`
+    ),
+    refetchInterval: 30_000,
+  });
+
+  const items = data?.items || [];
+  const inbound = items.filter((i: any) => i.kind === 'inbound').length;
+  const outbound = items.filter((i: any) => i.kind === 'outbound').length;
+  const followups = items.filter((i: any) => i.kind === 'follow-up').length;
+  const failed = items.filter((i: any) => i.status === 'failed').length;
+  const lastTs = items.length > 0 ? items[0]!.ts : null;
+
+  if (isLoading || items.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium">Channel Activity</h3>
+        <span className="text-[10px] text-muted-foreground/60 bg-muted px-1.5 py-0.5 rounded">Agent Router</span>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <StatMini label="Messages In" value={inbound} />
+        <StatMini label="Replies Sent" value={outbound} />
+        <StatMini label="Follow-ups" value={followups} />
+        <StatMini label="Failed" value={failed} alert={failed > 0} />
+        <StatMini label="Last Active" value={lastTs ? new Date(lastTs).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }) : '—'} />
+      </div>
+    </div>
+  );
+}
+
+function StatMini({ label, value, alert }: { label: string; value: string | number; alert?: boolean }) {
+  return (
+    <div className="rounded-lg border border-border/40 bg-muted/[0.25] px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">{label}</div>
+      <div className={cn("text-lg font-semibold tabular-nums", alert ? "text-destructive" : "text-foreground")}>
+        {value}
       </div>
     </div>
   );
@@ -1635,6 +1735,7 @@ function CopyableFileRow({ name, path, size, missing }: { name: string; path?: s
 /* ---- Runs Tab ---- */
 
 function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
+  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
@@ -1644,7 +1745,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
 
   return (
     <Link
-      to={isSelected ? `/agents/${agentId}/runs` : `/agents/${agentId}/runs/${run.id}`}
+      to={isSelected ? `/${companyPrefix}/agents/${agentId}/runs` : `/${companyPrefix}/agents/${agentId}/runs/${run.id}`}
       className={cn(
         "flex flex-col gap-1 w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors no-underline text-inherit",
         isSelected ? "bg-accent/40" : "hover:bg-accent/20",
@@ -1698,6 +1799,7 @@ function RunsTab({
   selectedRunId: string | null;
   adapterType: string;
 }) {
+  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const { isMobile } = useSidebar();
 
   if (runs.length === 0) {
@@ -1719,7 +1821,7 @@ function RunsTab({
       return (
         <div className="space-y-3 min-w-0 overflow-x-hidden">
           <Link
-            to={`/agents/${agentRouteId}/runs`}
+            to={`/${companyPrefix}/agents/${agentRouteId}/runs`}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors no-underline"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -1766,6 +1868,7 @@ function RunsTab({
 /* ---- Run Detail (expanded) ---- */
 
 function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: HeartbeatRun; agentRouteId: string; adapterType: string }) {
+  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: hydratedRun } = useQuery({
@@ -1820,7 +1923,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     },
     onSuccess: (resumedRun) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
-      navigate(`/agents/${agentRouteId}/runs/${resumedRun.id}`);
+      navigate(`/${companyPrefix}/agents/${agentRouteId}/runs/${resumedRun.id}`);
     },
   });
 
@@ -1852,7 +1955,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     },
     onSuccess: (newRun) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
-      navigate(`/agents/${agentRouteId}/runs/${newRun.id}`);
+      navigate(`/${companyPrefix}/agents/${agentRouteId}/runs/${newRun.id}`);
     },
   });
 
