@@ -428,6 +428,62 @@ router.post('/content-pipeline/execute/:script', (req, res) => {
   proc.on('close', () => clearTimeout(timeout));
 });
 
+// ═══════════════════════════════════════════════════════
+// BATCH PROCESSOR — start / stop / status (fire-and-forget)
+// ═══════════════════════════════════════════════════════
+const batchProcs = new Map<string, ReturnType<typeof spawn>>();
+
+router.post('/content-pipeline/batch/start', (req, res) => {
+  const key = 'batch_processor';
+  const existing = batchProcs.get(key);
+  if (existing && !existing.killed) {
+    return res.json({ ok: true, running: true, pid: existing.pid, message: 'Đã đang chạy' });
+  }
+
+  const scriptPath = path.resolve(CC_CWD, 'scripts/batch_processor.py');
+  if (!fs.existsSync(scriptPath)) {
+    return res.status(404).json({ ok: false, error: `Script không tìm thấy: ${scriptPath}` });
+  }
+
+  // 2026-04-18 — `batch` (subcommand) is a one-shot that polls once and
+  // exits. `--batch` (flag) is the continuous watcher Jennie wants: poll,
+  // process queue, sleep, repeat. Using the subcommand caused the UI to
+  // revert to 'Play' within ~5s because the process finished immediately.
+  const proc = spawn('python', [scriptPath, '--batch'], {
+    cwd: CC_CWD,
+    env: { ...process.env, PYTHONUTF8: '1' },
+    windowsHide: true,
+    detached: false,
+  });
+
+  batchProcs.set(key, proc);
+  proc.on('close', () => batchProcs.delete(key));
+  proc.on('error', () => batchProcs.delete(key));
+
+  console.log(`[BatchProcessor] Started PID=${proc.pid}`);
+  return res.json({ ok: true, running: true, pid: proc.pid });
+});
+
+router.post('/content-pipeline/batch/stop', (_req, res) => {
+  const key = 'batch_processor';
+  const proc = batchProcs.get(key);
+  if (!proc || proc.killed) {
+    batchProcs.delete(key);
+    return res.json({ ok: true, running: false, message: 'Không có process đang chạy' });
+  }
+  proc.kill('SIGTERM');
+  batchProcs.delete(key);
+  console.log('[BatchProcessor] Stopped');
+  return res.json({ ok: true, running: false });
+});
+
+router.get('/content-pipeline/batch/status', (_req, res) => {
+  const key = 'batch_processor';
+  const proc = batchProcs.get(key);
+  const running = !!proc && !proc.killed;
+  return res.json({ running, pid: running ? proc!.pid : null });
+});
+
 // Jobs summary — count by status (lightweight)
 router.get('/content-pipeline/jobs-summary', async (_req, res) => {
   try {

@@ -15,6 +15,8 @@ import { SimpleModal } from "../../crm/components/SimpleModal";
 import { useToast } from "@/context/ToastContext";
 import { useNavigate } from "@/lib/router";
 import { supabase } from "@/lib/supabaseClient";
+// BatchJobsView moved to ContentPipelinePage aigen tab (2026-04-18).
+import { MarkdownBody } from "@/components/MarkdownBody";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -339,10 +341,9 @@ function ScriptExpandedPanel({ script }: { script: any }) {
             />
           </div>
         ) : (
-          <div
-            className="bg-white p-4 rounded-lg border text-sm min-h-[200px] max-h-[500px] overflow-y-auto leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(body) || '<span class="text-gray-400">(Không có nội dung)</span>' }}
-          />
+          <div className="bg-white p-4 rounded-lg border text-sm min-h-[200px] max-h-[500px] overflow-y-auto leading-relaxed prose prose-sm max-w-none">
+            <MarkdownBody>{body || '*(Không có nội dung)*'}</MarkdownBody>
+          </div>
         )
       ) : (
         <textarea
@@ -555,6 +556,11 @@ export function ContentTab() {
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const navigate = useNavigate();
+  // View mode: "scripts" (cc_scripts with full editor + preview) or
+  // "jobs" (cc_generation_jobs batch generator queue — moved here from the
+  // SOP Engine → Batch Generator tab so Jennie can see both views in one
+  // place. Both views have expandable rows.)
+  // viewMode removed 2026-04-18 — Jobs Queue relocated to AI Tạo Nội Dung tab.
   const [statusFilter, setStatusFilter] = useState('');
   const [pillarFilter, setPillarFilter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -607,6 +613,10 @@ export function ContentTab() {
 
   return (
     <div className="space-y-4">
+      {/* 2026-04-18 — Jobs Queue sub-tab removed. It now lives at the top of
+          the "AI Tạo Nội Dung" tab so all generation controls are in one
+          place. This tab is now Scripts-only. */}
+      <>
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex gap-2 flex-wrap">
@@ -833,6 +843,7 @@ export function ContentTab() {
           </div>
         </div>
       </SimpleModal>
+      </>
     </div>
   );
 }
