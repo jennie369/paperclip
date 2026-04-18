@@ -89,6 +89,37 @@ const OUTPUT_TYPE_OPTIONS = [
   { value: 'brainstorm', label: 'Brainstorm Chủ Đề (Gợi ý topic từ trends)', jobType: 'brainstorm', contentType: '' },
   { value: 'repurpose', label: 'Repurpose (Tái chế content cũ → format mới)', jobType: 'repurpose', contentType: '' },
   { value: 'image_prompt', label: 'Image Prompt (Prompt tạo hình minh họa)', jobType: 'image_prompt', contentType: '' },
+  { value: 'doc_tai_lieu', label: 'Doc-Tài Liệu Nội Dung', jobType: 'doc_tai_lieu', contentType: '' },
+];
+
+// DOC-* SOPs — checkbox list when outputType === 'doc_tai_lieu'.
+// Keep in sync with batch_processor.py DOC_OPTIONS + DOC_KNOWLEDGE_FILES.
+const DOC_SOP_OPTIONS = [
+  { value: 'DOC-MKT-001', label: 'Brand Overview Kit', group: 'Marketing' },
+  { value: 'DOC-MKT-006', label: 'Social Media Kit', group: 'Marketing' },
+  { value: 'DOC-CRS-001S', label: 'Khóa 7 Ngày Tần Số Gốc (Ngắn)', group: 'Khóa học' },
+  { value: 'DOC-CRS-002S', label: 'Khóa Tần Số Tình Yêu (Ngắn)', group: 'Khóa học' },
+  { value: 'DOC-CRS-003S', label: 'Khóa Tư Duy Triệu Phú (Ngắn)', group: 'Khóa học' },
+  { value: 'DOC-CRS-004S', label: 'Trading Starter (Ngắn)', group: 'Khóa học' },
+  { value: 'DOC-CRS-005S', label: 'Trading Tier 1-2-3 (Ngắn)', group: 'Khóa học' },
+  { value: 'DOC-CRS-006S', label: 'So Sánh Tất Cả Khóa Học (Ngắn)', group: 'Khóa học' },
+  { value: 'DOC-CMP-001', label: 'So Sánh Khóa Tư Duy (3 khóa)', group: 'So sánh' },
+  { value: 'DOC-CMP-002', label: 'So Sánh Khóa Trading (Starter→Tier3)', group: 'So sánh' },
+  { value: 'DOC-CMP-003', label: 'So Sánh Scanner Tiers (Free→VIP)', group: 'So sánh' },
+  { value: 'DOC-AFF-001', label: 'Hướng Dẫn Đăng Ký CTV', group: 'Affiliate/KOL' },
+  { value: 'DOC-AFF-003', label: 'KOL Partnership Kit', group: 'Affiliate/KOL' },
+  { value: 'DOC-AFF-004', label: 'CTV Sales Script', group: 'Affiliate/KOL' },
+  { value: 'DOC-AFF-005', label: 'Affiliate Link Guide', group: 'Affiliate/KOL' },
+  { value: 'DOC-FNL-001', label: 'Free→Paid Funnel', group: 'Funnel' },
+  { value: 'DOC-FNL-002', label: 'Spiritual Funnel', group: 'Funnel' },
+  { value: 'DOC-FNL-003', label: 'Upsell Matrix / Cross-sell Map', group: 'Funnel' },
+  { value: 'DOC-ONB-001', label: 'Onboarding Trading Starter (5 emails)', group: 'Onboarding Email', emailCount: 5 },
+  { value: 'DOC-ONB-002', label: 'Onboarding Trading Tier 1 (7 emails)', group: 'Onboarding Email', emailCount: 7 },
+  { value: 'DOC-ONB-003', label: 'Onboarding Trading Tier 2 (7 emails)', group: 'Onboarding Email', emailCount: 7 },
+  { value: 'DOC-ONB-004', label: 'Onboarding Trading Tier 3 (7 emails)', group: 'Onboarding Email', emailCount: 7 },
+  { value: 'DOC-ONB-005', label: 'Onboarding Tần Số Tình Yêu (6 emails)', group: 'Onboarding Email', emailCount: 6 },
+  { value: 'DOC-ONB-006', label: 'Onboarding Tư Duy Triệu Phú (7 emails)', group: 'Onboarding Email', emailCount: 7 },
+  { value: 'DOC-ONB-007', label: 'Onboarding 7 Ngày Tần Số Gốc (7 emails)', group: 'Onboarding Email', emailCount: 7 },
 ];
 
 // ============================================================================
@@ -426,7 +457,7 @@ const AI_PROVIDER_OPTIONS = [
   { value: 'openai', label: '🤖 OpenAI / GPT (9Router)' },
 ];
 const AI_MODEL_OPTIONS = {
-  claude: [{ value: 'sonnet', label: 'Claude Sonnet 4.6' }, { value: 'opus', label: 'Claude Opus 4.6' }],
+  claude: [{ value: 'opus-4-7', label: 'Claude Opus 4.7' }, { value: 'sonnet', label: 'Claude Sonnet 4.6' }, { value: 'opus', label: 'Claude Opus 4.6' }],
   gemini: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }, { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }, { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' }, { value: 'gemini-3-flash', label: 'Gemini 3 Flash' }],
   openai: [{ value: 'cx/gpt-5.4', label: 'GPT-5.4' }, { value: 'cx/gpt-4.1', label: 'GPT-4.1' }, { value: 'cx/o4-mini', label: 'o4-mini' }],
 };
@@ -935,6 +966,11 @@ export default function AiGenPage() {
   const [aiModel, setAiModel] = useState('gemini-2.5-pro');
   const [brief, setBrief] = useState('');
   const [briefError, setBriefError] = useState('');
+  // 2026-04-17 — Doc-Tài Liệu Nội Dung checkbox state.
+  // selectedDocIds: DOC-xxx values user ticked (each = 1 generation job).
+  // selectedDocEmailDays: {DOC-ONB-xxx: 'all' | 1..N} — which day of onboarding email series.
+  const [selectedDocIds, setSelectedDocIds] = useState([]);
+  const [selectedDocEmailDays, setSelectedDocEmailDays] = useState({});
 
   // -- Speech-to-text (Groq Whisper large-v3) --
   const [isRecording, setIsRecording] = useState(false);
@@ -1133,6 +1169,15 @@ export default function AiGenPage() {
   const [persona, setPersona] = useState('auto');
   const [writingMode, setWritingMode] = useState('auto');
   const [productHook, setProductHook] = useState('none');
+
+  // -- Post metadata (drives batch_processor insert + downstream publisher) --
+  // Values flow: UI → /content-pipeline/generate → input_params → batch_processor
+  // inserts cc_scripts with these exact values → publisher reads cc_scripts.
+  // posted_account must match a key in PLANNER_ACCOUNTS so Playwright Meta BS
+  // login picks the right saved session.
+  const [postedAccount, setPostedAccount] = useState('page_jennie');
+  const [contentPillar, setContentPillar] = useState('trading');
+  const [publishMode, setPublishMode] = useState('scheduled'); // scheduled | immediate | threshold_5
 
   // -- Batch & extra options --
   const [batchCount, setBatchCount] = useState(1);
@@ -1427,6 +1472,16 @@ export default function AiGenPage() {
   const isNews = outputType === 'news_article';
   const isEmail = outputType === 'email_html';
   const isContentPlanner = outputType === 'content_planner';
+  // 2026-04-17: treat brainstorm/repurpose/outline/image_prompt as first-class
+  // job types so validation + button-disabled logic can branch on them cleanly.
+  const isBrainstorm = outputType === 'brainstorm';
+  const isRepurpose = outputType === 'repurpose';
+  const isOutlineLatc = outputType === 'outline_latc';
+  const isOutlineTmt = outputType === 'outline_tmt';
+  const isOutline = isOutlineLatc || isOutlineTmt;
+  const isImagePrompt = outputType === 'image_prompt';
+  // 2026-04-17 — Doc-Tài Liệu Nội Dung (25 SOPs checkbox group)
+  const isDocTaiLieu = outputType === 'doc_tai_lieu';
 
   // -- Planner: copy to brief callback --
   const handlePlannerCopyToBrief = useCallback((planBrief, planType) => {
@@ -1474,15 +1529,34 @@ export default function AiGenPage() {
 
   // -- Validate --
   const validateBrief = useCallback(() => {
-    // Brief là tuỳ chọn khi Social Post hoặc Clip Ngắn hoặc Email (đã có checkbox nội dung)
+    // Brainstorm "gợi ý topic từ trends" — không cần brief, BE sinh topic từ pillar/trend.
+    if (isBrainstorm) {
+      setBriefError('');
+      return true;
+    }
+    // Doc-Tài Liệu: chỉ cần có ít nhất 1 SOP tick trong checkbox group.
+    if (isDocTaiLieu) {
+      if (!selectedDocIds || selectedDocIds.length === 0) {
+        setBriefError('Vui lòng tick ít nhất 1 tài liệu SOP ở panel "Chọn Tài Liệu SOP" bên dưới');
+        return false;
+      }
+      setBriefError('');
+      return true;
+    }
+    // Dynamic job types (có field riêng kiểu platform/topic/template) — bỏ qua brief.
     const hasDynamicContent = isSocialPost || isShortClip || isNews || isEmail || isBanner || isPushNotification || isInAppStory || isSms || isChatbotScript || isContentPlanner;
     if (!brief.trim() && !hasDynamicContent) {
-      setBriefError('Vui lòng nhập nội dung tóm tắt (bắt buộc cho Kịch bản / Tiêu đề)');
+      // Chỉ rõ job type đang cần brief để chị biết phải điền gì
+      let needFor = 'Kịch bản / Tiêu đề';
+      if (isOutline) needFor = 'Outline (đề cương kịch bản)';
+      else if (isRepurpose) needFor = 'Repurpose (cần paste content cũ vào brief)';
+      else if (isImagePrompt) needFor = 'Image Prompt (cần mô tả visual)';
+      setBriefError(`Vui lòng nhập nội dung tóm tắt (bắt buộc cho ${needFor})`);
       return false;
     }
     setBriefError('');
     return true;
-  }, [brief, isSocialPost, isShortClip, isNews, isEmail, isBanner, isPushNotification, isInAppStory, isSms, isChatbotScript, isContentPlanner]);
+  }, [brief, isSocialPost, isShortClip, isNews, isEmail, isBanner, isPushNotification, isInAppStory, isSms, isChatbotScript, isContentPlanner, isBrainstorm, isOutline, isRepurpose, isImagePrompt, isDocTaiLieu, selectedDocIds]);
 
   // -- Build context from dynamic fields --
   const buildDynamicContext = useCallback(() => {
@@ -1708,6 +1782,70 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
   const handleGenerate = useCallback(async () => {
     console.log('[DEBUG] handleGenerate called, validateBrief() =', validateBrief());
     if (!validateBrief()) return;
+
+    // 2026-04-17 — Doc-Tài Liệu flow: queue 1 generation job per selected SOP
+    // instead of running AI inline. batch_processor picks them up and pulls the
+    // SOP-specific knowledge files (DOC_KNOWLEDGE_FILES) + prompt template.
+    if (isDocTaiLieu) {
+      if (!selectedDocIds.length) {
+        addToast?.('warning', 'Chưa chọn tài liệu SOP nào');
+        return;
+      }
+      setGenerating(true);
+      try {
+        let queued = 0;
+        const errors = [];
+        for (const docId of selectedDocIds) {
+          const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
+          // 2026-04-17 FIX — pass the user-chosen metadata (brand voice, persona,
+          // writing mode, AI model) from UI dropdowns instead of hardcoding.
+          // Before fix: brand_voice/pillar were hardcoded to 'jennie'/'trading'
+          // and track/persona/writing_mode fell back to batch_processor defaults
+          // → output didn't match user expectations.
+          // 2026-04-18 — pillar/posted_account/publish_mode must come from UI
+          // state, not hardcoded. cc_scripts has posted_account column that
+          // Playwright publisher reads to pick the Meta BS session; hardcoding
+          // 'trading' pillar also broke framework image composition rules.
+          const payload = {
+            content_type: docId,
+            sop_id: docId,
+            topic: brief.trim() || opt?.label || docId,
+            brand_voice: brandVoice || 'jennie',
+            pillar: contentPillar || 'trading',
+            persona: persona && persona !== 'auto' ? persona : undefined,
+            writing_mode: writingMode && writingMode !== 'auto' ? writingMode : undefined,
+            ai_provider: aiProvider,
+            ai_model: aiModel,
+            posted_account: postedAccount,
+            publish_mode: publishMode,
+          };
+          if (opt?.emailCount) {
+            payload.email_day = selectedDocEmailDays[docId] ?? 'all';
+          }
+          try {
+            const r = await fetch('/api/ops/content-pipeline/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            queued += 1;
+          } catch (err) {
+            console.error(`[DOC-QUEUE] Failed to queue ${docId}:`, err);
+            errors.push(`${docId}: ${err.message}`);
+          }
+        }
+        if (queued > 0) {
+          addToast?.('success', `Đã queue ${queued}/${selectedDocIds.length} job(s) tạo tài liệu. Batch processor sẽ generate từng bài.`);
+        }
+        if (errors.length) {
+          addToast?.('error', `${errors.length} job(s) fail: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '...' : ''}`);
+        }
+      } finally {
+        setGenerating(false);
+      }
+      return;
+    }
 
     console.log('[DEBUG] Form validated, setting generating to true');
     setGenerating(true);
@@ -3852,6 +3990,85 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             </div>
           )}
 
+          {/* ── Doc-Tài Liệu Nội Dung: checkbox group cho 25 SOPs ── */}
+          {isDocTaiLieu && (
+            <div className="space-y-3 p-4 rounded-card border border-border bg-glass-bg">
+              <h4 className="text-xs font-semibold text-txt-2 uppercase tracking-wider">
+                CHỌN TÀI LIỆU SOP CẦN TẠO
+              </h4>
+              <p className="text-[11px] text-txt-3">
+                Tick nhiều SOP = sinh nhiều job (1 job / SOP). Onboarding SOPs có dropdown chọn ngày.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-[11px] text-purple underline"
+                  disabled={generating}
+                  onClick={() => setSelectedDocIds(DOC_SOP_OPTIONS.map((o) => o.value))}
+                >
+                  Chọn tất cả
+                </button>
+                <span className="text-[11px] text-txt-3">·</span>
+                <button
+                  type="button"
+                  className="text-[11px] text-purple underline"
+                  disabled={generating}
+                  onClick={() => { setSelectedDocIds([]); setSelectedDocEmailDays({}); }}
+                >
+                  Bỏ chọn
+                </button>
+                <span className="ml-auto text-[11px] text-txt-3">Đã chọn: {selectedDocIds.length}/{DOC_SOP_OPTIONS.length}</span>
+              </div>
+              {Array.from(new Set(DOC_SOP_OPTIONS.map((o) => o.group))).map((group) => (
+                <div key={group} className="space-y-1.5">
+                  <div className="text-[11px] font-semibold text-txt-3 uppercase tracking-wider">{group}</div>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {DOC_SOP_OPTIONS.filter((o) => o.group === group).map((opt) => {
+                      const checked = selectedDocIds.includes(opt.value);
+                      const isOnb = typeof opt.emailCount === 'number';
+                      return (
+                        <div key={opt.value} className="flex items-center gap-2">
+                          <label className="flex items-center gap-2 cursor-pointer flex-1">
+                            <input
+                              type="checkbox"
+                              className="accent-[var(--gold)] w-4 h-4"
+                              checked={checked}
+                              disabled={generating}
+                              onChange={() => {
+                                setSelectedDocIds((prev) =>
+                                  prev.includes(opt.value)
+                                    ? prev.filter((v) => v !== opt.value)
+                                    : [...prev, opt.value]
+                                );
+                              }}
+                            />
+                            <span className="text-[12px] text-txt">
+                              <span className="font-mono text-[10px] text-txt-3 mr-1">{opt.value}</span>
+                              {opt.label}
+                            </span>
+                          </label>
+                          {isOnb && checked && (
+                            <select
+                              className="text-[11px] px-2 py-1 rounded-md border border-border bg-bg-4 text-txt"
+                              disabled={generating}
+                              value={selectedDocEmailDays[opt.value] ?? 'all'}
+                              onChange={(e) => setSelectedDocEmailDays((prev) => ({ ...prev, [opt.value]: e.target.value }))}
+                            >
+                              <option value="all">All {opt.emailCount} emails</option>
+                              {Array.from({ length: opt.emailCount }, (_, i) => (
+                                <option key={i + 1} value={String(i + 1)}>Day {i + 1}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* ── Email Marketing HTML: Dynamic fields ── */}
           {isEmail && (
             <div className="space-y-3 p-4 rounded-card border border-border bg-glass-bg">
@@ -4116,9 +4333,31 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
               </>
             ) : (
               <>
-                <Button variant="gold" icon={Sparkles} onClick={handleGenerate}>
-                  Tạo Nội Dung ({aiProvider === 'gemini' ? `Gemini` : aiProvider === 'openai' ? `GPT` : `Claude`})
-                </Button>
+                {(() => {
+                  // 2026-04-17 FIX: disable button when validation would fail so click
+                  // không còn "im lặng". Now covers Doc-Tài Liệu flow too.
+                  const hasDynamicContent = isSocialPost || isShortClip || isNews || isEmail || isBanner || isPushNotification || isInAppStory || isSms || isChatbotScript || isContentPlanner;
+                  const briefMissing = !brief.trim() && !hasDynamicContent && !isBrainstorm && !isDocTaiLieu;
+                  const docMissing = isDocTaiLieu && selectedDocIds.length === 0;
+                  const disabled = briefMissing || docMissing;
+                  const title = briefMissing
+                    ? 'Vui lòng nhập nội dung tóm tắt trước khi tạo'
+                    : (docMissing ? 'Vui lòng tick ít nhất 1 tài liệu SOP' : undefined);
+                  const buttonLabel = isDocTaiLieu
+                    ? `Queue ${selectedDocIds.length} Job(s) Tạo Tài Liệu`
+                    : `Tạo Nội Dung (${aiProvider === 'gemini' ? 'Gemini' : aiProvider === 'openai' ? 'GPT' : 'Claude'})`;
+                  return (
+                    <Button
+                      variant="gold"
+                      icon={Sparkles}
+                      onClick={handleGenerate}
+                      disabled={disabled}
+                      title={title}
+                    >
+                      {buttonLabel}
+                    </Button>
+                  );
+                })()}
                 {output && (
                   <Button variant="outline" icon={RefreshCw} onClick={handleRegenerate}>
                     Tạo Lại
