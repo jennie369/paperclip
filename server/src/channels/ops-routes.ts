@@ -1646,7 +1646,19 @@ function spawnPublisher(args: string[], label: string): Promise<{ code: number; 
 router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
   const { id } = req.params;
   try {
-    // Enqueue with trigger_type=manual.
+    // 2026-04-18 dedup: if ANY pending row exists for this script_id, claim
+    // them by flipping to 'processing' and skip insert. Without this the
+    // cron / multiple callers all race, each spawning its own Playwright and
+    // each inserting a new 'manual' audit row — the exact feedback loop that
+    // dumped 3000+ rows earlier today.
+    const { data: claimed } = await supabase
+      .from('cc_publish_queue')
+      .update({ status: 'processing', picked_at: new Date().toISOString() })
+      .eq('script_id', id)
+      .eq('status', 'pending')
+      .select('id');
+    const alreadyQueued = (claimed?.length || 0) > 0;
+
     // NOTE: cc_scripts uses posted_account (text). channel_target only exists on
     // cc_publish_queue. Previous code selected cc_scripts.channel_target →
     // PostgREST 500. Read posted_account, copy into queue.channel_target.
@@ -1658,12 +1670,18 @@ router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
       .single();
     if (sErr) throw sErr;
 
-    await supabase.from('cc_publish_queue').insert({
-      script_id: id,
-      trigger_type: 'manual',
-      channel_target: script.posted_account,
-      metadata: { source: 'api_publish_now', user: req.headers['x-user'] || 'unknown' },
-    });
+    // Only insert a new audit row when nothing was already pending. Prevents
+    // the endpoint from creating extra 'manual' rows for every cron tick.
+    if (!alreadyQueued) {
+      await supabase.from('cc_publish_queue').insert({
+        script_id: id,
+        trigger_type: 'manual',
+        channel_target: script.posted_account,
+        status: 'processing',
+        picked_at: new Date().toISOString(),
+        metadata: { source: 'api_publish_now', user: req.headers['x-user'] || 'unknown' },
+      });
+    }
 
     // Spawn Playwright single-publish async (don't wait for full upload)
     spawnPublisher(['--single', id], `single-${id.slice(0, 8)}`).then((r) => {
