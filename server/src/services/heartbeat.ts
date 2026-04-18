@@ -10,6 +10,7 @@ import {
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
+  companies,
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
@@ -23,7 +24,8 @@ import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
-import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
+import { parseObject, asBoolean, asNumber, asString, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
+import { parseCron, nextCronTick, validateCron, type ParsedCron } from "./cron.js";
 import { costService } from "./costs.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
@@ -1725,9 +1727,31 @@ export function heartbeatService(db: Db) {
     const runtimeConfig = parseObject(agent.runtimeConfig);
     const heartbeat = parseObject(runtimeConfig.heartbeat);
 
+    // GEMRAL FIX 2026-04-06 P2: Add cron expression support.
+    // If cronExpression is set AND valid, it takes precedence over intervalSec.
+    // Cron format: standard 5-field (minute hour day-of-month month day-of-week).
+    // Example: "0 9 * * *" = daily 09:00. "*/15 * * * *" = every 15 min.
+    // If cron fails validation, fall back to intervalSec with a warning.
+    const rawCron = asString(heartbeat.cronExpression ?? heartbeat.cron, "").trim();
+    let cron: ParsedCron | null = null;
+    if (rawCron) {
+      const err = validateCron(rawCron);
+      if (err) {
+        logger.warn({ agentId: agent.id, cron: rawCron, error: err }, "Invalid cronExpression, falling back to intervalSec");
+      } else {
+        try {
+          cron = parseCron(rawCron);
+        } catch {
+          cron = null;
+        }
+      }
+    }
+
     return {
       enabled: asBoolean(heartbeat.enabled, true),
       intervalSec: Math.max(0, asNumber(heartbeat.intervalSec, 0)),
+      cronExpression: cron ? rawCron : "",
+      cron,
       wakeOnDemand: asBoolean(heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation, true),
       maxConcurrentRuns: normalizeMaxConcurrentRuns(heartbeat.maxConcurrentRuns),
     };
@@ -3112,6 +3136,75 @@ export function heartbeatService(db: Db) {
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
 
+  // A' evergreen heartbeat thread (2026-04-17). Lazy-bootstrap a single hidden
+  // issue per agent that acts as the persistent conversation buffer for timer /
+  // on-demand heartbeat runs that don't carry their own issueId. Jennie comments
+  // on this thread → agent wakes with wake_comment_id and resumes context.
+  // The issue stays `hidden` so it never pollutes the default inbox listing.
+  async function ensureHeartbeatThread(
+    agent: typeof agents.$inferSelect,
+  ): Promise<string> {
+    const existingId = (agent as unknown as { heartbeatThreadIssueId: string | null }).heartbeatThreadIssueId;
+    if (existingId) {
+      const stillThere = await db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.id, existingId), eq(issues.companyId, agent.companyId)))
+        .then((rows) => rows[0]);
+      if (stillThere) return stillThere.id;
+      // FK dangling (issue deleted) — fall through and recreate
+    }
+    const now = new Date();
+    const title = `Heartbeat Thread — ${agent.name ?? agent.id.slice(0, 8)}`;
+    const description =
+      `Evergreen heartbeat conversation thread for agent **${agent.name ?? agent.id}**.\n\n` +
+      `Every timer / on-demand wake run without an explicit issue is attached here. ` +
+      `Post a comment to reply to the agent — it wakes with wake_comment_id and resumes the session. ` +
+      `Hidden from the default inbox; toggle the filter to view.`;
+    // Atomically bump companies.issueCounter (same pattern as issueService.create)
+    // so the thread issue gets a GEM-### identifier and UI routes work. Skipping
+    // this leaves identifier=null and the issue link breaks.
+    const [created] = await db.transaction(async (tx) => {
+      const [company] = await tx
+        .update(companies)
+        .set({ issueCounter: sql`${companies.issueCounter} + 1` })
+        .where(eq(companies.id, agent.companyId))
+        .returning({ issueCounter: companies.issueCounter, issuePrefix: companies.issuePrefix });
+      const issueNumber = company.issueCounter;
+      const identifier = `${company.issuePrefix}-${issueNumber}`;
+      const rows = await tx
+        .insert(issues)
+        .values({
+          companyId: agent.companyId,
+          title,
+          description,
+          status: "in_progress",
+          priority: "low",
+          assigneeAgentId: agent.id,
+          originKind: "system",
+          originId: `heartbeat-thread:${agent.id}`,
+          hiddenAt: now,
+          issueNumber,
+          identifier,
+          startedAt: now,
+        })
+        .returning({ id: issues.id });
+      return rows;
+    });
+    await db
+      .update(agents)
+      .set({
+        heartbeatThreadIssueId: created.id,
+        updatedAt: now,
+      } as any)
+      .where(eq(agents.id, agent.id));
+    logger.info(
+      { agentId: agent.id, companyId: agent.companyId, issueId: created.id },
+      "heartbeat-thread: created evergreen issue",
+    );
+    return created.id;
+  }
+
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
@@ -3150,6 +3243,30 @@ export function heartbeatService(db: Db) {
       }
       issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueId;
     }
+
+    // A' — attach to evergreen Heartbeat Thread if still no issue. Done AFTER
+    // the explicit resume block so real issue wakes (assignment, comment, etc.)
+    // take precedence; only orphan heartbeat / on-demand runs fall through here.
+    if (!issueId) {
+      try {
+        const threadIssueId = await ensureHeartbeatThread(agent);
+        enrichedContextSnapshot.issueId = threadIssueId;
+        if (!readNonEmptyString(enrichedContextSnapshot.taskId)) {
+          enrichedContextSnapshot.taskId = threadIssueId;
+        }
+        if (!readNonEmptyString(enrichedContextSnapshot.taskKey)) {
+          enrichedContextSnapshot.taskKey = threadIssueId;
+        }
+        enrichedContextSnapshot.heartbeatThread = true;
+        issueId = threadIssueId;
+      } catch (err) {
+        logger.warn(
+          { err, agentId },
+          "ensureHeartbeatThread failed — continuing without thread attachment",
+        );
+      }
+    }
+
     const effectiveTaskKey = readNonEmptyString(enrichedContextSnapshot.taskKey) ?? taskKey;
     const sessionBefore =
       explicitResumeSession?.sessionDisplayId ??
@@ -3954,12 +4071,33 @@ export function heartbeatService(db: Db) {
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
         const policy = parseHeartbeatPolicy(agent);
-        if (!policy.enabled || policy.intervalSec <= 0) continue;
+        if (!policy.enabled) continue;
+        // Must have at least one schedule: cron OR intervalSec
+        if (!policy.cron && policy.intervalSec <= 0) continue;
 
         checked += 1;
-        const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
-        const elapsedMs = now.getTime() - baseline;
-        if (elapsedMs < policy.intervalSec * 1000) continue;
+        const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt);
+
+        // GEMRAL FIX 2026-04-06 P2: Cron expression takes precedence over intervalSec.
+        // If cron is set: fire when `now >= nextCronTick(cron, baseline)`.
+        // Otherwise: fall back to legacy intervalSec behaviour.
+        let shouldFire = false;
+        let reason = "";
+        if (policy.cron) {
+          const next = nextCronTick(policy.cron, baseline);
+          if (next && now.getTime() >= next.getTime()) {
+            shouldFire = true;
+            reason = `cron_elapsed:${policy.cronExpression}`;
+          }
+        } else {
+          const elapsedMs = now.getTime() - baseline.getTime();
+          if (elapsedMs >= policy.intervalSec * 1000) {
+            shouldFire = true;
+            reason = "interval_elapsed";
+          }
+        }
+
+        if (!shouldFire) continue;
 
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
@@ -3969,8 +4107,10 @@ export function heartbeatService(db: Db) {
           requestedByActorId: "heartbeat_scheduler",
           contextSnapshot: {
             source: "scheduler",
-            reason: "interval_elapsed",
+            reason,
             now: now.toISOString(),
+            cronExpression: policy.cronExpression || undefined,
+            intervalSec: policy.cron ? undefined : policy.intervalSec,
           },
         });
         if (run) enqueued += 1;

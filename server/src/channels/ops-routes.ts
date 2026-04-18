@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { pushScript, updatePageStatus, bulkUpdatePageStatus, notionPushEnabled } from './notion-push.js';
 
 // Dedicated Realtime client — service_role key + realtime config
 const REALTIME_URL = 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
@@ -33,29 +34,57 @@ const CC_CWD = 'D:/Claude Projects/App Content Jennie/gem-content-center';
 // Gives <1s latency; polling cron (Gemral_PublishQueue 5m) is safety net.
 // ═══════════════════════════════════════════════════════
 
-const REALTIME_DEBOUNCE_MS = 3000; // coalesce bursts within 3s
-const recentInserts = new Set<string>();
+// Realtime dispatcher for cc_publish_queue INSERTs. Two critical invariants
+// prevent the feedback loop that generated 379 rows in 11s (2026-04-18):
+//
+// 1. Skip `trigger_type='manual'` — those rows are ALREADY produced BY the
+//    `/publish-now` endpoint. If realtime also calls `/publish-now` for them,
+//    the endpoint updates cc_scripts → trigger_type='immediate' row enqueued
+//    by DB trigger + another 'manual' row inserted by the endpoint →
+//    realtime fires for both → re-dispatch → infinite loop.
+//
+// 2. Debounce by SCRIPT_ID (not queue row id). A queue-row-id debounce never
+//    matches because each loop iteration creates a fresh id.
+const REALTIME_DEBOUNCE_MS = 10_000; // one dispatch per script per 10s
+const recentScripts = new Map<string, number>();
 let realtimeSub: any = null;
+
+function isScriptRecentlyDispatched(sid: string): boolean {
+  const last = recentScripts.get(sid);
+  if (!last) return false;
+  if (Date.now() - last > REALTIME_DEBOUNCE_MS) {
+    recentScripts.delete(sid);
+    return false;
+  }
+  return true;
+}
 
 async function handlePublishInsert(row: any) {
   const qid = row.id;
-  if (!qid || recentInserts.has(String(qid))) return;
-  recentInserts.add(String(qid));
-  setTimeout(() => recentInserts.delete(String(qid)), REALTIME_DEBOUNCE_MS);
-
   const tt = row.trigger_type;
   const sid = row.script_id;
+  if (!qid || !sid) return;
+  // 'manual' rows are the endpoint's own audit trail — ignore them to avoid
+  // dispatching the endpoint that just inserted them.
+  if (tt === 'manual') {
+    return;
+  }
+  if (isScriptRecentlyDispatched(sid)) {
+    console.log(`[PublishRealtime] skip duplicate dispatch for script=${sid} (within debounce)`);
+    return;
+  }
+  recentScripts.set(sid, Date.now());
   console.log(`[PublishRealtime] event trigger=${tt} script=${sid} qid=${qid}`);
 
   try {
-    if (tt === 'immediate' || tt === 'manual') {
-      const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3101}/api/ops/content-pipeline/scripts/${sid}/publish-now`, {
+    if (tt === 'immediate') {
+      const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3100}/api/ops/content-pipeline/scripts/${sid}/publish-now`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
       });
       console.log(`[PublishRealtime] publish-now(${sid}) → ${r.status}`);
     } else if (tt === 'threshold') {
       const body = row.channel_target ? JSON.stringify({ channel_target: row.channel_target }) : '{}';
-      const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3101}/api/ops/content-pipeline/publish-batch`, {
+      const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3100}/api/ops/content-pipeline/publish-batch`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
       });
       console.log(`[PublishRealtime] publish-batch → ${r.status}`);
@@ -151,6 +180,15 @@ router.post('/content-pipeline/scripts/:id/approve', async (req, res) => {
       .update({ status: 'approved', approved_at: new Date().toISOString() })
       .eq('id', req.params.id).select('*').single();
     if (error) throw error;
+    // Fire-and-forget: push Status=Approved to Notion. Never block the UI —
+    // if NOTION_TOKEN is missing or Notion is flaky, the DB write still succeeds.
+    // If no Notion page exists yet (manually-inserted row), fall back to full push.
+    void (async () => {
+      const quick = await updatePageStatus(req.params.id, 'approved');
+      if (!quick.ok && quick.note === 'no-page') {
+        await pushScript(req.params.id);
+      }
+    })().catch((e) => console.warn('[notion-push] approve fail', e));
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -179,6 +217,11 @@ router.post('/content-pipeline/scripts/bulk-approve', async (req, res) => {
       .update({ status: 'approved', approved_at: new Date().toISOString() })
       .in('id', script_ids);
     if (error) throw error;
+    // Fire-and-forget bulk sync to Notion — paced at ~350ms/req inside helper
+    // to stay under Notion 3 req/s rate limit.
+    void bulkUpdatePageStatus(script_ids, 'approved').catch((e) =>
+      console.warn('[notion-push] bulk-approve fail', e),
+    );
     res.json({ approved: script_ids.length });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
@@ -401,27 +444,141 @@ router.get('/content-pipeline/jobs-summary', async (_req, res) => {
 // POST /scripts — tạo script thủ công
 router.post('/content-pipeline/scripts', async (req, res) => {
   try {
-    const { title, body, content_type, pillar, brand_voice, status } = req.body;
+    const {
+      title,
+      body,
+      content_type,
+      pillar,
+      brand_voice,
+      status,
+      track,
+      persona,
+      writing_mode,
+      // Optional fields accepted by cc_scripts — UI must pass explicit values,
+      // no hardcoded defaults beyond what the schema requires. Missing fields
+      // stay NULL (schema allows). posted_account drives which Meta BS account
+      // the publisher uses; publish_mode controls the trigger flow.
+      hook,
+      cta,
+      word_count,
+      posted_account,
+      posted_time_slot,
+      scheduled_at,
+      publish_mode,
+      image_urls,
+      tags,
+      notes,
+      metadata,
+    } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: 'Tiêu đề không được trống' });
-    const { data, error } = await supabase.from('cc_scripts').insert({
-      title: title.trim(), body, content_type: content_type || 'social_post',
-      pillar: pillar || 'trading', brand_voice: brand_voice || 'jennie',
+    // cc_scripts NOT NULL columns without defaults: title, content_type, track,
+    // pillar, persona, writing_mode, body, hook, cta, word_count,
+    // estimated_duration_seconds, status, publish_mode, version,
+    // publish_attempt_count, created_by. Provide sane defaults so manual UI
+    // create doesn't die on constraint violation. Callers can still override.
+    const insertRow: Record<string, unknown> = {
+      title: title.trim(),
+      body: body ?? '',
+      hook: hook ?? '',
+      cta: cta ?? '',
+      word_count: typeof word_count === 'number' ? word_count : 0,
+      content_type: content_type || 'social_post',
+      track: track || 'wealth',
+      pillar: pillar || 'trading',
+      persona: persona || 'jennie_mentor',
+      writing_mode: writing_mode || 'mode_1_calm',
+      brand_voice: brand_voice || 'jennie',
       status: status || 'draft',
-    }).select('*').single();
+      publish_mode: publish_mode || 'scheduled',
+    };
+    if (posted_account !== undefined) insertRow.posted_account = posted_account;
+    if (posted_time_slot !== undefined) insertRow.posted_time_slot = posted_time_slot;
+    if (scheduled_at !== undefined) insertRow.scheduled_at = scheduled_at;
+    if (Array.isArray(image_urls)) insertRow.image_urls = image_urls;
+    if (Array.isArray(tags)) insertRow.tags = tags;
+    if (notes !== undefined) insertRow.notes = notes;
+    if (metadata !== undefined) insertRow.metadata = metadata;
+    const { data, error } = await supabase.from('cc_scripts').insert(insertRow).select('*').single();
     if (error) throw error;
+    // Fire-and-forget: create matching Notion page in CONTENT PLANNER 2026 so
+    // Jennie sees the new row there without waiting for the weekly migrate cron.
+    // Writes notion_page_id back to cc_scripts on success. No-op if NOTION_TOKEN
+    // is unset, so the BE endpoint still works even without Notion configured.
+    if (data?.id) {
+      void pushScript(data.id).catch((e) => console.warn('[notion-push] create fail', e));
+    }
     res.json(data);
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /generate — tạo AI generation job
+// POST /generate — tạo AI generation job.
+// Accepts:
+//   content_type: str (e.g. 'social_post', 'email', 'DOC-MKT-001', 'DOC-ONB-002', ...)
+//   topic: str (free-form brief; optional for DOC-* types that self-describe via SOP)
+//   brand_voice: 'jennie' | 'generic' (default 'jennie')
+//   pillar: str (default 'trading')
+//   email_day: 1..N | 'all' (only meaningful for DOC-ONB-* types)
+//   sop_id: str (explicit SOP linkage; if provided, overrides content_type for SOP lookup)
+// For DOC-* content_types, batch_processor reads DOC_KNOWLEDGE_FILES + DOC_PROMPT_TEMPLATES.
 router.post('/content-pipeline/generate', async (req, res) => {
   try {
-    const { content_type, topic, brand_voice, pillar } = req.body;
+    const {
+      content_type,
+      topic,
+      brand_voice,
+      pillar,
+      email_day,
+      sop_id,
+      ai_provider,
+      ai_model,
+      persona,
+      writing_mode,
+      track,
+      // Posting metadata — pass-through to batch_processor so the generated
+      // cc_scripts row has the right account/publish flags set from the UI
+      // instead of defaulting and forcing a later manual edit.
+      posted_account,
+      posted_time_slot,
+      scheduled_at,
+      publish_mode,
+    } = req.body || {};
+    const ct: string = content_type || 'social_post';
+    // For DOC-* rows we want job_type = 'doc_tai_lieu' so batch_processor knows
+    // it's a knowledge-driven doc write. Other content_types keep legacy mapping.
+    const jobType = ct.startsWith('DOC-') ? 'doc_tai_lieu' : ct;
+    // Default to 'gemini' — Claude is BLOCKED in batch_processor per Jennie's
+    // directive (scripts/batch_processor.py line 3542 fallback). If UI doesn't
+    // pass ai_provider, batch would default to 'claude' and fail. Keep BE default
+    // in sync with batch_processor expectations.
+    const provider = (ai_provider || 'gemini').toLowerCase();
+    const inputParams: Record<string, unknown> = {
+      userPrompt: topic || '',
+      brandVoice: brand_voice || 'jennie',
+      pillar: pillar || 'trading',
+      contentType: ct,
+      provider,
+    };
+    if (ai_model) inputParams.model = ai_model;
+    if (persona) inputParams.persona = persona;
+    if (writing_mode) inputParams.writingMode = writing_mode;
+    if (track) inputParams.track = track;
+    if (posted_account) inputParams.posted_account = posted_account;
+    if (posted_time_slot) inputParams.posted_time_slot = posted_time_slot;
+    if (scheduled_at) inputParams.scheduled_at = scheduled_at;
+    if (publish_mode) inputParams.publish_mode = publish_mode;
+    if (email_day !== undefined && email_day !== null && email_day !== '') {
+      inputParams.email_day = email_day;
+    }
+    if (sop_id) {
+      inputParams.sop_id = sop_id;
+    } else if (ct.startsWith('DOC-')) {
+      inputParams.sop_id = ct; // DOC-* content_type doubles as SOP id
+    }
     const { data, error } = await supabase.from('cc_generation_jobs').insert({
-      job_type: content_type || 'social_post',
-      content_type: content_type || 'social_post',
+      job_type: jobType,
+      content_type: ct,
       status: 'queued',
-      input_params: JSON.stringify({ userPrompt: topic, brandVoice: brand_voice || 'jennie', pillar: pillar || 'trading' }),
+      input_params: JSON.stringify(inputParams),
     }).select('*').single();
     if (error) throw error;
     res.json(data);
@@ -1489,19 +1646,22 @@ function spawnPublisher(args: string[], label: string): Promise<{ code: number; 
 router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
   const { id } = req.params;
   try {
-    // Enqueue with trigger_type=manual
+    // Enqueue with trigger_type=manual.
+    // NOTE: cc_scripts uses posted_account (text). channel_target only exists on
+    // cc_publish_queue. Previous code selected cc_scripts.channel_target →
+    // PostgREST 500. Read posted_account, copy into queue.channel_target.
     const { data: script, error: sErr } = await supabase
       .from('cc_scripts')
       .update({ status: 'approved', publish_mode: 'immediate', publish_ready_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, channel_target, status')
+      .select('id, posted_account, status')
       .single();
     if (sErr) throw sErr;
 
     await supabase.from('cc_publish_queue').insert({
       script_id: id,
       trigger_type: 'manual',
-      channel_target: script.channel_target,
+      channel_target: script.posted_account,
       metadata: { source: 'api_publish_now', user: req.headers['x-user'] || 'unknown' },
     });
 
@@ -1529,13 +1689,16 @@ router.post('/content-pipeline/publish-batch', async (req, res) => {
     const channelTarget = req.body?.channel_target as string | undefined;
     const forceAll = req.body?.force_all === true;
 
+    // cc_scripts stores account as `posted_account`. channel_target in the
+    // request body is the high-level filter that the caller cares about —
+    // translate it to posted_account for cc_scripts queries.
     let query = supabase
       .from('cc_scripts')
-      .select('id, channel_target, publish_mode')
+      .select('id, posted_account, publish_mode')
       .eq('status', 'approved')
       .is('published_at', null);
     if (!forceAll) query = query.eq('publish_mode', 'threshold_5');
-    if (channelTarget) query = query.eq('channel_target', channelTarget);
+    if (channelTarget) query = query.eq('posted_account', channelTarget);
 
     const { data: scripts, error: sErr } = await query;
     if (sErr) throw sErr;

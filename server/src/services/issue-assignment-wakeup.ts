@@ -28,7 +28,12 @@ export function queueIssueAssignmentWakeup(input: {
   requestedByActorId?: string | null;
   rethrowOnError?: boolean;
 }) {
-  if (!input.issue.assigneeAgentId || input.issue.status === "backlog") return;
+  if (!input.issue.assigneeAgentId) return;
+  // Board users may legitimately park work in `backlog` for later triage — don't wake.
+  // Agent-to-agent delegation, however, must always wake the assignee: otherwise the
+  // delegated task sits in backlog forever (it's not returned by /agents/me/inbox-lite
+  // which filters to todo|in_progress|blocked) and the escalation loop breaks.
+  if (input.issue.status === "backlog" && input.requestedByActorType !== "agent") return;
 
   return input.heartbeat
     .wakeup(input.issue.assigneeAgentId, {

@@ -47,22 +47,140 @@ function resolveGeminiBillingType(env: Record<string, string>): "api" | "subscri
     : "subscription";
 }
 
-function renderPaperclipEnvNote(env: Record<string, string>): string {
-  const paperclipKeys = Object.keys(env)
-    .filter((key) => key.startsWith("PAPERCLIP_"))
-    .sort();
-  if (paperclipKeys.length === 0) return "";
+const IS_WINDOWS_RUNTIME = process.platform === "win32";
+
+const PAPERCLIP_SKILL_POINTER_PATH =
+  "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/skills-store/paperclip/1.0.0/SKILL.md";
+
+// The Paperclip skill pointer must reach the model on EVERY Gemini run (timer wake,
+// assignment wake, comment wake, approval wake, manual wake) — not just when
+// `instructionsFilePath` happens to resolve. Previously this text was concatenated
+// into `instructionsPrefix` inside the `if (instructionsFilePath) { try {...} }`
+// block, so any run where the AGENTS.md path was missing or unreadable silently
+// dropped the pointer and the agent would go try to invent API shapes.
+function renderPaperclipSkillPointer(
+  env: Record<string, string>,
+  instructionsFilePath: string,
+): string {
+  // Only inject while we are actually running inside a Paperclip heartbeat — no
+  // reason to nag bare-metal Gemini invocations.
+  if (!hasNonEmptyEnvValue(env, "PAPERCLIP_API_URL")) return "";
+
+  // Derive the agent's own folder from the instructions path (parent of
+  // AGENTS.md). Used to point the agent at its own sop/INDEX.md + knowledge/
+  // INDEX.md without requiring a separate lookup. `replace(/\\/g, "/")` so the
+  // path reads the same on Windows and POSIX in the prompt.
+  const agentFolder = instructionsFilePath
+    ? path.dirname(instructionsFilePath).replace(/\\/g, "/")
+    : "";
+  const agentSopIndex = agentFolder ? `${agentFolder}/sop/INDEX.md` : "";
+  const agentKnowledgeIndex = agentFolder ? `${agentFolder}/knowledge/INDEX.md` : "";
+
+  const contextReferences = [
+    "## BỐI CẢNH BẮT BUỘC PHẢI GREP/ĐỌC TRƯỚC KHI RA QUYẾT ĐỊNH",
+    "Agents trong hệ thống này quên đọc context → lặp lại sai lầm, self-reinvent các SOP đã có. Trước khi làm việc strategic / architecture / debug khó, BẮT BUỘC:",
+    "",
+    "1. **Cross-agent shared memory** (lessons applying to multiple agents):",
+    "   - `memory/agents/shared/INDEX.md` — catalog shared files",
+    "   - `memory/agents/shared/MEMORY.md` — pitfalls recurring (encoding, webhook, DB port, etc.)",
+    "   - `memory/agents/shared/ENFORCEMENT_RULES.md` — hard rules (POST không PUT, SSOT tables, v.v.)",
+    "",
+    "2. **Historical context** (past session logs — grep khi thấy déjà-vu):",
+    "   - `memory/archive/INDEX.md` — 1-line summary mỗi file, grep-friendly. Tìm keyword → Read target file đầy đủ.",
+    "   - `memory/decisions/` — dated decision files (YYYY-MM-DD-topic.md) cho architecture decisions.",
+    "",
+    "3. **Your own role-specific SOPs & knowledge**:",
+    agentSopIndex ? `   - \`${agentSopIndex}\` — your role's SOP index (pointers đến memory/sops/*.md).` : "   - `agents/{your-role}/sop/INDEX.md` if it exists.",
+    agentKnowledgeIndex ? `   - \`${agentKnowledgeIndex}\` — your role's knowledge index (architecture docs, patterns, voice profile, v.v.).` : "   - `agents/{your-role}/knowledge/INDEX.md` if it exists.",
+    "   - `memory/agents/{your-role-slug}/MEMORY.md` — your private accumulated notes.",
+    "   - `memory/agents/{your-role-slug}/daily/` — your recent daily logs.",
+    "",
+    "Rule: NEVER self-invent a Python/shell script to replicate what a SOP already describes. Đọc SOP trước — nếu thiếu thì propose cập nhật SOP, không viết ad-hoc script thay thế.",
+    "",
+    "## WRITE-BACK LOOP (ghi memory mỗi khi có lesson)",
+    "- Bài học áp dụng ≥2 agents → append vào `memory/agents/shared/MEMORY.md` (1-line index entry, chi tiết inline nếu <5 dòng, không thì tạo file riêng rồi link).",
+    "- Bài học role-specific → append vào `memory/agents/{your-role}/MEMORY.md`.",
+    "- Decision quan trọng → tạo `memory/decisions/YYYY-MM-DD-<topic>.md`.",
+    "- Session progress → append vào `memory/today.md` (project root).",
+    "- Đừng chỉ comment trên issue rồi exit — memory files là durable context cho wake tiếp theo.",
+    "",
+    "",
+  ];
+
   return [
-    "Paperclip runtime note:",
-    `The following PAPERCLIP_* environment variables are available in this run: ${paperclipKeys.join(", ")}`,
-    "Do not assume these variables are missing without checking your shell environment.",
+    "# QUAN TRỌNG: KỸ NĂNG PAPERCLIP",
+    "Bạn BẮT BUỘC phải dùng công cụ đọc file (ví dụ: view_file, grep_search, read_file, v.v...) để đọc kỹ nội dung file sau NGAY LẬP TỨC trước khi đọc các file agent.md hay làm bất cứ việc gì khác:",
+    PAPERCLIP_SKILL_POINTER_PATH,
+    "Đây là file cốt lõi giải thích cách bạn lấy thông tin Issue và báo cáo công việc trên hệ thống API của Paperclip.",
+    "",
+    "## ⚠️ NGÔN NGỮ BẮT BUỘC — ĐỌC NGAY (HARD RULE, không exception)",
+    "Mọi comment trên issue, báo cáo công việc, message trả lời user/board PHẢI viết bằng **tiếng Việt có dấu đầy đủ**.",
+    "- ❌ SAI: \"I have checked for tasks and there are none.\" (tiếng Anh)",
+    "- ✅ ĐÚNG: \"Không có task nào được assign. Thoát sạch.\"",
+    "- Cấm bỏ dấu: phải đầy đủ diacritics (â ê ô ơ ư ă đ, thanh sắc huyền hỏi ngã nặng).",
+    "- Kể cả khi thoát sạch (không có task) — nếu có comment thì PHẢI tiếng Việt.",
+    "- Technical terms (API, webhook, token, SQL) giữ nguyên tiếng Anh trong câu tiếng Việt là được.",
+    "- Chỉ dùng tiếng Anh trong: code, commit message, tên biến, log kỹ thuật nội bộ.",
+    "",
+    ...contextReferences,
+    "## CÁCH GỌI MCP TOOLS (QUAN TRỌNG — HAY SAI)",
+    "MCP tools KHÔNG phải shell commands và KHÔNG phải Python RPC. TUYỆT ĐỐI không:",
+    "- Gọi `mcp__supabase__execute_sql` qua `run_shell_command` (double-underscore là naming của Claude, KHÔNG phải Gemini — shell sẽ báo 'command not found').",
+    "- Viết Python script tự gọi `supabase.rpc('execute_sql', ...)` — RPC function đó KHÔNG tồn tại trên Supabase của project (đã test: PGRST202).",
+    "- Dùng `run_shell_command` với `python run_query.py` hay `psql` để query DB — chỉ chạy được khi script đã có sẵn và đúng, đừng tự chế.",
+    "",
+    "ĐÚNG CÁCH: Gemini CLI đã tự động load MCP servers từ `${PROJECT_ROOT}/.gemini/settings.json` (Paperclip adapter sync sẵn mỗi run). MCP tools xuất hiện như native tools với naming `mcp_<server>_<tool>` (SINGLE underscore). Ví dụ query agents:",
+    "  Input (chỉ cần mô tả bằng tiếng Việt hoặc tiếng Anh tự nhiên):",
+    "    \"Query Supabase: SELECT slug, status FROM agents WHERE status='error'\"",
+    "  Gemini sẽ tự động invoke `mcp_supabase_execute_sql` với SQL tương ứng — đây là tool call NATIVE, không phải shell.",
+    "",
+    "Servers đang available (tên sau prefix `mcp_`): supabase (execute_sql, list_tables, apply_migration, get_logs, v.v.), crm (nếu per-agent mcp.json có).",
+    "",
+    "Nếu thấy \"MCP issues detected\" banner: phần lớn là noise (một server offline, ví dụ CRM khi DB không reach). Các server còn lại vẫn chạy. Đừng panic, thử gọi tool trước — nếu fail mới blocked/escalate.",
+    "Nếu tool call trả về \"requires authentication\": report blocker comment, set `status=blocked`, escalate CEO. KHÔNG tự `/mcp auth` trong headless run (không có TTY).",
+    "Fallback cuối cùng khi MCP không work: Paperclip API (`PAPERCLIP_API_URL` + `PAPERCLIP_API_KEY`) cho entity agent/issue; `curl.exe` Supabase REST API với `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` từ `paperclip/.env` nếu cần query trực tiếp.",
     "",
     "",
   ].join("\n");
 }
 
+function renderPaperclipEnvNote(env: Record<string, string>): string {
+  const paperclipKeys = Object.keys(env)
+    .filter((key) => key.startsWith("PAPERCLIP_"))
+    .sort();
+  if (paperclipKeys.length === 0) return "";
+  const lines = [
+    "Paperclip runtime note:",
+    `The following PAPERCLIP_* environment variables are available in this run: ${paperclipKeys.join(", ")}`,
+    "Do not assume these variables are missing without checking your shell environment.",
+  ];
+  if (IS_WINDOWS_RUNTIME) {
+    lines.push(
+      "Windows shell note (PowerShell):",
+      "  - run_shell_command invokes PowerShell on Windows. Reference env vars as $env:VAR_NAME, NOT $VAR_NAME (bare $VAR is a PowerShell script variable and expands to empty).",
+      "  - Always call curl.exe explicitly. The bare `curl` is aliased to Invoke-WebRequest and will error with 'Missing an argument for parameter SessionVariable' on standard curl flags.",
+    );
+  }
+  lines.push("", "");
+  return lines.join("\n");
+}
+
 function renderApiAccessNote(env: Record<string, string>): string {
   if (!hasNonEmptyEnvValue(env, "PAPERCLIP_API_URL") || !hasNonEmptyEnvValue(env, "PAPERCLIP_API_KEY")) return "";
+  if (IS_WINDOWS_RUNTIME) {
+    return [
+      "Paperclip API access note (Windows PowerShell):",
+      "Use run_shell_command with curl.exe. Reference env vars as $env:NAME.",
+      "GET example:",
+      `  run_shell_command({ command: 'curl.exe -s -H "Authorization: Bearer $env:PAPERCLIP_API_KEY" "$env:PAPERCLIP_API_URL/api/agents/me"' })`,
+      "POST/PATCH example (write body to a temp JSON file first — PowerShell mangles inline JSON bodies, which makes curl.exe fall back to Content-Type=application/x-www-form-urlencoded and the server rejects with 400 or 500):",
+      `  Step 1 — write body: run_shell_command({ command: 'Set-Content -Path body.json -Encoding utf8 -Value (@{ agentId = $env:PAPERCLIP_AGENT_ID; expectedStatuses = @(\"todo\",\"backlog\",\"blocked\") } | ConvertTo-Json -Compress)' })`,
+      `  Step 2 — send: run_shell_command({ command: 'curl.exe -s -X POST -H "Authorization: Bearer $env:PAPERCLIP_API_KEY" -H "Content-Type: application/json" -H "X-Paperclip-Run-Id: $env:PAPERCLIP_RUN_ID" --data-binary \"@body.json\" \"$env:PAPERCLIP_API_URL/api/issues/{id}/checkout\"' })`,
+      "Rule: NEVER inline a JSON body with -d '{...}' on Windows. Always go via a file + --data-binary @file.",
+      "",
+      "",
+    ].join("\n");
+  }
   return [
     "Paperclip API access note:",
     "Use run_shell_command with curl to make Paperclip API requests.",
@@ -133,6 +251,88 @@ async function ensureGeminiSkillsInjected(
   }
 }
 
+/**
+ * Sync Paperclip MCP config into `${cwd}/.gemini/settings.json` so Gemini CLI
+ * loads the project's MCP servers on launch. Parallels the Claude adapter's
+ * `--mcp-config` flag, but Gemini CLI has no equivalent CLI flag — it reads
+ * `mcpServers` from settings.json only. Sources merged (agent overrides project):
+ *   1. `${cwd}/.mcp.json` (project-wide MCPs like Supabase)
+ *   2. `${dirname(instructionsFilePath)}/mcp.json` (per-agent MCPs like CRM)
+ * Claude-style entries (`{ "type": "http", "url": "..." }`) are written verbatim —
+ * Gemini CLI accepts the same shape after recent releases.
+ */
+async function ensureGeminiMcpServersInjected(
+  cwd: string,
+  instructionsFilePath: string,
+  onLog: AdapterExecutionContext["onLog"],
+): Promise<void> {
+  const collected: Record<string, unknown> = {};
+
+  const readMcpServers = async (filePath: string): Promise<Record<string, unknown> | null> => {
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const servers = parsed?.mcpServers;
+      if (servers && typeof servers === "object" && !Array.isArray(servers)) {
+        return servers as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const projectServers = await readMcpServers(path.join(cwd, ".mcp.json"));
+  if (projectServers) Object.assign(collected, projectServers);
+
+  if (instructionsFilePath) {
+    const agentServers = await readMcpServers(path.join(path.dirname(instructionsFilePath), "mcp.json"));
+    if (agentServers) Object.assign(collected, agentServers);
+  }
+
+  if (Object.keys(collected).length === 0) return;
+
+  const settingsDir = path.join(cwd, ".gemini");
+  const settingsFile = path.join(settingsDir, "settings.json");
+
+  let existing: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(settingsFile, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // settings.json missing or malformed — recreate fresh.
+  }
+
+  const existingMcp = (existing.mcpServers ?? {}) as Record<string, unknown>;
+  const sameKeys =
+    Object.keys(collected).sort().join(",") === Object.keys(existingMcp).sort().join(",");
+  const sameContents =
+    sameKeys &&
+    Object.keys(collected).every(
+      (k) => JSON.stringify(collected[k]) === JSON.stringify(existingMcp[k]),
+    );
+  if (sameContents) return; // idempotent — already in sync
+
+  existing.mcpServers = collected;
+
+  try {
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.writeFile(settingsFile, JSON.stringify(existing, null, 2) + "\n", "utf8");
+    await onLog(
+      "stderr",
+      `[paperclip] Synced ${Object.keys(collected).length} MCP server(s) to ${settingsFile}: ${Object.keys(collected).join(", ")}\n`,
+    );
+  } catch (err) {
+    await onLog(
+      "stderr",
+      `[paperclip] Failed to sync Gemini MCP config to ${settingsFile}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
 
@@ -164,6 +364,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const geminiSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredGeminiSkillNames = resolvePaperclipDesiredSkillNames(config, geminiSkillEntries);
   await ensureGeminiSkillsInjected(onLog, geminiSkillEntries, desiredGeminiSkillNames);
+  // Gemini CLI has no `--mcp-config` flag equivalent to Claude's — it only reads
+  // `mcpServers` from `${cwd}/.gemini/settings.json`. Sync project + per-agent MCPs
+  // into that file here so every heartbeat picks up Supabase/CRM/etc. tools.
+  await ensureGeminiMcpServersInjected(
+    cwd,
+    asString(config.instructionsFilePath, "").trim(),
+    onLog,
+  );
 
   const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
@@ -230,10 +438,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const timeoutSec = asNumber(config.timeoutSec, 0);
   const graceSec = asNumber(config.graceSec, 20);
+  // BUG-034 (2026-04-14): defensive filter for Claude-only flags that leak into
+  // gemini_local extraArgs when a user switches adapter_type from claude_local → gemini_local
+  // in the Configuration UI without clearing prior extraArgs. Gemini CLI treats unknown
+  // flags as positional prompt args, which then conflict with --prompt → crash with
+  // "Cannot use both a positional prompt and the --prompt (-p) flag together".
+  const CLAUDE_ONLY_FLAGS = new Set([
+    "--dangerously-skip-permissions",
+    "--print",
+    "--verbose",
+    "--append-system-prompt-file",
+    "--max-turns",
+    "--add-dir",
+  ]);
   const extraArgs = (() => {
     const fromExtraArgs = asStringArray(config.extraArgs);
-    if (fromExtraArgs.length > 0) return fromExtraArgs;
-    return asStringArray(config.args);
+    const raw = fromExtraArgs.length > 0 ? fromExtraArgs : asStringArray(config.args);
+    return raw.filter((a) => !CLAUDE_ONLY_FLAGS.has(a));
   })();
 
   const runtimeSessionParams = parseObject(runtime.sessionParams);
@@ -269,7 +490,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   }
   const commandNotes = (() => {
-    const notes: string[] = ["Prompt is passed to Gemini via --prompt for non-interactive execution."];
+    const notes: string[] = [
+      "Prompt is passed to Gemini via stdin when it contains newlines or exceeds 4000 chars",
+      "(Windows cmd.exe breaks raw newlines inside quoted .CMD wrapper args — see BUG-035).",
+      "Short single-line prompts are passed inline as --prompt \"<text>\" for debuggability.",
+    ];
     notes.push("Added --approval-mode yolo for unattended execution.");
     if (!instructionsFilePath) return notes;
     if (instructionsPrefix.length > 0) {
@@ -301,9 +526,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const paperclipSkillPointer = renderPaperclipSkillPointer(env, instructionsFilePath);
   const paperclipEnvNote = renderPaperclipEnvNote(env);
   const apiAccessNote = renderApiAccessNote(env);
   const prompt = joinPromptSections([
+    // Skill pointer goes FIRST and must appear regardless of wake type, session
+    // resume status, or whether AGENTS.md loaded. Without this, timer/comment/
+    // approval wakes that resume an existing session can skip the instructions
+    // block and the agent forgets how to talk to the Paperclip API.
+    paperclipSkillPointer,
     instructionsPrefix,
     renderedBootstrapPrompt,
     sessionHandoffNote,
@@ -313,6 +544,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   ]);
   const promptMetrics = {
     promptChars: prompt.length,
+    skillPointerChars: paperclipSkillPointer.length,
     instructionsChars: instructionsPrefix.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
@@ -320,6 +552,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     heartbeatPromptChars: renderedPrompt.length,
   };
 
+  // Windows `.CMD` launch goes through `cmd.exe /d /s /c "<commandLine>"`.
+  // A raw newline inside the quoted `--prompt "..."` arg terminates that wrapped
+  // command line — cmd.exe treats the rest as a new command, gemini.CMD runs with
+  // a truncated prompt, and the remainder gets re-interpreted as positional text,
+  // which then collides with the surviving `--prompt` flag. Symptom (reproduced
+  // 2026-04-14, exit 1):
+  //   Cannot use both a positional prompt and the --prompt (-p) flag together
+  // Pipe prompts that contain a newline (or exceed the safe argv budget) through
+  // stdin so cmd.exe never parses them. See troubleshooting_tips BUG-035 / BUG-028.
+  const PROMPT_ARG_SAFE_CHARS = 4000;
+  const promptHasNewline = /\r|\n/.test(prompt);
+  const usePromptStdin = promptHasNewline || prompt.length > PROMPT_ARG_SAFE_CHARS;
+  // NOTE 2026-04-14: tried `--include-directories ~/.gemini` to let the agent
+  // read `~/.gemini/RULES.md` (which Gemini CLI auto-injects into context) and
+  // stop the apologise-loop when the sandboxed `read_file` tool blocks that
+  // path. The flag caused Gemini CLI to re-trigger the very same "positional +
+  // --prompt" crash that BUG-035 fixed — reproduced standalone. The current
+  // hypothesis is that `cmd.exe /d /s /c "...gemini.CMD ... --include-directories
+  // \"C:\\Users\\Jennie Chu\\.gemini\" ..."` loses a quote boundary somewhere in
+  // the Windows shell+.CMD re-invocation pipeline, leaking the path as a
+  // positional arg. Dropped the flag until we have a reliable fix. The
+  // apologise-loop is non-fatal (agent still completes work).
   const buildArgs = (resumeSessionId: string | null) => {
     const args = ["--output-format", "stream-json"];
     if (resumeSessionId) args.push("--resume", resumeSessionId);
@@ -331,7 +585,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--sandbox=none");
     }
     if (extraArgs.length > 0) args.push(...extraArgs);
-    args.push("--prompt", prompt);
+    // `--prompt ""` keeps Gemini CLI in non-interactive mode. When stdin is piped
+    // (see below), the CLI reads the actual prompt from stdin per its own docs:
+    //   "Appended to input on stdin (if any)."
+    args.push("--prompt", usePromptStdin ? "" : prompt);
     return args;
   };
 
@@ -360,6 +617,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       graceSec,
       onSpawn,
       onLog,
+      // When the prompt contains newlines or exceeds the Windows argv budget,
+      // runChildProcess writes + ends the child stdin for us. Short single-line
+      // prompts still go on argv for readability in run-details.
+      stdin: usePromptStdin ? prompt : undefined,
     });
     return {
       proc,

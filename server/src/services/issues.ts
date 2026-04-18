@@ -77,6 +77,7 @@ export interface IssueFilters {
   originKind?: string;
   originId?: string;
   includeRoutineExecutions?: boolean;
+  includeHidden?: boolean;
   q?: string;
 }
 
@@ -713,7 +714,12 @@ export function issueService(db: Db) {
       if (!filters?.includeRoutineExecutions && !filters?.originKind && !filters?.originId) {
         conditions.push(ne(issues.originKind, "routine_execution"));
       }
-      conditions.push(isNull(issues.hiddenAt));
+      // Heartbeat Thread issues (origin_kind=system, origin_id=heartbeat-thread:*)
+      // and other admin-hidden issues are excluded by default. Pass
+      // `includeHidden=true` from the Issues page toggle to reveal them.
+      if (!filters?.includeHidden) {
+        conditions.push(isNull(issues.hiddenAt));
+      }
 
       const priorityOrder = sql`CASE ${issues.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
       const searchOrder = sql<number>`
@@ -1213,7 +1219,13 @@ export function issueService(db: Db) {
         )
         : and(eq(issues.assigneeAgentId, agentId), isNull(issues.checkoutRunId));
       const executionLockCondition = checkoutRunId
-        ? or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId))
+        ? or(
+            isNull(issues.executionRunId),
+            eq(issues.executionRunId, checkoutRunId),
+            // Allow checkout when the agent is already the assignee — the queued
+            // run from auto-assignment should not block the actual executing run.
+            eq(issues.assigneeAgentId, agentId),
+          )
         : isNull(issues.executionRunId);
       const updated = await db
         .update(issues)

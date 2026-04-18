@@ -311,6 +311,8 @@ export function issueRoutes(db: Db, storage: StorageService) {
       originId: req.query.originId as string | undefined,
       includeRoutineExecutions:
         req.query.includeRoutineExecutions === "true" || req.query.includeRoutineExecutions === "1",
+      includeHidden:
+        req.query.includeHidden === "true" || req.query.includeHidden === "1",
       q: req.query.q as string | undefined,
     });
     res.json(result);
@@ -1187,8 +1189,18 @@ export function issueRoutes(db: Db, storage: StorageService) {
     void (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
 
-      if (assigneeChanged && issue.assigneeAgentId && issue.status !== "backlog") {
-        wakeups.set(issue.assigneeAgentId, {
+      // Wake the new assignee when an assignment changes.
+      // Board users may reassign into `backlog` intentionally (deferred triage) — don't wake then.
+      // Agent-to-agent reassignment in backlog, however, MUST wake: the target agent won't see
+      // the issue via /agents/me/inbox-lite (which filters to todo|in_progress|blocked) and
+      // escalation breaks silently. SKILL.md tells the assignee to honor PAPERCLIP_TASK_ID,
+      // so the wake context + env var will route them straight to the delegated issue.
+      const shouldWakeOnAssigneeChange =
+        assigneeChanged &&
+        issue.assigneeAgentId &&
+        (issue.status !== "backlog" || actor.actorType === "agent");
+      if (shouldWakeOnAssigneeChange) {
+        wakeups.set(issue.assigneeAgentId!, {
           source: "assignment",
           triggerDetail: "system",
           reason: "issue_assigned",

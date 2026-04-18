@@ -31,6 +31,11 @@ export const agents = pgTable(
     pausedAt: timestamp("paused_at", { withTimezone: true }),
     permissions: jsonb("permissions").$type<Record<string, unknown>>().notNull().default({}),
     lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    // A' evergreen heartbeat thread (2026-04-17). One hidden issue per agent
+    // acts as the conversation buffer for all timer/on-demand heartbeat runs
+    // that don't have their own issue. `ensureHeartbeatThread(agentId)` lazily
+    // creates + fills this column on first heartbeat.
+    heartbeatThreadIssueId: uuid("heartbeat_thread_issue_id"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
