@@ -434,6 +434,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // message in the conversation explicitly tells Claude which issue + comment
   // to focus on. Only emitted when we have a real wake target; otherwise the
   // prompt is unchanged.
+  // 2026-04-19 — wakeReason/wakeTaskId/wakeCommentId were computed inside
+  // buildClaudeRuntimeConfig() and never re-derived here, causing
+  // ReferenceError at runtime when the wake-focus block below was evaluated.
+  // Mirror the extraction here (same logic as buildClaudeRuntimeConfig).
+  const wakeTaskId =
+    (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
+    (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||
+    null;
+  const wakeReason =
+    typeof context.wakeReason === "string" && context.wakeReason.trim().length > 0
+      ? context.wakeReason.trim()
+      : null;
+  const wakeCommentId =
+    (typeof context.wakeCommentId === "string" && context.wakeCommentId.trim().length > 0 && context.wakeCommentId.trim()) ||
+    (typeof context.commentId === "string" && context.commentId.trim().length > 0 && context.commentId.trim()) ||
+    null;
+
   const wakeFocusNotice = (() => {
     if (!wakeReason) return "";
     if (wakeReason !== "issue_comment_mentioned" && wakeReason !== "issue_assigned") return "";
@@ -448,11 +465,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             "Your first action THIS TURN must be to read that specific comment and respond to its request.",
             "Do NOT scan other issues or report 'no new work' until you have read and addressed this comment.",
             "GET /api/issues/<ID> and GET /api/issues/<ID>/comments, find the wake comment, then act on it.",
+            "ALSO GET /api/issues/<ID>/attachments — the user may have attached screenshots/images/files to the issue or to the wake comment.",
+            "Each attachment has `issueCommentId` (matches wake comment when set) and `contentPath` (/api/attachments/<id>/content) — READ the content for any attachment whose issueCommentId matches the wake comment, or whose issueCommentId is null (issue-level attachment).",
+            "Images (jpeg/png/webp) downloaded from contentPath MUST be inspected before you respond — do NOT claim you 'don't see' an issue if there are unread attachments.",
+            "To inspect an image: curl -H \"Authorization: Bearer $PAPERCLIP_API_KEY\" http://localhost:3100/api/attachments/<id>/content -o /tmp/att-<id>.png, then use the Read tool on that local path (the Read tool reads image bytes directly for jpeg/png/webp).",
           ].join(" ")
         : [
             "YOU WERE WOKEN BECAUSE A NEW ISSUE WAS ASSIGNED TO YOU.",
             "Your first action THIS TURN must be to read that issue and begin working it.",
             "Do NOT continue a previous task until you have read the newly assigned issue.",
+            "ALSO GET /api/issues/<ID>/attachments — the reporter may have attached screenshots/files. Each attachment has `contentPath` (/api/attachments/<id>/content); download and inspect images before responding.",
           ].join(" ");
     return [
       "## Wake focus (DO THIS FIRST)",
@@ -488,6 +510,31 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--append-system-prompt-file", effectiveInstructionsFilePath);
     }
     args.push("--add-dir", skillsDir);
+
+    // GEMRAL FIX 2026-04-19: Grant read access to Content Center knowledge dir
+    // for content/social agents (GEM-183 — social-media-manager couldn't access
+    // SOP/framework docs outside its workspace). Adds only if the path exists
+    // so non-Jennie dev machines don't break.
+    const ccKnowledgeDir = "D:/Claude Projects/App Content Jennie/gem-content-center/knowledge";
+    if (existsSync(ccKnowledgeDir)) {
+      args.push("--add-dir", ccKnowledgeDir);
+    }
+    const ccSopDir = "D:/Claude Projects/App Content Jennie/gem-content-center";
+    if (existsSync(ccSopDir)) {
+      args.push("--add-dir", ccSopDir);
+    }
+
+    // GEMRAL FIX 2026-04-19 (Jennie req): Grant phong-thuy-de-vuong project +
+    // its web-dashboard (bazi API etc.) so agents working on astrology / bazi
+    // features can read code + data without workspace swaps.
+    const ptdvRoot = "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương";
+    if (existsSync(ptdvRoot)) {
+      args.push("--add-dir", ptdvRoot);
+    }
+    const ptdvDashboard = "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương/web-dashboard";
+    if (existsSync(ptdvDashboard)) {
+      args.push("--add-dir", ptdvDashboard);
+    }
 
     // GEMRAL FIX 2026-04-06: Load MCP configs so heartbeat agents get same
     // tools as chat-path agents (which router.ts already handles).

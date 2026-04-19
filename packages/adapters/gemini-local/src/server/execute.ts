@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -333,6 +334,68 @@ async function ensureGeminiMcpServersInjected(
   }
 }
 
+/**
+ * GEMRAL FIX 2026-04-19 (GEM-183): Inject `includeDirectories` into
+ * `${cwd}/.gemini/settings.json` so Gemini CLI agents can read Content Center
+ * knowledge/SOP files that live outside their workspace cwd. Gemini CLI has
+ * no reliable `--include-directories` CLI flag on Windows (see BUG-035 /
+ * 2026-04-14 note), so settings.json is the only stable path.
+ * Only adds paths that actually exist on disk — keeps non-Jennie machines OK.
+ */
+async function ensureGeminiIncludeDirectoriesInjected(
+  cwd: string,
+  onLog: AdapterExecutionContext["onLog"],
+): Promise<void> {
+  const CANDIDATE_DIRS = [
+    "D:/Claude Projects/App Content Jennie/gem-content-center/knowledge",
+    "D:/Claude Projects/App Content Jennie/gem-content-center",
+    // Phong Thuỷ Đế Vương (astrology / bazi) — project root + web dashboard.
+    "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương",
+    "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương/web-dashboard",
+  ];
+  const dirs = CANDIDATE_DIRS.filter((p) => existsSync(p));
+  if (dirs.length === 0) return;
+
+  const settingsDir = path.join(cwd, ".gemini");
+  const settingsFile = path.join(settingsDir, "settings.json");
+
+  let existing: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(settingsFile, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // settings.json missing or malformed — start fresh.
+  }
+
+  const existingIncludes = Array.isArray(existing.includeDirectories)
+    ? (existing.includeDirectories as unknown[]).filter((v): v is string => typeof v === "string")
+    : [];
+  const merged = Array.from(new Set([...existingIncludes, ...dirs]));
+  const same =
+    merged.length === existingIncludes.length &&
+    merged.every((v, i) => v === existingIncludes[i]);
+  if (same) return;
+
+  existing.includeDirectories = merged;
+
+  try {
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.writeFile(settingsFile, JSON.stringify(existing, null, 2) + "\n", "utf8");
+    await onLog(
+      "stderr",
+      `[paperclip] Synced ${merged.length} includeDirectories to ${settingsFile}: ${merged.join(", ")}\n`,
+    );
+  } catch (err) {
+    await onLog(
+      "stderr",
+      `[paperclip] Failed to sync Gemini includeDirectories to ${settingsFile}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
 
@@ -372,6 +435,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     asString(config.instructionsFilePath, "").trim(),
     onLog,
   );
+  // GEM-183: Grant CC knowledge/SOP dirs so Gemini agents (social-media-manager et al.)
+  // can read framework + SOP files outside their workspace.
+  await ensureGeminiIncludeDirectoriesInjected(cwd, onLog);
 
   const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
