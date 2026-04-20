@@ -1710,19 +1710,14 @@ router.delete('/:slug', async (req, res) => {
     });
   }
 
-  // Delete from BOTH tables
+  // Delete ONLY from paperclip_agents (chatbot config table).
+  // Do NOT touch `agents` (heartbeat table) or the on-disk agents/<slug> folder —
+  // those are owned by the autonomous-heartbeat side of the system and share
+  // the same slug by convention only. A chatbot config delete must never
+  // cascade into the heartbeat worker or its persona files.
   const { error: paErr } = await supabase.from('paperclip_agents').delete().eq('slug', slug);
-  const { error: agErr } = await supabase.from('agents').delete().eq('slug', slug);
-
-  if (paErr && agErr) {
-    return res.status(500).json({ error: paErr.message || agErr.message });
-  }
-
-  // Also remove agent directory from disk
-  const agentDir = path.join(AGENTS_DIR, slug);
-  if (fs.existsSync(agentDir)) {
-    fs.rmSync(agentDir, { recursive: true, force: true });
-    console.log(`[AgentConfig] Deleted agent directory: ${agentDir}`);
+  if (paErr) {
+    return res.status(500).json({ error: paErr.message });
   }
 
   // Clear router cache
