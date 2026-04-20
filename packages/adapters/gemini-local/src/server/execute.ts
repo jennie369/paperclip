@@ -352,6 +352,7 @@ async function ensureGeminiIncludeDirectoriesInjected(
     // Phong Thuỷ Đế Vương (astrology / bazi) — project root + web dashboard.
     "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương",
     "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương/web-dashboard",
+    "C:\Users\Jennie Chu\Desktop\Projects\llm-wiki\TỬ VI NTP",
   ];
   const dirs = CANDIDATE_DIRS.filter((p) => existsSync(p));
   if (dirs.length === 0) return;
@@ -595,6 +596,46 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const paperclipSkillPointer = renderPaperclipSkillPointer(env, instructionsFilePath);
   const paperclipEnvNote = renderPaperclipEnvNote(env);
   const apiAccessNote = renderApiAccessNote(env);
+  const wakeFocusNotice = (() => {
+    if (!wakeReason) return "";
+    const isCommentWake =
+      wakeReason === "issue_comment_mentioned" ||
+      wakeReason === "issue_commented" ||
+      wakeReason === "issue_reopened_via_comment";
+    const isAssignWake = wakeReason === "issue_assigned";
+    if (!isCommentWake && !isAssignWake) return "";
+    const taskLine = wakeTaskId ? `Issue ID: ${wakeTaskId}` : "";
+    const commentLine = wakeCommentId ? `Comment ID: ${wakeCommentId}` : "";
+    const focusLines = [taskLine, commentLine].filter((line) => line.length > 0);
+    if (focusLines.length === 0) return "";
+    const action = isCommentWake
+      ? [
+          wakeReason === "issue_comment_mentioned"
+            ? "YOU WERE WOKEN BECAUSE A NEW COMMENT MENTIONS YOU."
+            : wakeReason === "issue_reopened_via_comment"
+              ? "YOU WERE WOKEN BECAUSE THE ISSUE WAS REOPENED VIA A NEW COMMENT."
+              : "YOU WERE WOKEN BECAUSE A NEW COMMENT WAS POSTED ON AN ISSUE ASSIGNED TO YOU.",
+          "Your first action THIS TURN must be to read that specific comment and respond to its request.",
+          "Do NOT scan other issues or report 'no new work' until you have read and addressed this comment.",
+          "Do NOT assume the comment is unrelated to your current task — the commenter may be asking you to change approach, clarifying earlier assumptions, or correcting your previous reply.",
+          "GET /api/issues/<ID> and GET /api/issues/<ID>/comments, find the wake comment by its Comment ID, then act on it.",
+          "ALSO GET /api/issues/<ID>/attachments — the user may have attached screenshots/images/files.",
+          "Each attachment has `issueCommentId` and `contentPath` (/api/attachments/<id>/content) — read any attachment whose issueCommentId matches the wake comment or is null (issue-level).",
+        ].join(" ")
+      : [
+          "YOU WERE WOKEN BECAUSE A NEW ISSUE WAS ASSIGNED TO YOU.",
+          "Your first action THIS TURN must be to read that issue and begin working it.",
+          "Do NOT continue a previous task until you have read the newly assigned issue.",
+          "ALSO GET /api/issues/<ID>/attachments — the reporter may have attached screenshots/files.",
+        ].join(" ");
+    return [
+      "## Wake focus (DO THIS FIRST)",
+      ...focusLines,
+      `Wake reason: ${wakeReason}`,
+      "",
+      action,
+    ].join("\n");
+  })();
   const prompt = joinPromptSections([
     // Skill pointer goes FIRST and must appear regardless of wake type, session
     // resume status, or whether AGENTS.md loaded. Without this, timer/comment/
@@ -604,6 +645,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     instructionsPrefix,
     renderedBootstrapPrompt,
     sessionHandoffNote,
+    wakeFocusNotice,
     paperclipEnvNote,
     apiAccessNote,
     renderedPrompt,
@@ -614,6 +656,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     instructionsChars: instructionsPrefix.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
+    wakeFocusChars: wakeFocusNotice.length,
     runtimeNoteChars: paperclipEnvNote.length + apiAccessNote.length,
     heartbeatPromptChars: renderedPrompt.length,
   };
