@@ -1271,49 +1271,41 @@ router.get('/:slug/session-files', async (req, res) => {
 router.get('/:slug', async (req, res) => {
   const { slug } = req.params;
 
-  // Query both tables — agents (core) + paperclip_agents (SSOT for model/provider)
-  const [{ data, error }, { data: pa }] = await Promise.all([
-    supabase.from('agents').select('*').eq('slug', slug).single(),
-    supabase.from('paperclip_agents').select('*').eq('slug', slug).single(),
-  ]);
+  // Read from paperclip_agents only — chatbot config SSOT.
+  const { data: pa, error } = await supabase
+    .from('paperclip_agents')
+    .select('*')
+    .eq('slug', slug)
+    .single();
 
-  if (error || !data) {
+  if (error || !pa) {
     return res.status(404).json({ error: 'Agent not found' });
   }
 
-  // Map: paperclip_agents as SSOT for model/provider/temperature
-  const ac = data.adapter_config || {};
   res.json({
-    id: data.id,
-    slug: data.slug,
-    display_name: pa?.display_name || data.name,
-    description: pa?.description || data.capabilities,
-    avatar: pa?.avatar || data.icon,
-    provider: pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : data.adapter_type === 'ollama' ? 'ollama' : 'openrouter'),
-    model: pa?.model || ac.model || 'claude-sonnet-4-6',
-    temperature: pa?.temperature != null ? parseFloat(pa.temperature) : (parseFloat(ac.temperature) || 0.7),
-    max_tokens: parseInt(ac.maxTokens) || 4096,
-    system_prompt: pa?.system_prompt || ac.systemPrompt || ac.promptTemplate || null,
-    persona_file: ac.instructionsFilePath || null,
-    language: pa?.language || ac.language || 'vi',
-    tools: pa?.tools || ac.tools || [],
-    can_escalate_to: ac.canEscalateTo || [],
-    fallback_message: ac.fallbackMessage || '',
-    effort_mode: ac.effortMode || ac.thinkingEffort || 'auto',
-    max_turns: pa?.max_turns != null ? parseInt(pa.max_turns) : (parseInt(ac.maxTurns) || 1),
-    history_limit: parseInt(ac.historyLimit) || 20,
-    session_timeout: 3600,
-    enabled: pa?.enabled ?? (data.status !== 'paused'),
-    chrome: ac.chrome === true || ac.chrome === 'true',
-    skip_permissions: ac.dangerouslySkipPermissions === true || ac.dangerouslySkipPermissions === 'true',
-    can_create_agents: data.permissions?.canCreateAgents === true,
-    max_turns_per_run: parseInt(ac.maxTurnsPerRun) || parseInt(ac.maxTurns) || 1,
-    cwd: ac.cwd || null,
-    command: ac.command || '',
-    bootstrap_prompt: ac.bootstrapPromptTemplate || '',
-    extra_args: Array.isArray(ac.extraArgs) ? ac.extraArgs.join(', ') : (ac.extraArgs || ''),
-    created_at: data.created_at,
-    updated_at: pa?.updated_at || data.updated_at,
+    id: pa.id,
+    slug: pa.slug,
+    display_name: pa.display_name,
+    description: pa.description,
+    avatar: pa.avatar,
+    provider: pa.provider,
+    model: pa.model,
+    temperature: pa.temperature != null ? parseFloat(pa.temperature) : 0.7,
+    max_tokens: parseInt(pa.max_tokens) || 4096,
+    top_p: pa.top_p != null ? parseFloat(pa.top_p) : 1.0,
+    system_prompt: pa.system_prompt,
+    persona_file: pa.persona_file,
+    language: pa.language || 'vi',
+    tools: pa.tools || [],
+    can_escalate_to: pa.can_escalate_to || [],
+    fallback_message: pa.fallback_message || '',
+    effort_mode: pa.effort_mode || 'auto',
+    max_turns: pa.max_turns != null ? parseInt(pa.max_turns) : 50,
+    history_limit: parseInt(pa.history_limit) || 50,
+    session_timeout: parseInt(pa.session_timeout) || 1440,
+    enabled: pa.enabled,
+    created_at: pa.created_at,
+    updated_at: pa.updated_at,
   });
 });
 
@@ -1525,67 +1517,43 @@ ALL memory writes go to project \`memory/\` folder:
 router.patch('/:slug', async (req, res) => {
   const { slug } = req.params;
 
-  // First get current agent to merge adapter_config
-  const { data: current } = await supabase
-    .from('agents')
-    .select('adapter_config, permissions')
+  // Registry Marketplace edits a chatbot config — write ONLY to paperclip_agents.
+  // The `agents` heartbeat table is a different domain (autonomous workers) and
+  // must never be mutated by chatbot edits, even though the rows share a slug.
+  const { data: current, error: fetchErr } = await supabase
+    .from('paperclip_agents')
+    .select('id')
     .eq('slug', slug)
     .single();
 
-  if (!current) {
+  if (fetchErr || !current) {
     return res.status(404).json({ error: 'Agent not found' });
   }
 
-  const currentAc = (current.adapter_config || {}) as Record<string, any>;
-
-  // Build updates for agents table
-  const agentUpdates: Record<string, any> = { updated_at: new Date().toISOString() };
-  const acUpdates: Record<string, any> = { ...currentAc };
-
-  // Map incoming fields to agents table columns + adapter_config
-  if (req.body.display_name !== undefined) agentUpdates.name = req.body.display_name;
-  if (req.body.description !== undefined) agentUpdates.capabilities = req.body.description;
-  if (req.body.avatar !== undefined) agentUpdates.icon = req.body.avatar;
-  if (req.body.enabled !== undefined) agentUpdates.status = req.body.enabled ? 'idle' : 'paused';
-  if (req.body.provider !== undefined) {
-    agentUpdates.adapter_type = req.body.provider === 'claude' ? 'claude_local' : req.body.provider === 'gemini' ? 'gemini_local' : req.body.provider;
-  }
-
-  // adapter_config fields
-  if (req.body.model !== undefined) acUpdates.model = req.body.model;
-  if (req.body.temperature !== undefined) acUpdates.temperature = req.body.temperature;
-  if (req.body.max_tokens !== undefined) acUpdates.maxTokens = req.body.max_tokens;
-  if (req.body.system_prompt !== undefined) acUpdates.systemPrompt = req.body.system_prompt;
-  if (req.body.effort_mode !== undefined) acUpdates.effortMode = req.body.effort_mode;
-  if (req.body.max_turns !== undefined) acUpdates.maxTurns = req.body.max_turns;
-  if (req.body.language !== undefined) acUpdates.language = req.body.language;
-  if (req.body.can_escalate_to !== undefined) acUpdates.canEscalateTo = req.body.can_escalate_to;
-  if (req.body.fallback_message !== undefined) acUpdates.fallbackMessage = req.body.fallback_message;
-  if (req.body.history_limit !== undefined) acUpdates.historyLimit = req.body.history_limit;
-  if (req.body.tools !== undefined) acUpdates.tools = req.body.tools;
-  if (req.body.bootstrap_prompt !== undefined) acUpdates.bootstrapPromptTemplate = req.body.bootstrap_prompt;
-  if (req.body.command !== undefined) acUpdates.command = req.body.command;
-  if (req.body.extra_args !== undefined) {
-    if (typeof req.body.extra_args === 'string') {
-      acUpdates.extraArgs = req.body.extra_args.split(',').map((s: string) => s.trim()).filter(Boolean);
-    } else {
-      acUpdates.extraArgs = req.body.extra_args;
-    }
-  }
-  if (req.body.chrome !== undefined) acUpdates.chrome = req.body.chrome;
-  if (req.body.skip_permissions !== undefined) acUpdates.dangerouslySkipPermissions = req.body.skip_permissions;
-  if (req.body.max_turns_per_run !== undefined) acUpdates.maxTurnsPerRun = req.body.max_turns_per_run;
-
-  if (req.body.can_create_agents !== undefined) {
-    const permissions = current.permissions || {};
-    agentUpdates.permissions = { ...permissions, canCreateAgents: req.body.can_create_agents };
-  }
-
-  agentUpdates.adapter_config = acUpdates;
+  const paUpdates: Record<string, any> = { updated_at: new Date().toISOString() };
+  if (req.body.display_name !== undefined) paUpdates.display_name = req.body.display_name;
+  if (req.body.description !== undefined) paUpdates.description = req.body.description;
+  if (req.body.avatar !== undefined) paUpdates.avatar = req.body.avatar;
+  if (req.body.provider !== undefined) paUpdates.provider = req.body.provider;
+  if (req.body.model !== undefined) paUpdates.model = req.body.model;
+  if (req.body.temperature !== undefined) paUpdates.temperature = parseFloat(req.body.temperature);
+  if (req.body.max_tokens !== undefined) paUpdates.max_tokens = parseInt(req.body.max_tokens);
+  if (req.body.top_p !== undefined) paUpdates.top_p = parseFloat(req.body.top_p);
+  if (req.body.system_prompt !== undefined) paUpdates.system_prompt = req.body.system_prompt;
+  if (req.body.persona_file !== undefined) paUpdates.persona_file = req.body.persona_file;
+  if (req.body.language !== undefined) paUpdates.language = req.body.language;
+  if (req.body.tools !== undefined) paUpdates.tools = req.body.tools;
+  if (req.body.can_escalate_to !== undefined) paUpdates.can_escalate_to = req.body.can_escalate_to;
+  if (req.body.fallback_message !== undefined) paUpdates.fallback_message = req.body.fallback_message;
+  if (req.body.history_limit !== undefined) paUpdates.history_limit = parseInt(req.body.history_limit);
+  if (req.body.session_timeout !== undefined) paUpdates.session_timeout = parseInt(req.body.session_timeout);
+  if (req.body.effort_mode !== undefined) paUpdates.effort_mode = req.body.effort_mode;
+  if (req.body.max_turns !== undefined) paUpdates.max_turns = parseInt(req.body.max_turns);
+  if (req.body.enabled !== undefined) paUpdates.enabled = req.body.enabled;
 
   const { data, error } = await supabase
-    .from('agents')
-    .update(agentUpdates)
+    .from('paperclip_agents')
+    .update(paUpdates)
     .eq('slug', slug)
     .select('*')
     .single();
@@ -1594,31 +1562,7 @@ router.patch('/:slug', async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 
-  if (!data) {
-    return res.status(404).json({ error: 'Agent not found' });
-  }
-
-  // Sync to paperclip_agents (SSOT for model/provider/temperature)
-  const paUpdates: Record<string, any> = { updated_at: new Date().toISOString() };
-  if (req.body.display_name !== undefined) paUpdates.display_name = req.body.display_name;
-  if (req.body.description !== undefined) paUpdates.description = req.body.description;
-  if (req.body.avatar !== undefined) paUpdates.avatar = req.body.avatar;
-  if (req.body.provider !== undefined) paUpdates.provider = req.body.provider;
-  if (req.body.model !== undefined) paUpdates.model = req.body.model;
-  if (req.body.temperature !== undefined) paUpdates.temperature = parseFloat(req.body.temperature);
-  if (req.body.system_prompt !== undefined) paUpdates.system_prompt = req.body.system_prompt;
-  if (req.body.language !== undefined) paUpdates.language = req.body.language;
-  if (req.body.tools !== undefined) paUpdates.tools = req.body.tools;
-  if (req.body.max_turns !== undefined) paUpdates.max_turns = parseInt(req.body.max_turns);
-  if (req.body.enabled !== undefined) paUpdates.enabled = req.body.enabled;
-
-  const { error: paError } = await supabase.from('paperclip_agents').update(paUpdates).eq('slug', slug);
-  if (paError) {
-    console.error("Error updating paperclip_agents:", paError);
-    // Don't fail the whole request because agents table was updated, but log it
-  }
-
-  // Clear router cache since agent config changed
+  // Clear router cache since chatbot config changed
   AgentRouter.clearAgentCache();
 
   res.json(data);
@@ -1635,47 +1579,35 @@ router.patch('/:slug', async (req, res) => {
 router.post('/:slug/clone', async (req, res) => {
   const { slug } = req.params;
 
-  // Get original agent from both tables
-  const { data: original } = await supabase.from('agents').select('*').eq('slug', slug).single();
-  const { data: pa } = await supabase.from('paperclip_agents').select('*').eq('slug', slug).single();
+  // Clone a chatbot config — read/write ONLY paperclip_agents.
+  // Do NOT touch `agents` heartbeat or the on-disk agents/<slug> folder.
+  const { data: pa, error: fetchErr } = await supabase
+    .from('paperclip_agents')
+    .select('*')
+    .eq('slug', slug)
+    .single();
 
-  if (!original) return res.status(404).json({ error: 'Agent không tìm thấy' });
+  if (fetchErr || !pa) return res.status(404).json({ error: 'Agent không tìm thấy' });
 
   const newSlug = `${slug}-copy-${Date.now().toString(36).slice(-4)}`;
+  const { id: _pid, created_at: _pca, updated_at: _pua, ...paClone } = pa;
 
-  // Clone in agents table
-  const { id: _id, created_at: _ca, ...agentClone } = original;
-  const { data: newAgent, error: err1 } = await supabase.from('agents').insert({
-    ...agentClone,
-    slug: newSlug,
-    name: `${original.name} (Bản sao)`,
-    status: 'paused',
-    updated_at: new Date().toISOString(),
-  }).select().single();
-
-  if (err1) return res.status(500).json({ error: err1.message });
-
-  // Clone in paperclip_agents table
-  if (pa) {
-    const { id: _pid, created_at: _pca, ...paClone } = pa;
-    await supabase.from('paperclip_agents').insert({
+  const { data: newPa, error } = await supabase
+    .from('paperclip_agents')
+    .insert({
       ...paClone,
       slug: newSlug,
       display_name: `${pa.display_name} (Bản sao)`,
       enabled: false,
       updated_at: new Date().toISOString(),
-    });
-  }
+    })
+    .select()
+    .single();
 
-  // Clone agent directory on disk
-  const srcDir = path.join(AGENTS_DIR, slug);
-  const destDir = path.join(AGENTS_DIR, newSlug);
-  if (fs.existsSync(srcDir)) {
-    fs.cpSync(srcDir, destDir, { recursive: true });
-  }
+  if (error) return res.status(500).json({ error: error.message });
 
   AgentRouter.clearAgentCache();
-  res.json({ slug: newSlug, ...newAgent });
+  res.json(newPa);
 });
 
 router.delete('/:slug', async (req, res) => {
