@@ -453,29 +453,38 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const wakeFocusNotice = (() => {
     if (!wakeReason) return "";
-    if (wakeReason !== "issue_comment_mentioned" && wakeReason !== "issue_assigned") return "";
+    const isCommentWake =
+      wakeReason === "issue_comment_mentioned" ||
+      wakeReason === "issue_commented" ||
+      wakeReason === "issue_reopened_via_comment";
+    const isAssignWake = wakeReason === "issue_assigned";
+    if (!isCommentWake && !isAssignWake) return "";
     const taskLine = wakeTaskId ? `Issue ID: ${wakeTaskId}` : "";
     const commentLine = wakeCommentId ? `Comment ID: ${wakeCommentId}` : "";
     const focusLines = [taskLine, commentLine].filter((line) => line.length > 0);
     if (focusLines.length === 0) return "";
-    const action =
-      wakeReason === "issue_comment_mentioned"
-        ? [
-            "YOU WERE WOKEN BECAUSE A NEW COMMENT MENTIONS YOU.",
-            "Your first action THIS TURN must be to read that specific comment and respond to its request.",
-            "Do NOT scan other issues or report 'no new work' until you have read and addressed this comment.",
-            "GET /api/issues/<ID> and GET /api/issues/<ID>/comments, find the wake comment, then act on it.",
-            "ALSO GET /api/issues/<ID>/attachments — the user may have attached screenshots/images/files to the issue or to the wake comment.",
-            "Each attachment has `issueCommentId` (matches wake comment when set) and `contentPath` (/api/attachments/<id>/content) — READ the content for any attachment whose issueCommentId matches the wake comment, or whose issueCommentId is null (issue-level attachment).",
-            "Images (jpeg/png/webp) downloaded from contentPath MUST be inspected before you respond — do NOT claim you 'don't see' an issue if there are unread attachments.",
-            "To inspect an image: curl -H \"Authorization: Bearer $PAPERCLIP_API_KEY\" http://localhost:3100/api/attachments/<id>/content -o /tmp/att-<id>.png, then use the Read tool on that local path (the Read tool reads image bytes directly for jpeg/png/webp).",
-          ].join(" ")
-        : [
-            "YOU WERE WOKEN BECAUSE A NEW ISSUE WAS ASSIGNED TO YOU.",
-            "Your first action THIS TURN must be to read that issue and begin working it.",
-            "Do NOT continue a previous task until you have read the newly assigned issue.",
-            "ALSO GET /api/issues/<ID>/attachments — the reporter may have attached screenshots/files. Each attachment has `contentPath` (/api/attachments/<id>/content); download and inspect images before responding.",
-          ].join(" ");
+    const action = isCommentWake
+      ? [
+          wakeReason === "issue_comment_mentioned"
+            ? "YOU WERE WOKEN BECAUSE A NEW COMMENT MENTIONS YOU."
+            : wakeReason === "issue_reopened_via_comment"
+              ? "YOU WERE WOKEN BECAUSE THE ISSUE WAS REOPENED VIA A NEW COMMENT."
+              : "YOU WERE WOKEN BECAUSE A NEW COMMENT WAS POSTED ON AN ISSUE ASSIGNED TO YOU.",
+          "Your first action THIS TURN must be to read that specific comment and respond to its request.",
+          "Do NOT scan other issues or report 'no new work' until you have read and addressed this comment.",
+          "Do NOT assume the comment is unrelated to your current task — the commenter may be asking you to change approach, clarifying earlier assumptions, or correcting your previous reply.",
+          "GET /api/issues/<ID> and GET /api/issues/<ID>/comments, find the wake comment by its Comment ID, then act on it.",
+          "ALSO GET /api/issues/<ID>/attachments — the user may have attached screenshots/images/files to the issue or to the wake comment.",
+          "Each attachment has `issueCommentId` (matches wake comment when set) and `contentPath` (/api/attachments/<id>/content) — READ the content for any attachment whose issueCommentId matches the wake comment, or whose issueCommentId is null (issue-level attachment).",
+          "Images (jpeg/png/webp) downloaded from contentPath MUST be inspected before you respond — do NOT claim you 'don't see' an issue if there are unread attachments.",
+          "To inspect an image: curl -H \"Authorization: Bearer $PAPERCLIP_API_KEY\" http://localhost:3100/api/attachments/<id>/content -o /tmp/att-<id>.png, then use the Read tool on that local path (the Read tool reads image bytes directly for jpeg/png/webp).",
+        ].join(" ")
+      : [
+          "YOU WERE WOKEN BECAUSE A NEW ISSUE WAS ASSIGNED TO YOU.",
+          "Your first action THIS TURN must be to read that issue and begin working it.",
+          "Do NOT continue a previous task until you have read the newly assigned issue.",
+          "ALSO GET /api/issues/<ID>/attachments — the reporter may have attached screenshots/files. Each attachment has `contentPath` (/api/attachments/<id>/content); download and inspect images before responding.",
+        ].join(" ");
     return [
       "## Wake focus (DO THIS FIRST)",
       ...focusLines,
