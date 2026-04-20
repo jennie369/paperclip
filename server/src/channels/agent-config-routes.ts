@@ -22,60 +22,45 @@ const router = Router();
  * List all agents from agents table (Paperclip Core — SSOT).
  */
 router.get('/', async (_req, res) => {
-  // Query both tables — agents (Paperclip core) + paperclip_agents (Gemral config SSOT)
-  const [{ data: coreAgents, error }, { data: gemralConfigs }] = await Promise.all([
-    supabase.from('agents').select('*').order('name', { ascending: true }),
-    supabase.from('paperclip_agents').select('*'),
-  ]);
+  // Registry Marketplace "Cấu hình Agent LLM" is the chatbot-agent SSOT view.
+  // It MUST list only rows from `paperclip_agents` (chatbot configs). The
+  // `agents` heartbeat table is a separate domain (autonomous workers) and
+  // showing it here confused users into deleting heartbeat workers from the
+  // chatbot UI. The two tables only share a `slug` convention, never data.
+  const { data: paRows, error } = await supabase
+    .from('paperclip_agents')
+    .select('*')
+    .order('display_name', { ascending: true });
 
   if (error) {
     return res.status(500).json({ error: error.message });
   }
 
-  // Index paperclip_agents by slug for O(1) lookup
-  const paMap = new Map<string, any>();
-  for (const pa of (gemralConfigs || [])) {
-    paMap.set(pa.slug, pa);
-  }
-
-  // Map: use paperclip_agents as SSOT for model/provider/temperature, fallback to agents
-  const mapped = (coreAgents || []).map((a: any) => {
-    const ac = a.adapter_config || {};
-    const pa = paMap.get(a.slug); // Gemral config (SSOT)
-    return {
-      id: a.id,
-      slug: a.slug || a.name?.toLowerCase().replace(/\s+/g, '-'),
-      display_name: pa?.display_name || a.name,
-      description: pa?.description || a.capabilities,
-      avatar: pa?.avatar || a.icon,
-      provider: pa?.provider || (a.adapter_type === 'claude_local' ? 'claude' : a.adapter_type === 'gemini_local' ? 'gemini' : a.adapter_type === 'ollama' ? 'ollama' : 'openrouter'),
-      model: pa?.model || ac.model || 'claude-sonnet-4-6',
-      temperature: pa?.temperature != null ? parseFloat(pa.temperature) : (parseFloat(ac.temperature) || 0.7),
-      max_tokens: parseInt(ac.maxTokens) || 4096,
-      system_prompt: pa?.system_prompt || ac.systemPrompt || ac.promptTemplate || null,
-      persona_file: ac.instructionsFilePath || null,
-      language: pa?.language || ac.language || 'vi',
-      tools: pa?.tools || ac.tools || [],
-      can_escalate_to: ac.canEscalateTo || [],
-      fallback_message: ac.fallbackMessage || '',
-      effort_mode: ac.effortMode || ac.thinkingEffort || 'auto',
-      max_turns: pa?.max_turns != null ? parseInt(pa.max_turns) : (parseInt(ac.maxTurns) || 1),
-      history_limit: parseInt(ac.historyLimit) || 20,
-      session_timeout: 3600,
-      enabled: pa?.enabled ?? (a.status !== 'paused'),
-      // Heartbeat/Paperclip specific fields (from adapter_config)
-      chrome: ac.chrome === true || ac.chrome === 'true',
-      skip_permissions: ac.dangerouslySkipPermissions === true || ac.dangerouslySkipPermissions === 'true',
-      can_create_agents: a.permissions?.canCreateAgents === true,
-      max_turns_per_run: parseInt(ac.maxTurnsPerRun) || parseInt(ac.maxTurns) || 1,
-      cwd: ac.cwd || null,
-      command: ac.command || '',
-      bootstrap_prompt: ac.bootstrapPromptTemplate || '',
-      extra_args: Array.isArray(ac.extraArgs) ? ac.extraArgs.join(', ') : (ac.extraArgs || ''),
-      created_at: a.created_at,
-      updated_at: pa?.updated_at || a.updated_at,
-    };
-  });
+  const mapped = (paRows || []).map((pa: any) => ({
+    id: pa.id,
+    slug: pa.slug,
+    display_name: pa.display_name,
+    description: pa.description,
+    avatar: pa.avatar,
+    provider: pa.provider,
+    model: pa.model,
+    temperature: pa.temperature != null ? parseFloat(pa.temperature) : 0.7,
+    max_tokens: parseInt(pa.max_tokens) || 4096,
+    top_p: pa.top_p != null ? parseFloat(pa.top_p) : 1.0,
+    system_prompt: pa.system_prompt,
+    persona_file: pa.persona_file,
+    language: pa.language || 'vi',
+    tools: pa.tools || [],
+    can_escalate_to: pa.can_escalate_to || [],
+    fallback_message: pa.fallback_message || '',
+    effort_mode: pa.effort_mode || 'auto',
+    max_turns: pa.max_turns != null ? parseInt(pa.max_turns) : 50,
+    history_limit: parseInt(pa.history_limit) || 50,
+    session_timeout: parseInt(pa.session_timeout) || 1440,
+    enabled: pa.enabled,
+    created_at: pa.created_at,
+    updated_at: pa.updated_at,
+  }));
 
   res.json(mapped);
 });
