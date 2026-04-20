@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -395,14 +396,62 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runtimeSessionParams = parseObject(runtime.sessionParams);
   const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
   const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
+
+  // Hash-based session invalidation (mirrors gemini-local adapter): when
+  // SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md of the agent change,
+  // force a fresh session so the model re-reads the updated instructions
+  // instead of silently resuming with stale conversation history.
+  const instructionsFilePathForHash = (() => {
+    const raw = asString((config as Record<string, unknown>).instructionsFilePath, "").trim();
+    if (raw) return raw;
+    // Fallback: derive from agent slug + agents/ dir if available
+    const slug = asString((agent as Record<string, unknown>).slug, "").trim();
+    if (slug) {
+      const guess = path.join(cwd, "agents", slug, "AGENTS.md");
+      if (existsSync(guess)) return guess;
+    }
+    return "";
+  })();
+  const personaDir = instructionsFilePathForHash ? path.dirname(instructionsFilePathForHash) : "";
+  const PERSONA_FILE_NAMES = ["SOUL.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md"];
+  async function computePersonaHash(dir: string): Promise<string> {
+    if (!dir) return "";
+    const hash = createHash("sha256");
+    for (const name of PERSONA_FILE_NAMES) {
+      const p = path.join(dir, name);
+      try {
+        const buf = await fs.readFile(p);
+        hash.update(name);
+        hash.update("\0");
+        hash.update(buf);
+        hash.update("\0");
+      } catch {
+        hash.update(name);
+        hash.update("\0MISSING\0");
+      }
+    }
+    return hash.digest("hex");
+  }
+  const currentPersonaHash = await computePersonaHash(personaDir);
+  const savedPersonaHash = asString(runtimeSessionParams.personaHash, "");
+  const personaChanged =
+    currentPersonaHash.length > 0 &&
+    savedPersonaHash.length > 0 &&
+    savedPersonaHash !== currentPersonaHash;
+  const cwdMatches =
+    runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd);
   const canResumeSession =
-    runtimeSessionId.length > 0 &&
-    (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
+    runtimeSessionId.length > 0 && cwdMatches && !personaChanged;
   const sessionId = canResumeSession ? runtimeSessionId : null;
   if (runtimeSessionId && !canResumeSession) {
+    const reason = !cwdMatches
+      ? `saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}"`
+      : personaChanged
+        ? `persona files changed (${PERSONA_FILE_NAMES.join("/")}) — forcing fresh session so agent re-reads updated instructions`
+        : "session cannot be resumed";
     await onLog(
       "stdout",
-      `[paperclip] Claude session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
+      `[paperclip] Claude session "${runtimeSessionId}" ${reason}.\n`,
     );
   }
   const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
@@ -683,6 +732,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? ({
         sessionId: resolvedSessionId,
         cwd,
+        ...(currentPersonaHash ? { personaHash: currentPersonaHash } : {}),
         ...(workspaceId ? { workspaceId } : {}),
         ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
         ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
