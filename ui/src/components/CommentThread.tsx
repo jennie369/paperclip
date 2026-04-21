@@ -136,10 +136,41 @@ function CommentCard({
   projectId?: string | null;
   highlightCommentId?: string | null;
   queued?: boolean;
+  onAddAndReassign?: (agentId: string, replyBody: string) => Promise<void>;
 }) {
   const isHighlighted = highlightCommentId === comment.id;
   const isPending = comment.clientStatus === "pending";
   const isQueued = queued || comment.queueState === "queued" || comment.clientStatus === "queued";
+  const [submittingChecklist, setSubmittingChecklist] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const hasChecklists = comment.authorAgentId && (comment.body.includes("[ ]") || comment.body.includes("[x]"));
+
+  const handleSubmitChecklist = async () => {
+    if (!contentRef.current || !comment.authorAgentId || !onAddAndReassign) return;
+    const items = contentRef.current.querySelectorAll("li.task-list-item");
+    const selectedText: string[] = [];
+    items.forEach((li) => {
+      const checkbox = li.querySelector('input[type="checkbox"]') as HTMLInputElement;
+      if (checkbox && checkbox.checked) {
+        // Collect text without the checkbox itself.
+        // It's usually the rest of the childNodes or textContent (which contains everything).
+        // Let's grab textContent and trim it.
+        const text = li.textContent?.trim() || "";
+        selectedText.push(`- [x] ${text}`);
+      }
+    });
+
+    if (selectedText.length > 0) {
+      const replyBody = `Tôi chọn các mục sau:\n\n${selectedText.join("\n")}`;
+      setSubmittingChecklist(true);
+      try {
+        await onAddAndReassign(comment.authorAgentId, replyBody);
+      } finally {
+        setSubmittingChecklist(false);
+      }
+    }
+  };
 
   return (
     <div
@@ -199,7 +230,19 @@ function CommentCard({
           <CopyMarkdownButton text={comment.body} />
         </span>
       </div>
-      <MarkdownBody className="text-sm">{comment.body}</MarkdownBody>
+      <div ref={contentRef}>
+        <MarkdownBody className="text-sm">{comment.body}</MarkdownBody>
+      </div>
+      {hasChecklists && onAddAndReassign && !isPending && (
+        <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground italic">
+            Check the items you want to assign, then click send.
+          </span>
+          <Button size="sm" onClick={handleSubmitChecklist} disabled={submittingChecklist}>
+            {submittingChecklist ? "Sending..." : "Gửi Assignment (Selected Items)"}
+          </Button>
+        </div>
+      )}
       {companyId && !isPending ? (
         <div className="mt-2 space-y-2">
           <PluginSlotOutlet
@@ -254,6 +297,7 @@ const TimelineList = memo(function TimelineList({
   companyId?: string | null;
   projectId?: string | null;
   highlightCommentId?: string | null;
+  onAddAndReassign?: (agentId: string, replyBody: string) => Promise<void>;
 }) {
   if (timeline.length === 0) {
     return <p className="text-sm text-muted-foreground">No comments or runs yet.</p>;
@@ -300,6 +344,7 @@ const TimelineList = memo(function TimelineList({
             companyId={companyId}
             projectId={projectId}
             highlightCommentId={highlightCommentId}
+            onAddAndReassign={onAddAndReassign}
           />
         );
       })}
@@ -359,6 +404,10 @@ export function CommentThread({
       return a.kind === "comment" ? -1 : 1;
     });
   }, [comments, linkedRuns]);
+
+  const handleAddAndReassign = async (agentId: string, replyBody: string) => {
+    await onAdd(replyBody, true, { assigneeAgentId: agentId, assigneeUserId: null });
+  };
 
   // Build mention options from agent map (exclude terminated agents)
   const mentions = useMemo<MentionOption[]>(() => {
@@ -476,6 +525,7 @@ export function CommentThread({
           companyId={companyId}
           projectId={projectId}
           highlightCommentId={highlightCommentId}
+          onAddAndReassign={handleAddAndReassign}
         />
       ) : null}
 
@@ -509,6 +559,7 @@ export function CommentThread({
                 projectId={projectId}
                 highlightCommentId={highlightCommentId}
                 queued
+                onAddAndReassign={handleAddAndReassign}
               />
             ))}
           </div>

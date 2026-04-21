@@ -10,7 +10,13 @@ export type EntityType =
   | "channel"
   | "event"
   | "concept"
-  | "organization";
+  | "organization"
+  // Graphify code/knowledge graph entities
+  | "code_module"
+  | "code_class"
+  | "code_function"
+  | "code_concept"
+  | "code_doc";
 
 export type RelationType =
   | "works_on"
@@ -32,7 +38,15 @@ export type RelationType =
   | "executes"
   | "monitors"
   | "asked_about"
-  | "related_to";
+  | "related_to"
+  // Graphify code/knowledge relations
+  | "contains"
+  | "calls"
+  | "imports"
+  | "extends"
+  | "implements"
+  | "references"
+  | "inferred_link";
 
 export interface KGEntity {
   id: string;

@@ -133,6 +133,19 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
         </a>
       );
     },
+    input: ({ node: _node, type, checked, disabled, ...inputProps }) => {
+      if (type === "checkbox") {
+        return (
+          <input
+            {...inputProps}
+            type="checkbox"
+            defaultChecked={checked}
+            className="paperclip-task-checkbox cursor-pointer mr-1.5 align-middle"
+          />
+        );
+      }
+      return <input type={type} checked={checked} disabled={disabled} {...inputProps} />;
+    },
   };
   if (resolveImageSrc) {
     components.img = ({ node: _node, src, alt, ...imgProps }) => {

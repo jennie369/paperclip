@@ -29,13 +29,23 @@ function useActiveCompanyPrefix(): string | null {
   const location = RouterDom.useLocation();
 
   if (params.companyPrefix) {
-    return normalizeCompanyPrefix(params.companyPrefix);
+    const p = normalizeCompanyPrefix(params.companyPrefix);
+    if (p) { try { localStorage.setItem("__pp_last_prefix", p); } catch {} }
+    return p;
   }
 
   const pathPrefix = extractCompanyPrefixFromPath(location.pathname);
-  if (pathPrefix) return pathPrefix;
+  if (pathPrefix) {
+    try { localStorage.setItem("__pp_last_prefix", pathPrefix); } catch {}
+    return pathPrefix;
+  }
 
-  return selectedCompany ? normalizeCompanyPrefix(selectedCompany.issuePrefix) : null;
+  if (selectedCompany) {
+    return normalizeCompanyPrefix(selectedCompany.issuePrefix);
+  }
+
+  // Fallback: last known prefix from localStorage (prevents /channels/inbox without prefix)
+  try { return localStorage.getItem("__pp_last_prefix"); } catch { return null; }
 }
 
 export * from "react-router-dom";
