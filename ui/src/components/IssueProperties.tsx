@@ -496,7 +496,7 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
             scrolling to the title bar. Read-only row. */}
         <PropertyRow label="Issue ID">
           <span className="text-sm font-mono text-foreground">
-            {issue.humanId || issue.id}
+            {issue.identifier ? `${issue.identifier}` : issue.id}
           </span>
         </PropertyRow>
 

@@ -12,6 +12,7 @@ import {
   Plus,
   X,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import {
   channelsApi,
@@ -530,6 +531,27 @@ function ChannelSettingsList() {
                       Bắt đầu
                     </Button>
                   )}
+                  <Button size="sm" variant="outline" onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const res = await fetch(`/api/channels/zalo-personal/${encodeURIComponent(inst.name)}/refresh-key`, { method: "POST" });
+                      const data = await res.json();
+                      if (data.success) {
+                        alert(`Đã refresh key thành công!\n${data.message}`);
+                      } else {
+                        const retry = confirm(`Refresh key thất bại: ${data.message}\n\nBạn có muốn đăng nhập lại bằng QR?`);
+                        if (retry) {
+                          await channelsApi.stopChannel(inst.name);
+                          navigate(`../channels/zalo-personal?relogin=${encodeURIComponent(inst.name)}`);
+                        }
+                      }
+                    } catch (err: any) {
+                      alert(`Lỗi: ${err.message}`);
+                    }
+                    qc.invalidateQueries({ queryKey: ["channels"] });
+                  }} title="Refresh encryption key (thử trước) hoặc đăng nhập lại QR">
+                    <RefreshCw className="h-3 w-3 mr-1" /> Đăng nhập lại
+                  </Button>
                   <Button size="sm" variant="ghost" className="text-destructive" onClick={(e) => {
                     e.stopPropagation();
                     deleteMut.mutate(inst.name);

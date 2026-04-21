@@ -177,3 +177,14 @@ export function isClaudeUnknownSessionError(parsed: Record<string, unknown>): bo
     /no conversation found with session id|unknown session|session .* not found/i.test(msg),
   );
 }
+
+// Detects when a resumed session has accumulated too much context. The fix
+// is to drop the session ID and retry with a fresh context window.
+export function isClaudePromptTooLong(parsed: Record<string, unknown>): boolean {
+  const resultText = asString(parsed.result, "").trim();
+  const allMessages = [resultText, ...extractClaudeErrorMessages(parsed)]
+    .map((msg) => msg.trim())
+    .filter(Boolean);
+
+  return allMessages.some((msg) => /prompt is too long|context(?:\s+window)? too long|context(?:\s+length)? exceeded/i.test(msg));
+}

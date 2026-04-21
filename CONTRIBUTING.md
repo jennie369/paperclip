@@ -72,3 +72,25 @@ Please include screenshots if possible if you have a visible change. (use someth
 Questions? Just ask in #dev — we're happy to help.
 
 Happy hacking!
+
+<!-- AUTO-GENERATED START : DEVELOPMENT SETUP -->
+## Development Environment Setup
+
+**Prerequisites:**
+- Node.js >=20
+- pnpm 9.15.4
+
+### Available Scripts
+
+| Command | Description |
+|---------|-------------|
+| `pnpm run dev` | Start development server with hot reload (`@paperclipai/server`) |
+| `pnpm run dev:ui` | Start UI development server (`@paperclipai/ui`) |
+| `pnpm run build` | Full workspace build |
+| `pnpm run typecheck` | Run workspace type checking |
+| `pnpm run test` | Run vitest tests |
+| `pnpm run db:generate` | Generate schema and database types |
+| `pnpm run db:migrate` | Run database migrations |
+| `pnpm run test:e2e` | Run Playwright E2E tests |
+| `pnpm run release` | Trigger release flow script |
+<!-- AUTO-GENERATED END -->

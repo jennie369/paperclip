@@ -33,6 +33,9 @@ import {
   Newspaper,
   CalendarPlus,
   Mail,
+  Undo2,
+  Redo2,
+  Pencil,
 } from 'lucide-react';
 import { Button } from '@gem/ui';
 import { Badge } from '@gem/ui';
@@ -41,6 +44,7 @@ import { ProgressBar } from '@gem/ui';
 import { useToast } from '@gem/ui';
 import { useScript, useUpdateScript, useSocialPost, useUpdateSocialPost } from '@gem/hooks/useQueryHooks';
 import CCSelect from './CCSelect';
+import JobLogViewerPanel from './JobLogViewerPanel';
 
 // ============================================================================
 // Status Configuration
@@ -515,8 +519,34 @@ function ScriptDetailContent() {
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
+  const [showLogPanel, setShowLogPanel] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editableTitle, setEditableTitle] = useState('');
+  // Log Viewer modal state — find latest cc_generation_jobs.id linked to this script
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [linkedJobId, setLinkedJobId] = useState(null);
+  useEffect(() => {
+    if (!scriptId) { setLinkedJobId(null); return; }
+    let cancelled = false;
+    fetch(`/api/ops/content-pipeline/jobs/recent?limit=50`).then(r => r.json()).then(data => {
+      if (cancelled) return;
+      const jobs = data.jobs || [];
+      const match = jobs.find((j) => {
+        try {
+          const od = typeof j.output_data === 'string' ? JSON.parse(j.output_data) : (j.output_data || {});
+          return od?.script_id === scriptId || j.entity_id === scriptId;
+        } catch { return j.entity_id === scriptId; }
+      });
+      setLinkedJobId(match?.id || null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [scriptId]);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const autoSaveRef = useRef(null);
+  // --- Undo/Redo ---
+  const undoStack = useRef([]);
+  const redoStack = useRef([]);
+  const isUndoRedo = useRef(false);
   // --- Session / Iterate State ---
   const [showChatPanel, setShowChatPanel] = useState(false);
   const [iterateHistory, setIterateHistory] = useState([]);
@@ -674,9 +704,43 @@ function ScriptDetailContent() {
 
   // --- Handlers ---
   const handleBodyChange = useCallback((e) => {
-    setBody(e.target.value);
+    const newVal = e.target.value;
+    if (!isUndoRedo.current) {
+      undoStack.current.push(body);
+      if (undoStack.current.length > 100) undoStack.current.shift();
+      redoStack.current = [];
+    }
+    isUndoRedo.current = false;
+    setBody(newVal);
     setIsDirty(true);
-  }, []);
+  }, [body]);
+
+  const handleUndo = useCallback(() => {
+    if (undoStack.current.length === 0) return;
+    const prev = undoStack.current.pop();
+    redoStack.current.push(body);
+    isUndoRedo.current = true;
+    setBody(prev);
+    setIsDirty(true);
+  }, [body]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    const next = redoStack.current.pop();
+    undoStack.current.push(body);
+    isUndoRedo.current = true;
+    setBody(next);
+    setIsDirty(true);
+  }, [body]);
+
+  const handleSaveTitle = useCallback(async () => {
+    if (!scriptId || !editableTitle.trim()) { setIsEditingTitle(false); return; }
+    try {
+      await updateMutation.mutateAsync({ id: scriptId, updates: { title: editableTitle.trim() } });
+      addToast({ type: 'success', message: 'Đã cập nhật tiêu đề.' });
+    } catch { addToast({ type: 'error', message: 'Không thể lưu tiêu đề.' }); }
+    setIsEditingTitle(false);
+  }, [scriptId, editableTitle, updateMutation, addToast]);
 
   const handleSave = useCallback(async () => {
     if (!scriptId) return;
@@ -806,14 +870,41 @@ function ScriptDetailContent() {
   }, [imagePrompt, addToast]);
 
   const handleExportPDF = useCallback(() => {
-    addToast({ type: 'info', message: 'Tính năng xuất PDF sẽ được cập nhật.' });
     setShowExportMenu(false);
-  }, [addToast]);
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) { addToast({ type: 'error', message: 'Trình duyệt đã chặn popup. Vui lòng cho phép popup.' }); return; }
+    const contentHtml = mainContent
+      .split('\n')
+      .map(line => {
+        if (line.startsWith('## ')) return `<h2>${line.slice(3)}</h2>`;
+        if (line.startsWith('### ')) return `<h3>${line.slice(4)}</h3>`;
+        if (!line.trim()) return '<br/>';
+        return `<p>${line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}</p>`;
+      })
+      .join('');
+    const t = (script?.title || 'Kịch Bản').replace(/^```\w*\s*/, '').replace(/```\s*$/, '').trim() || 'Kịch Bản';
+    printWindow.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${t}</title><style>body{font-family:sans-serif;max-width:800px;margin:40px auto;line-height:1.7;color:#111;padding:20px}h1{font-size:1.4em;margin-bottom:8px}h2{font-size:1.2em;color:#1a1a2e;margin-top:2em}h3{font-size:1.05em;margin-top:1.4em}p{margin:0.6em 0}@media print{body{margin:0}}</style></head><body><h1>${t}</h1><hr/>${contentHtml}</body></html>`);
+    printWindow.document.close();
+    setTimeout(() => { printWindow.focus(); printWindow.print(); }, 300);
+    addToast({ type: 'success', message: 'Mở cửa sổ in / xuất PDF.' });
+  }, [mainContent, script, addToast]);
 
   const handleExportDocx = useCallback(() => {
-    addToast({ type: 'info', message: 'Tính năng xuất DOCX sẽ được cập nhật.' });
     setShowExportMenu(false);
-  }, [addToast]);
+    const t = (script?.title || 'Kịch Bản').replace(/^```\w*\s*/, '').replace(/```\s*$/, '').trim() || 'Kịch Bản';
+    const content = mainContent;
+    const blob = new Blob(
+      [`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${t}</title></head><body><h1>${t}</h1>${content.split('\n').map(l => l.trim() ? `<p>${l}</p>` : '<br/>').join('')}</body></html>`],
+      { type: 'application/msword' }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${t.slice(0, 60).replace(/[^a-zA-Z0-9\s-]/g, '')}.doc`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', message: 'Đã tải xuống file DOCX.' });
+  }, [mainContent, script, addToast]);
 
   const handleExportTeleprompter = useCallback(() => {
     const teleText = mainContent
@@ -1088,6 +1179,15 @@ function ScriptDetailContent() {
     return Math.max(400, lineCount * 22 + 40);
   }, [body]);
 
+  // Sync editable title (must be before conditional returns per Rules of Hooks)
+  useEffect(() => {
+    if (!isEditingTitle) {
+      const raw = script?.title ?? '';
+      const cleaned = raw.replace(/^```\w*\s*/, '').replace(/```\s*$/, '').replace(/^\{?\s*"?\s*/, '').replace(/\s*"?\s*\}?$/, '').trim();
+      setEditableTitle(cleaned || raw);
+    }
+  }, [script?.title, isEditingTitle]);
+
   // --- Loading State ---
   if (isLoading) {
     return (
@@ -1136,6 +1236,7 @@ function ScriptDetailContent() {
     .replace(/^\{?\s*"?\s*/, '')
     .replace(/\s*"?\s*\}?$/, '')
     .trim() || 'Kịch Bản Không Tên';
+
   const contentType = resolvedIsSocialPost ? 'social_post' : (scriptRec?.content_type ?? 'LATC');
   const track = scriptRec?.track ?? '';
   const personaKey = scriptRec?.persona ?? '';
@@ -1157,9 +1258,32 @@ function ScriptDetailContent() {
           <div className="h-5 w-px bg-border shrink-0" />
           <div className="flex items-center gap-2 min-w-0">
             <FileText size={18} className="text-gold shrink-0" />
-            <h1 className="font-heading text-lg font-semibold text-txt truncate">
-              {scriptTitle}
-            </h1>
+            {isEditingTitle ? (
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <input
+                  autoFocus
+                  value={editableTitle}
+                  onChange={e => setEditableTitle(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSaveTitle(); if (e.key === 'Escape') setIsEditingTitle(false); }}
+                  className="flex-1 font-heading text-lg font-semibold text-txt bg-bg-3 border border-gold/40 rounded-card px-2 py-0.5 focus:outline-none focus:border-gold/70"
+                />
+                <button onClick={handleSaveTitle} className="text-xs px-2 py-1 bg-gold/20 text-gold rounded-badge hover:bg-gold/30 transition-colors">Lưu</button>
+                <button onClick={() => setIsEditingTitle(false)} className="text-xs px-2 py-1 text-txt-3 hover:text-txt rounded-badge transition-colors">Hủy</button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 min-w-0 group">
+                <h1 className="font-heading text-lg font-semibold text-txt truncate">
+                  {scriptTitle}
+                </h1>
+                <button
+                  onClick={() => setIsEditingTitle(true)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-txt-3 hover:text-gold"
+                  title="Sửa tiêu đề"
+                >
+                  <Pencil size={13} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1197,7 +1321,7 @@ function ScriptDetailContent() {
       {/* ===== Content Card (full width) ===== */}
       <Card variant="glass" padding="none">
         {/* Toolbar */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <button
               onClick={() => setIsEditing(false)}
@@ -1213,9 +1337,38 @@ function ScriptDetailContent() {
               <Edit3 size={14} className="inline mr-1.5" />
               Chỉnh Sửa
             </button>
+            {isEditing && (
+              <>
+                <div className="h-4 w-px bg-border mx-0.5" />
+                <button
+                  onClick={handleUndo}
+                  disabled={undoStack.current.length === 0}
+                  className="p-1.5 rounded text-txt-3 hover:text-txt hover:bg-bg-4 transition-all disabled:opacity-30"
+                  title="Hoàn tác"
+                >
+                  <Undo2 size={14} />
+                </button>
+                <button
+                  onClick={handleRedo}
+                  disabled={redoStack.current.length === 0}
+                  className="p-1.5 rounded text-txt-3 hover:text-txt hover:bg-bg-4 transition-all disabled:opacity-30"
+                  title="Làm lại"
+                >
+                  <Redo2 size={14} />
+                </button>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowLogPanel(v => !v)}
+              className={`text-xs px-3 py-1.5 rounded-card border flex items-center gap-1.5 transition-all ${showLogPanel ? 'bg-gold/10 text-gold border-gold/30' : 'border-border text-txt-3 hover:text-txt hover:bg-bg-4'}`}
+              title="Lịch sử Log"
+            >
+              <History size={13} /> Lịch sử Log
+            </button>
             <Button
               variant="ghost"
               size="sm"
@@ -1276,6 +1429,49 @@ function ScriptDetailContent() {
             )}
           </div>
         </div>
+
+        {/* Log Panel */}
+        {showLogPanel && (
+          <div className="px-5 py-3 border-b border-border bg-bg-2/60">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xxs font-bold text-txt-3 uppercase tracking-wider">📜 Lịch Sử Log</span>
+              <button onClick={() => setShowLogPanel(false)} className="text-txt-3 hover:text-txt">
+                <X size={12} />
+              </button>
+            </div>
+            <div className="space-y-1 max-h-[160px] overflow-y-auto">
+              {[
+                { time: script?.updated_at, action: 'Cập nhật gần nhất', icon: '✏️' },
+                { time: script?.created_at, action: 'Tạo nội dung', icon: '🆕' },
+              ].filter(e => e.time).map((entry, i) => (
+                <div key={i} className="flex items-center gap-2 text-xxs text-txt-3 py-1 border-b border-border/30">
+                  <span>{entry.icon}</span>
+                  <span className="flex-1">{entry.action}</span>
+                  <span className="font-mono">{new Date(entry.time).toLocaleString('vi-VN')}</span>
+                </div>
+              ))}
+              {linkedJobId && (
+                <div className="flex items-center gap-2 text-xxs text-txt-3 py-1 border-b border-border/30">
+                  <span>🔗</span>
+                  <span className="flex-1">Job liên kết</span>
+                  <button
+                    className="font-mono text-gold hover:underline"
+                    onClick={() => setLogModalOpen(true)}
+                  >{linkedJobId.slice(0, 12)}...</button>
+                </div>
+              )}
+              {iterateHistory.length > 0 && iterateHistory.map((msg, i) => (
+                <div key={`iter-${i}`} className="flex items-center gap-2 text-xxs py-1 border-b border-border/30">
+                  <span>{msg.role === 'user' ? '👤' : '🤖'}</span>
+                  <span className={`flex-1 truncate ${msg.role === 'user' ? 'text-gold/80' : 'text-txt-3'}`}>{msg.text}</span>
+                </div>
+              ))}
+              {iterateHistory.length === 0 && !linkedJobId && (
+                <p className="text-xxs text-txt-4 italic">Chưa có lịch sử chỉnh sửa AI.</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Content Area */}
         {isEditing ? (
@@ -2072,6 +2268,14 @@ function ScriptDetailContent() {
           </Button>
         </div>
       )}
+
+      {/* ===== Log Viewer Modal — full-screen (per SESSION_LOG_VIEWER_FEATURE_SPEC) ===== */}
+      <JobLogViewerPanel
+        mode="modal"
+        jobId={linkedJobId}
+        open={logModalOpen}
+        onClose={() => setLogModalOpen(false)}
+      />
     </div>
   );
 }

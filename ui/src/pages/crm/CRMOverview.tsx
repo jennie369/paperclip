@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusPipeline } from "./components/StatusPipeline";
 import { crmApi } from "@/api/crm";
+import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 
 function formatVND(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'TR';
@@ -34,6 +35,12 @@ export function CRMOverview() {
     queryKey: ['crm', 'ticket-stats'],
     queryFn: () => crmApi.getTicketStats(),
     staleTime: 30_000,
+  });
+
+  // Live: CRM overview page auto-refreshes on any CRM table mutation
+  useLiveInvalidate({
+    tables: ['crm_customers', 'crm_tickets', 'crm_orders', 'crm_interactions', 'shopify_orders'],
+    queryKeys: [['crm', 'stats'], ['crm', 'pipeline'], ['crm', 'ticket-stats']],
   });
 
   return (

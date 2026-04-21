@@ -1,8 +1,12 @@
-// MessageRenderer — smart content renderer for Zalo/FB messages
-// Detects: image, sticker, file, call, link, gif, reaction, text
-// Fixes: Vietnamese mojibake encoding, raw JSON display
+// MessageRenderer — Professional content renderer for chat messages
+// Supports: text, markdown, images, stickers, files, calls, links, emojis, system messages
+// Gracefully handles JSON content and mojibake encoding
 
-import { Phone, FileText, Download } from "lucide-react";
+import { useState } from "react";
+import {
+  Phone, FileText, Download, AlertCircle, CheckCircle, Clock, Info, ChevronDown, ChevronUp,
+  File, FileSpreadsheet, Presentation, Archive, Music, Video, Paperclip, Image, Link2, Palette
+} from "lucide-react";
 
 interface MessageContent {
   body: string;
@@ -10,12 +14,16 @@ interface MessageContent {
   extra_data?: Record<string, unknown>;
 }
 
-type MsgType = "text" | "image" | "sticker" | "file" | "call" | "link" | "gif" | "reaction";
+type MsgType = "text" | "image" | "sticker" | "file" | "call" | "link" | "gif" | "reaction" | "system" | "typing";
 
 export function MessageRenderer({ body, content_type, extra_data }: MessageContent) {
   const type = detectType({ body, content_type, extra_data });
 
   switch (type) {
+    case "system":
+      return <SystemMsg data={extra_data || tryParseJson(body)} body={body} />;
+    case "typing":
+      return <TypingIndicator />;
     case "image":
       return <ImageMsg data={extra_data || tryParseJson(body)} />;
     case "sticker":
@@ -35,21 +43,51 @@ export function MessageRenderer({ body, content_type, extra_data }: MessageConte
   }
 }
 
-const KNOWN_TYPES = new Set(["image", "sticker", "file", "call", "link", "gif", "reaction"]);
+const KNOWN_TYPES = new Set(["image", "sticker", "file", "call", "link", "gif", "reaction", "system"]);
 
 function detectType(msg: MessageContent): MsgType {
-  // Only trust content_type if it's a known Zalo media type
-  // Ignore generic values like "webchat", "text", "unknown" — fall through to body detection
+  // Check explicit content_type first
   if (msg.content_type && KNOWN_TYPES.has(msg.content_type)) {
     return msg.content_type as MsgType;
   }
 
   const c = msg.body || "";
+
+  // Typing indicator
+  if (c === "..." || c === "typing" || c === "[typing]") return "typing";
+
+  // Not JSON — return text
   if (!c.startsWith("{")) return "text";
 
   // JSON content — detect by fields
+  try {
+    const parsed = JSON.parse(c);
+
+    // System messages (hook events, etc.)
+    if (parsed.type === "system" || parsed.subtype?.includes("hook") || parsed.hook_name) {
+      return "system";
+    }
+
+    // Media types
+    if (parsed.href && (parsed.href.includes("zdn.vn") || parsed.href.includes("photo"))) return "image";
+    // Sticker: various formats including Zalo's id+catId format
+    if (parsed.sticker || parsed.stickerUrl || parsed.spriteUrl ||
+        (parsed.id && parsed.catId) || parsed.stickerId || parsed.type === "sticker") return "sticker";
+    if (parsed.fileName || parsed.fileSize) return "file";
+    if (parsed.callDuration !== undefined || parsed.callType) return "call";
+    if (parsed.title && parsed.href) return "link";
+    if (parsed.rType || parsed.react) return "reaction";
+
+  } catch {
+    // Not valid JSON
+  }
+
+  // Fallback: check string patterns
+  if (c.includes('"type":"system"')) return "system";
   if (c.includes('"href"') && (c.includes("zdn.vn") || c.includes("photo"))) return "image";
-  if (c.includes('"sticker"') || c.includes('"stickerUrl"') || c.includes('"spriteUrl"')) return "sticker";
+  // Sticker patterns including Zalo's catId format
+  if (c.includes('"sticker"') || c.includes('"stickerUrl"') || c.includes('"spriteUrl"') ||
+      c.includes('"catId"') || c.includes('"stickerId"') || c.includes('"type":"sticker"')) return "sticker";
   if (c.includes('"fileName"') || c.includes('"fileSize"')) return "file";
   if (c.includes('"callDuration"') || c.includes('"callType"')) return "call";
   if (c.includes('"title"') && c.includes('"href"')) return "link";
@@ -62,24 +100,86 @@ function tryParseJson(s: string): Record<string, unknown> {
   try { return JSON.parse(s); } catch { return {}; }
 }
 
+// ── System Message ──
+function SystemMsg({ data, body }: { data: Record<string, unknown>; body: string }) {
+  // Parse body if data is empty
+  const parsed = Object.keys(data).length > 0 ? data : tryParseJson(body);
+
+  const subtype = (parsed.subtype || parsed.type || "") as string;
+  const hookName = (parsed.hook_name || parsed.name || "") as string;
+
+  // Determine icon and style based on subtype
+  const getSystemStyle = () => {
+    if (subtype.includes("started") || subtype.includes("begin")) {
+      return { icon: Clock, color: "text-blue-500", bg: "bg-blue-500/10" };
+    }
+    if (subtype.includes("completed") || subtype.includes("success")) {
+      return { icon: CheckCircle, color: "text-emerald-500", bg: "bg-emerald-500/10" };
+    }
+    if (subtype.includes("error") || subtype.includes("failed")) {
+      return { icon: AlertCircle, color: "text-red-500", bg: "bg-red-500/10" };
+    }
+    return { icon: Info, color: "text-muted-foreground", bg: "bg-muted/50" };
+  };
+
+  const { icon: Icon, color, bg } = getSystemStyle();
+
+  // Format human-readable message
+  const getMessage = () => {
+    if (hookName) return `Hook: ${hookName}`;
+    if (subtype.includes("hook_started")) return "Bắt đầu xử lý...";
+    if (subtype.includes("hook_completed")) return "Hoàn thành xử lý";
+    if (subtype.includes("agent_")) return "Agent đang xử lý...";
+    if (parsed.message) return String(parsed.message);
+    return "Thông báo hệ thống";
+  };
+
+  return (
+    <div className={`
+      inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[12px]
+      ${bg} ${color} max-w-full
+    `}>
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <span className="truncate">{getMessage()}</span>
+    </div>
+  );
+}
+
+// ── Typing Indicator ──
+function TypingIndicator() {
+  return (
+    <div className="inline-flex items-center gap-1 px-3 py-2 bg-muted/50 rounded-2xl">
+      <span className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+      <span className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+      <span className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+    </div>
+  );
+}
+
 // ── Image ──
 function ImageMsg({ data }: { data: Record<string, unknown> }) {
   const src = (data?.href || data?.thumb || data?.url || "") as string;
-  // Try params for full-res
   let params: Record<string, unknown> = {};
   if (typeof data?.params === "string") {
     try { params = JSON.parse(data.params as string); } catch {}
   }
   const fullSrc = (data?.hdUrl as string) || src;
 
-  if (!src) return <span className="text-muted-foreground italic text-xs">📷 Hình ảnh</span>;
+  if (!src) {
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground text-[13px]">
+        <Image className="h-5 w-5" />
+        <span>Hình ảnh</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-[280px]">
+    <div className="max-w-[300px]">
       <img
         src={src}
         alt="Hình ảnh"
-        className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
+        className="rounded-xl max-h-72 cursor-pointer hover:opacity-90 transition-opacity shadow-sm"
         loading="lazy"
         onClick={() => window.open(fullSrc, "_blank")}
         onError={(e) => {
@@ -87,13 +187,13 @@ function ImageMsg({ data }: { data: Record<string, unknown> }) {
           el.style.display = "none";
           el.parentElement?.insertAdjacentHTML(
             "beforeend",
-            '<span class="text-xs italic opacity-60">📷 Hình ảnh (không tải được)</span>',
+            '<div class="flex items-center gap-2 text-muted-foreground text-[13px] py-2"><span class="text-lg">📷</span><span>Không thể tải hình ảnh</span></div>',
           );
         }}
       />
       {Boolean(params.width) && Boolean(params.height) && (
-        <div className="text-[10px] text-muted-foreground mt-0.5">
-          {String(params.width)}×{String(params.height)}
+        <div className="text-[10px] text-muted-foreground mt-1">
+          {String(params.width)} × {String(params.height)}
         </div>
       )}
     </div>
@@ -101,31 +201,83 @@ function ImageMsg({ data }: { data: Record<string, unknown> }) {
 }
 
 // ── Sticker ──
+// Zalo sticker CDN requires authenticated API call to get image URL.
+// For known public patterns (stickerUrl field), render directly; otherwise show
+// a nice placeholder with sticker metadata.
 function StickerMsg({ data }: { data: Record<string, unknown> }) {
-  const url = (data?.stickerUrl || data?.spriteUrl || data?.url || data?.thumb || "") as string;
-  if (!url) return <span className="text-2xl">😊</span>;
+  // Priority 1: Direct URL from server (enriched stickerUrl, spriteUrl, etc.)
+  const directUrl = (data?.stickerUrl || data?.spriteUrl || data?.stickerWebpUrl || data?.url || data?.thumb || "") as string;
+
+  if (directUrl && typeof directUrl === "string" && directUrl.startsWith("http")) {
+    return (
+      <img
+        src={directUrl}
+        alt="Sticker"
+        className="w-32 h-32 object-contain"
+        loading="lazy"
+        onError={(e) => {
+          // On load failure, replace with metadata placeholder
+          const el = e.currentTarget;
+          const parent = el.parentElement;
+          if (parent) {
+            el.remove();
+            const info = data?.id ? `Sticker #${data.id}` : "Sticker";
+            parent.innerHTML = `
+              <div class="inline-flex flex-col items-center gap-1.5 p-3 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-xl border border-border/30 min-w-[120px]">
+                <div class="text-2xl">🎨</div>
+                <div class="text-[11px] text-muted-foreground font-medium">${info}</div>
+              </div>
+            `;
+          }
+        }}
+      />
+    );
+  }
+
+  // Fallback: Nice placeholder with sticker metadata (Zalo id+catId case)
+  const stickerId = data?.id || data?.stickerId || "";
+  const catId = data?.catId || data?.cateId || "";
+  const label = stickerId ? `Sticker #${stickerId}` : "Zalo Sticker";
+
   return (
-    <img
-      src={url}
-      alt="Sticker"
-      className="w-24 h-24 object-contain"
-      loading="lazy"
-      onError={(e) => { e.currentTarget.replaceWith(document.createTextNode("😊 Sticker")); }}
-    />
+    <div className="inline-flex flex-col items-center gap-2 p-4 bg-gradient-to-br from-blue-500/10 via-indigo-500/10 to-purple-500/10 rounded-2xl border border-border/40 min-w-[120px] max-w-[140px]">
+      <Palette className="h-8 w-8 text-blue-500/70" />
+      <div className="text-center">
+        <div className="text-[12px] font-semibold text-foreground">{label}</div>
+        {catId !== "" && (
+          <div className="text-[10px] text-muted-foreground mt-0.5">Pack: {String(catId)}</div>
+        )}
+      </div>
+    </div>
   );
 }
 
 // ── File ──
 function FileMsg({ data }: { data: Record<string, unknown> }) {
   const name = (data?.fileName || data?.title || "Tệp đính kèm") as string;
-  const size = data?.fileSize ? `${Math.round((data.fileSize as number) / 1024)} KB` : "";
+  const size = data?.fileSize ? formatFileSize(data.fileSize as number) : "";
   const url = (data?.href || data?.url || "") as string;
 
+  // Get file extension for icon
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  const getFileIcon = () => {
+    if (["pdf"].includes(ext)) return <File className="h-5 w-5 text-red-500" />;
+    if (["doc", "docx"].includes(ext)) return <FileText className="h-5 w-5 text-blue-500" />;
+    if (["xls", "xlsx"].includes(ext)) return <FileSpreadsheet className="h-5 w-5 text-emerald-500" />;
+    if (["ppt", "pptx"].includes(ext)) return <Presentation className="h-5 w-5 text-orange-500" />;
+    if (["zip", "rar", "7z"].includes(ext)) return <Archive className="h-5 w-5 text-amber-500" />;
+    if (["mp3", "wav", "m4a"].includes(ext)) return <Music className="h-5 w-5 text-pink-500" />;
+    if (["mp4", "mov", "avi"].includes(ext)) return <Video className="h-5 w-5 text-violet-500" />;
+    return <Paperclip className="h-5 w-5 text-muted-foreground" />;
+  };
+
   return (
-    <div className="flex items-center gap-2.5 bg-muted/60 rounded-xl p-3 max-w-[260px] border border-border/40">
-      <FileText className="w-8 h-8 text-muted-foreground shrink-0" />
+    <div className="flex items-center gap-3 bg-muted/40 rounded-xl p-3 max-w-[280px] border border-border/30">
+      <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center shrink-0">
+        {getFileIcon()}
+      </div>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{name}</div>
+        <div className="text-[13px] font-medium truncate">{name}</div>
         {size && <div className="text-[11px] text-muted-foreground">{size}</div>}
       </div>
       {url && (
@@ -133,7 +285,7 @@ function FileMsg({ data }: { data: Record<string, unknown> }) {
           href={url}
           target="_blank"
           rel="noreferrer"
-          className="shrink-0 p-1.5 rounded-lg hover:bg-muted transition-colors"
+          className="shrink-0 p-2 rounded-lg hover:bg-muted transition-colors"
           title="Tải xuống"
         >
           <Download className="w-4 h-4 text-primary" />
@@ -145,17 +297,20 @@ function FileMsg({ data }: { data: Record<string, unknown> }) {
 
 // ── Call ──
 function CallMsg({ data }: { data: Record<string, unknown> }) {
-  const type = data?.callType === "incoming" ? "Cuộc gọi đến" : "Cuộc gọi đi";
+  const isIncoming = data?.callType === "incoming";
   const dur = data?.callDuration as number | undefined;
   const duration = dur
     ? `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`
-    : "Không nghe";
+    : "Không nghe máy";
 
   return (
-    <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/40 rounded-xl p-2.5 border border-border/30">
-      <Phone className="w-4 h-4" />
-      <span>{type}</span>
-      <span className="text-xs opacity-70">{duration}</span>
+    <div className={`
+      flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px]
+      ${dur ? "bg-emerald-500/10 text-emerald-600" : "bg-muted/50 text-muted-foreground"}
+    `}>
+      <Phone className={`w-4 h-4 ${isIncoming ? "rotate-[135deg]" : ""}`} />
+      <span>{isIncoming ? "Cuộc gọi đến" : "Cuộc gọi đi"}</span>
+      <span className="text-[12px] opacity-70">{duration}</span>
     </div>
   );
 }
@@ -172,15 +327,18 @@ function LinkMsg({ data }: { data: Record<string, unknown> }) {
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="block max-w-[260px] border border-border/50 rounded-xl overflow-hidden hover:bg-muted/30 transition-colors"
+      className="block max-w-[280px] border border-border/50 rounded-xl overflow-hidden hover:bg-muted/20 transition-colors"
     >
       {thumb && (
-        <img src={thumb} alt="" className="w-full h-32 object-cover" loading="lazy" />
+        <img src={thumb} alt="" className="w-full h-36 object-cover" loading="lazy" />
       )}
-      <div className="p-2.5">
-        {title && <div className="text-sm font-medium line-clamp-2">{title}</div>}
-        {desc && <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{desc}</div>}
-        <div className="text-[11px] text-primary truncate mt-1">{href}</div>
+      <div className="p-3">
+        {title && <div className="text-[13px] font-medium line-clamp-2">{title}</div>}
+        {desc && <div className="text-[12px] text-muted-foreground line-clamp-2 mt-0.5">{desc}</div>}
+        <div className="text-[11px] text-primary truncate mt-1.5 flex items-center gap-1">
+          <Link2 className="h-3 w-3" />
+          {new URL(href).hostname}
+        </div>
       </div>
     </a>
   );
@@ -189,10 +347,10 @@ function LinkMsg({ data }: { data: Record<string, unknown> }) {
 // ── Reaction ──
 function ReactionMsg({ data }: { data: Record<string, unknown> }) {
   const emoji = (data?.content || data?.react || "👍") as string;
-  return <span className="text-2xl">{emoji}</span>;
+  return <span className="text-3xl">{emoji}</span>;
 }
 
-// ── Text with mojibake fix ──
+// ── Text with markdown & emoji support ──
 function TextMsg({ content }: { content: string }) {
   let fixed = content;
 
@@ -206,24 +364,115 @@ function TextMsg({ content }: { content: string }) {
     }
   }
 
-  // Auto-linkify URLs
-  const urlRegex = /(https?:\/\/[^\s<>"]+)/g;
-  if (urlRegex.test(fixed)) {
-    const parts = fixed.split(urlRegex);
-    return (
-      <p className="text-sm whitespace-pre-wrap break-words">
-        {parts.map((part, i) =>
-          urlRegex.test(part) ? (
-            <a key={i} href={part} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
-              {part}
-            </a>
-          ) : (
-            <span key={i}>{part}</span>
-          ),
-        )}
-      </p>
-    );
-  }
+  // Parse markdown into React nodes
+  const renderMarkdown = (text: string): React.ReactNode[] => {
+    const result: React.ReactNode[] = [];
+    let keyCounter = 0;
 
-  return <p className="text-sm whitespace-pre-wrap break-words">{fixed}</p>;
+    // Combined pattern: bold, italic, code, markdown links, URLs
+    // Order matters: check bold (**) before italic (*) to avoid conflicts
+    const combinedPattern = /(\*\*(.+?)\*\*)|(__(.+?)__)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)]+)\))|(https?:\/\/[^\s<>"]+)|(\*([^*]+)\*)|(_([^_\s][^_]*[^_\s])_)/g;
+
+    let lastIndex = 0;
+    let match;
+
+    while ((match = combinedPattern.exec(text)) !== null) {
+      // Add text before match
+      if (match.index > lastIndex) {
+        result.push(<span key={keyCounter++}>{text.slice(lastIndex, match.index)}</span>);
+      }
+
+      if (match[1] || match[3]) {
+        // Bold: **text** or __text__
+        const boldText = match[2] || match[4];
+        result.push(<strong key={keyCounter++} className="font-semibold">{boldText}</strong>);
+      } else if (match[5]) {
+        // Code: `code`
+        result.push(
+          <code key={keyCounter++} className="bg-muted/50 px-1 py-0.5 rounded text-[13px] font-mono">
+            {match[6]}
+          </code>
+        );
+      } else if (match[7]) {
+        // Markdown link: [text](url)
+        result.push(
+          <a
+            key={keyCounter++}
+            href={match[9]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            {match[8]}
+          </a>
+        );
+      } else if (match[10]) {
+        // URL
+        result.push(
+          <a
+            key={keyCounter++}
+            href={match[10]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            {match[10]}
+          </a>
+        );
+      } else if (match[11] || match[13]) {
+        // Italic: *text* or _text_
+        const italicText = match[12] || match[14];
+        result.push(<em key={keyCounter++} className="italic">{italicText}</em>);
+      }
+
+      lastIndex = combinedPattern.lastIndex;
+    }
+
+    // Add remaining text
+    if (lastIndex < text.length) {
+      result.push(<span key={keyCounter++}>{text.slice(lastIndex)}</span>);
+    }
+
+    return result.length > 0 ? result : [<span key={0}>{text}</span>];
+  };
+
+  // Expand/collapse for long messages
+  const [expanded, setExpanded] = useState(false);
+  const lineCount = fixed.split("\n").length;
+  const isLong = fixed.length > 300 || lineCount > 5;
+
+  return (
+    <div>
+      <p className={`text-[14px] leading-relaxed whitespace-pre-wrap break-words ${
+        !expanded && isLong ? "line-clamp-5" : ""
+      }`}>
+        {renderMarkdown(fixed)}
+      </p>
+      {isLong && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="h-3.5 w-3.5" />
+              Thu gọn
+            </>
+          ) : (
+            <>
+              <ChevronDown className="h-3.5 w-3.5" />
+              Xem thêm
+            </>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Helper: Format file size
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

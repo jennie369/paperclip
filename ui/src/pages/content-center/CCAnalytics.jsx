@@ -59,6 +59,7 @@ const AI_PROVIDER_OPTIONS = [
 
 const AI_MODEL_OPTIONS = {
   claude: [
+    { value: 'opus-4-7', label: 'Claude Opus 4.7' },
     { value: 'sonnet', label: 'Claude Sonnet 4.6' },
     { value: 'opus', label: 'Claude Opus 4.6' },
   ],

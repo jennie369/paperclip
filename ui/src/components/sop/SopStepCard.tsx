@@ -20,6 +20,11 @@ import {
   Zap,
   Loader2,
   AlertTriangle,
+  Bell,
+  Send,
+  FileText,
+  Calendar,
+  MessageSquare,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -37,12 +42,24 @@ export interface StepDefinition {
   executor?: string;
   cwd?: string;
   agent?: string;
+  instructions?: string;        // Agent/manual step instruction
+  description?: string;         // Human-readable description
+  script?: string;              // Script step: shell command
+  url?: string;                 // API step: endpoint URL
+  method?: string;              // API step: HTTP method
+  headers?: Record<string, string>;  // API step: request headers
+  body_template?: string;       // API step: request body template
   input?: { source?: string; params?: Record<string, unknown> };
   output?: { destination?: string; format?: string };
   approval_gate?: boolean;
   on_success?: string;
   on_failure?: string;
   estimated_minutes?: number | null;
+  trigger?: { type?: string; schedule?: string; event?: string };
+  notification?: { channel?: string; message?: string };
+  approver?: string;
+  on_approve?: string;
+  on_reject?: string;
 }
 
 export interface SopStepCardProps {
@@ -61,11 +78,19 @@ export interface SopStepCardProps {
 /* ─── Helpers ─── */
 
 function parseCron(cron?: string): string {
-  if (!cron) return '';
+  if (!cron) return "";
   const map: Record<string, string> = {
-    '0 20 * * 0': 'Chủ Nhật 20:00', '0 6 * * 1': 'Thứ 2 06:00',
-    '0 7 * * *': 'Hàng ngày 07:00', '0 8 * * *': 'Hàng ngày 08:00',
-    '*/15 * * * *': 'Mỗi 15 phút', '0 14 * * 4': 'Thứ 5 14:00',
+    "0 20 * * 0": "Chủ Nhật 20:00",
+    "0 6 * * 1": "Thứ 2 06:00",
+    "0 7 * * *": "Hàng ngày 07:00",
+    "0 8 * * *": "Hàng ngày 08:00",
+    "*/15 * * * *": "Mỗi 15 phút",
+    "0 14 * * 4": "Thứ 5 14:00",
+    "0 */6 * * *": "Mỗi 6 giờ",
+    "0 0 * * *": "Hàng ngày 00:00",
+    "0 12 * * *": "Hàng ngày 12:00",
+    "0 9 * * 1-5": "Ngày làm việc 09:00",
+    "0 0 1 * *": "Đầu tháng 00:00",
   };
   return map[cron] || cron;
 }
@@ -134,7 +159,23 @@ const AGENT_OPTIONS = [
   { value: "any", label: "Bất kỳ" },
 ];
 
-const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+const NOTIFICATION_OPTIONS = [
+  { value: "", label: "Không thông báo" },
+  { value: "telegram", label: "Telegram" },
+  { value: "email", label: "Email" },
+];
+
+const TRIGGER_TYPE_OPTIONS = [
+  { value: "", label: "-- Chọn --" },
+  { value: "event", label: "Sự kiện" },
+  { value: "webhook", label: "Webhook" },
+  { value: "db_trigger", label: "Database trigger" },
+];
+
+const STATUS_CONFIG: Record<
+  string,
+  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
+> = {
   pending: { label: "Chờ", variant: "secondary" },
   running: { label: "Đang chạy", variant: "default" },
   completed: { label: "Xong", variant: "secondary" },
@@ -165,6 +206,26 @@ const ON_FAILURE_OPTIONS = [
   { value: "goto:1", label: "Nhảy đến bước 1" },
   { value: "goto:2", label: "Nhảy đến bước 2" },
   { value: "goto:3", label: "Nhảy đến bước 3" },
+];
+
+const ON_APPROVE_OPTIONS = [
+  { value: "", label: "-- Mặc định --" },
+  { value: "next", label: "Tiếp bước kế" },
+  { value: "end", label: "Kết thúc" },
+  { value: "goto:1", label: "Nhảy đến bước 1" },
+  { value: "goto:2", label: "Nhảy đến bước 2" },
+  { value: "goto:3", label: "Nhảy đến bước 3" },
+];
+
+const ON_REJECT_OPTIONS = [
+  { value: "", label: "-- Mặc định --" },
+  { value: "abort", label: "Dừng toàn bộ" },
+  { value: "skip", label: "Bỏ qua" },
+  { value: "retry:1", label: "Quay lại bước trước" },
+  { value: "goto:1", label: "Nhảy đến bước 1" },
+  { value: "goto:2", label: "Nhảy đến bước 2" },
+  { value: "goto:3", label: "Nhảy đến bước 3" },
+  { value: "notify:telegram", label: "Thông báo Telegram" },
 ];
 
 /* ─── Component ─── */
@@ -262,12 +323,16 @@ export function SopStepCard({
           <span onClick={(e) => e.stopPropagation()}>
             <select
               value={getVal("type") as string}
-              onChange={(e) => setVal("type", e.target.value as StepDefinition["type"])}
+              onChange={(e) =>
+                setVal("type", e.target.value as StepDefinition["type"])
+              }
               className="h-5 rounded border border-input bg-background px-1 text-[10px] text-foreground outline-none focus:ring-1 focus:ring-ring/50"
               title="Loại bước"
             >
               {TYPE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
               ))}
             </select>
           </span>
@@ -286,7 +351,10 @@ export function SopStepCard({
 
         {/* Status badge */}
         {statusCfg && (
-          <Badge variant={statusCfg.variant} className="text-[10px] px-1.5 py-0 gap-1">
+          <Badge
+            variant={statusCfg.variant}
+            className="text-[10px] px-1.5 py-0 gap-1"
+          >
             {executionStatus === "running" && (
               <Loader2 className="h-2.5 w-2.5 animate-spin" />
             )}
@@ -295,12 +363,18 @@ export function SopStepCard({
         )}
 
         {/* Header action buttons */}
-        <div className="flex gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="flex gap-0.5 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Button
             size="icon-xs"
             variant="ghost"
             className="text-muted-foreground"
-            onClick={(e) => { e.stopPropagation(); onMoveUp(stepIndex); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveUp(stepIndex);
+            }}
             title="Di chuyển lên"
           >
             <ArrowUp className="h-3 w-3" />
@@ -309,7 +383,10 @@ export function SopStepCard({
             size="icon-xs"
             variant="ghost"
             className="text-muted-foreground"
-            onClick={(e) => { e.stopPropagation(); onMoveDown(stepIndex); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveDown(stepIndex);
+            }}
             title="Di chuyển xuống"
           >
             <ArrowDown className="h-3 w-3" />
@@ -318,7 +395,10 @@ export function SopStepCard({
             <Button
               size="icon-xs"
               variant="ghost"
-              className={cn("text-muted-foreground", isEditing && "text-primary")}
+              className={cn(
+                "text-muted-foreground",
+                isEditing && "text-primary",
+              )}
               onClick={toggleEdit}
               title="Chỉnh sửa"
             >
@@ -329,7 +409,10 @@ export function SopStepCard({
             size="icon-xs"
             variant="ghost"
             className="text-muted-foreground hover:text-destructive"
-            onClick={(e) => { e.stopPropagation(); onDelete(stepIndex); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(stepIndex);
+            }}
             title="Xoá bước"
           >
             <Trash2 className="h-3 w-3" />
@@ -355,10 +438,15 @@ export function SopStepCard({
             getVal={getVal}
             setVal={setVal}
             executionStatus={executionStatus}
+            onExecuteSingle={onExecuteSingle}
+            onUpdate={onUpdate}
+            stepIndex={stepIndex}
           />
 
           {/* Shared: on_success / on_failure (for script/api/agent types) */}
-          {(step.type === "script" || step.type === "api" || step.type === "agent") && (
+          {(step.type === "script" ||
+            step.type === "api" ||
+            step.type === "agent") && (
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
                 <div className="text-muted-foreground mb-1 flex items-center gap-1">
@@ -372,7 +460,9 @@ export function SopStepCard({
                     options={ON_SUCCESS_OPTIONS}
                   />
                 ) : (
-                  <span className="text-foreground">{step.on_success || "next"}</span>
+                  <span className="text-foreground">
+                    {step.on_success || "next"}
+                  </span>
                 )}
               </div>
               <div>
@@ -387,7 +477,9 @@ export function SopStepCard({
                     options={ON_FAILURE_OPTIONS}
                   />
                 ) : (
-                  <span className="text-foreground">{step.on_failure || "abort"}</span>
+                  <span className="text-foreground">
+                    {step.on_failure || "abort"}
+                  </span>
                 )}
               </div>
             </div>
@@ -432,32 +524,35 @@ export function SopStepCard({
 
 /* ─── Type-specific body components ─── */
 
-function TypeBody({
-  step,
-  isEditing,
-  getVal,
-  setVal,
-  executionStatus,
-}: {
+interface TypeBodyProps {
   step: StepDefinition;
   isEditing: boolean;
   getVal: <K extends keyof StepDefinition>(key: K) => StepDefinition[K];
-  setVal: <K extends keyof StepDefinition>(key: K, value: StepDefinition[K]) => void;
+  setVal: <K extends keyof StepDefinition>(
+    key: K,
+    value: StepDefinition[K],
+  ) => void;
+  onExecuteSingle?: (stepIndex: number) => void;
+  onUpdate?: (stepIndex: number, updates: Partial<StepDefinition>) => void;
+  stepIndex?: number;
   executionStatus?: string;
-}) {
+}
+
+function TypeBody(props: TypeBodyProps) {
+  const { step } = props;
   switch (step.type) {
     case "script":
-      return <ScriptBody step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />;
+      return <ScriptBody {...props} />;
     case "approval":
-      return <ApprovalBody step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} executionStatus={executionStatus} />;
+      return <ApprovalBody {...props} />;
     case "api":
-      return <ApiBody step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />;
+      return <ApiBody {...props} />;
     case "agent":
-      return <AgentBody step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />;
+      return <AgentBody {...props} />;
     case "manual":
-      return <ManualBody step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} executionStatus={executionStatus} />;
+      return <ManualBody {...props} />;
     case "event":
-      return <EventBody step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />;
+      return <EventBody {...props} />;
     default:
       return null;
   }
@@ -465,14 +560,15 @@ function TypeBody({
 
 /* ─── Script body ─── */
 
-function ScriptBody({
-  step,
-  isEditing,
-  getVal,
-  setVal,
-}: TypeBodyProps) {
+function ScriptBody({ step, isEditing, getVal, setVal }: TypeBodyProps) {
+  const trigger = (getVal("trigger") as StepDefinition["trigger"]) ?? {};
+  const notification =
+    (getVal("notification") as StepDefinition["notification"]) ?? {};
+  const cronHuman = parseCron(trigger.schedule);
+
   return (
-    <div className="space-y-2 text-xs">
+    <div className="space-y-3 text-xs">
+      {/* Executor + CWD */}
       <FieldRow
         icon={Terminal}
         label="Executor"
@@ -489,8 +585,103 @@ function ScriptBody({
         onChange={(v) => setVal("cwd", v)}
         mono
       />
+
+      {/* Cron schedule + Estimated minutes — 2-column layout */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-muted-foreground mb-1 flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            Lịch chạy (cron)
+          </div>
+          {isEditing ? (
+            <div className="space-y-1">
+              <Input
+                className="h-7 text-xs font-mono"
+                placeholder="0 7 * * *"
+                value={trigger.schedule ?? ""}
+                onChange={(e) =>
+                  setVal("trigger", {
+                    ...trigger,
+                    schedule: e.target.value,
+                  })
+                }
+              />
+              {trigger.schedule && (
+                <div className="text-[10px] text-muted-foreground">
+                  {parseCron(trigger.schedule) || "Cú pháp cron tùy chỉnh"}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="font-mono text-[11px] text-foreground">
+              {trigger.schedule ? (
+                <>
+                  <code className="bg-muted/50 rounded px-1.5 py-0.5">
+                    {trigger.schedule}
+                  </code>
+                  {cronHuman && (
+                    <span className="ml-1.5 text-muted-foreground font-sans">
+                      ({cronHuman})
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-muted-foreground font-sans">
+                  Không có lịch
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+        <div>
+          <div className="text-muted-foreground mb-1 flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            Thời gian ước tính
+          </div>
+          {isEditing ? (
+            <div className="flex items-center gap-1.5">
+              <Input
+                className="h-7 text-xs w-20"
+                type="number"
+                min={0}
+                placeholder="0"
+                value={
+                  (getVal("estimated_minutes") as number | null) ?? ""
+                }
+                onChange={(e) =>
+                  setVal(
+                    "estimated_minutes",
+                    e.target.value ? Number(e.target.value) : null,
+                  )
+                }
+              />
+              <span className="text-muted-foreground">phút</span>
+            </div>
+          ) : (
+            <span className="text-foreground">
+              {(getVal("estimated_minutes") as number | null) != null
+                ? `${getVal("estimated_minutes")} phút`
+                : "—"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Notification config */}
+      <NotificationConfig
+        notification={notification}
+        isEditing={isEditing}
+        onChange={(n) => setVal("notification", n)}
+        label="Thông báo khi lỗi"
+      />
+
       {/* Input/Output config */}
-      <IOConfig step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />
+      <IOConfig
+        step={step}
+        isEditing={isEditing}
+        getVal={getVal}
+        setVal={setVal}
+      />
     </div>
   );
 }
@@ -503,30 +694,149 @@ function ApprovalBody({
   getVal,
   setVal,
   executionStatus,
-}: TypeBodyProps & { executionStatus?: string }) {
+  onExecuteSingle,
+  onUpdate,
+  stepIndex,
+}: TypeBodyProps) {
+  const [rejectReason, setRejectReason] = useState("");
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const notification =
+    (getVal("notification") as StepDefinition["notification"]) ?? {};
+
   return (
-    <div className="space-y-2 text-xs">
+    <div className="space-y-3 text-xs">
+      {/* Approver */}
       <div className="flex items-center gap-2">
         <ShieldCheck className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-muted-foreground shrink-0 w-24">Người duyệt</span>
+        <span className="text-muted-foreground shrink-0 w-24">
+          Người duyệt
+        </span>
         {isEditing ? (
           <NativeSelect
-            value={(getVal("agent") as string) ?? ""}
-            onChange={(v) => setVal("agent", v)}
+            value={(getVal("approver") as string) ?? (getVal("agent") as string) ?? ""}
+            onChange={(v) => {
+              setVal("approver", v);
+              setVal("agent", v);
+            }}
             options={AGENT_OPTIONS}
           />
         ) : (
           <span className="text-foreground truncate">
-            {(getVal("agent") as string) || "—"}
+            {(getVal("approver") as string) ||
+              (getVal("agent") as string) ||
+              "—"}
           </span>
         )}
       </div>
+
+      {/* Notification when waiting approval */}
+      <NotificationConfig
+        notification={notification}
+        isEditing={isEditing}
+        onChange={(n) => setVal("notification", n)}
+        label="Thông báo khi chờ duyệt"
+      />
+
+      {/* on_approve / on_reject */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-muted-foreground mb-1 flex items-center gap-1">
+            <CheckCircle className="h-3 w-3 text-green-500" />
+            Khi được duyệt
+          </div>
+          {isEditing ? (
+            <NativeSelect
+              value={(getVal("on_approve") as string) ?? ""}
+              onChange={(v) => setVal("on_approve", v)}
+              options={ON_APPROVE_OPTIONS}
+            />
+          ) : (
+            <span className="text-foreground">
+              {(getVal("on_approve") as string) || "next"}
+            </span>
+          )}
+        </div>
+        <div>
+          <div className="text-muted-foreground mb-1 flex items-center gap-1">
+            <XCircle className="h-3 w-3 text-red-500" />
+            Khi bị từ chối
+          </div>
+          {isEditing ? (
+            <NativeSelect
+              value={(getVal("on_reject") as string) ?? ""}
+              onChange={(v) => setVal("on_reject", v)}
+              options={ON_REJECT_OPTIONS}
+            />
+          ) : (
+            <span className="text-foreground">
+              {(getVal("on_reject") as string) || "abort"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Waiting for approval — action panel */}
       {executionStatus === "waiting" && (
-        <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 p-2">
+        <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 p-3 space-y-2">
           <div className="flex items-center gap-1 text-amber-700 dark:text-amber-400 font-medium">
             <AlertTriangle className="h-3 w-3" />
             Đang chờ phê duyệt
           </div>
+
+          {!showRejectForm ? (
+            <div className="flex gap-2">
+              <Button
+                size="xs"
+                className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => onExecuteSingle?.(stepIndex ?? 0)}
+              >
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Phê duyệt
+              </Button>
+              <Button
+                size="xs"
+                variant="destructive"
+                onClick={() => setShowRejectForm(true)}
+              >
+                <XCircle className="h-3 w-3 mr-1" />
+                Từ chối
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Textarea
+                className="min-h-[50px] text-xs"
+                placeholder="Lý do từ chối..."
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="xs"
+                  variant="destructive"
+                  onClick={() => {
+                    onUpdate?.(stepIndex ?? 0, {
+                      on_reject: `reject:${rejectReason}`,
+                    });
+                    setShowRejectForm(false);
+                    setRejectReason("");
+                  }}
+                >
+                  Xác nhận từ chối
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => {
+                    setShowRejectForm(false);
+                    setRejectReason("");
+                  }}
+                >
+                  Huỷ
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -535,12 +845,7 @@ function ApprovalBody({
 
 /* ─── API body ─── */
 
-function ApiBody({
-  step,
-  isEditing,
-  getVal,
-  setVal,
-}: TypeBodyProps) {
+function ApiBody({ step, isEditing, getVal, setVal }: TypeBodyProps) {
   const input = getVal("input") as StepDefinition["input"];
   const [method, setMethod] = useState(
     (input?.params as Record<string, string>)?.method ?? "GET",
@@ -561,7 +866,10 @@ function ApiBody({
               value={method}
               onChange={(v) => {
                 setMethod(v);
-                setVal("input", { ...input, params: { ...(input?.params ?? {}), method: v } });
+                setVal("input", {
+                  ...input,
+                  params: { ...(input?.params ?? {}), method: v },
+                });
               }}
               options={[
                 { value: "GET", label: "GET" },
@@ -585,7 +893,13 @@ function ApiBody({
               value={endpoint}
               onChange={(e) => {
                 setEndpoint(e.target.value);
-                setVal("input", { ...input, params: { ...(input?.params ?? {}), endpoint: e.target.value } });
+                setVal("input", {
+                  ...input,
+                  params: {
+                    ...(input?.params ?? {}),
+                    endpoint: e.target.value,
+                  },
+                });
               }}
             />
           ) : (
@@ -607,7 +921,13 @@ function ApiBody({
               value={requestBody}
               onChange={(e) => {
                 setRequestBody(e.target.value);
-                setVal("input", { ...input, params: { ...(input?.params ?? {}), body: e.target.value } });
+                setVal("input", {
+                  ...input,
+                  params: {
+                    ...(input?.params ?? {}),
+                    body: e.target.value,
+                  },
+                });
               }}
             />
           ) : (
@@ -618,19 +938,19 @@ function ApiBody({
         </div>
       )}
 
-      <IOConfig step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />
+      <IOConfig
+        step={step}
+        isEditing={isEditing}
+        getVal={getVal}
+        setVal={setVal}
+      />
     </div>
   );
 }
 
 /* ─── Agent body ─── */
 
-function AgentBody({
-  step,
-  isEditing,
-  getVal,
-  setVal,
-}: TypeBodyProps) {
+function AgentBody({ step, isEditing, getVal, setVal }: TypeBodyProps) {
   return (
     <div className="space-y-2 text-xs">
       <div className="flex items-center gap-2">
@@ -656,7 +976,12 @@ function AgentBody({
         editing={isEditing}
         onChange={(v) => setVal("executor", v)}
       />
-      <IOConfig step={step} isEditing={isEditing} getVal={getVal} setVal={setVal} />
+      <IOConfig
+        step={step}
+        isEditing={isEditing}
+        getVal={getVal}
+        setVal={setVal}
+      />
     </div>
   );
 }
@@ -669,16 +994,23 @@ function ManualBody({
   getVal,
   setVal,
   executionStatus,
-}: TypeBodyProps & { executionStatus?: string }) {
+  onExecuteSingle,
+  onUpdate,
+  stepIndex,
+}: TypeBodyProps) {
   const [instructions, setInstructions] = useState(
     (getVal("executor") as string) ?? "",
   );
+  const [notes, setNotes] = useState("");
 
   return (
-    <div className="space-y-2 text-xs">
+    <div className="space-y-3 text-xs">
+      {/* Assignee */}
       <div className="flex items-center gap-2">
         <Bot className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-muted-foreground shrink-0 w-24">Người thực hiện</span>
+        <span className="text-muted-foreground shrink-0 w-24">
+          Người thực hiện
+        </span>
         {isEditing ? (
           <NativeSelect
             value={(getVal("agent") as string) ?? ""}
@@ -691,6 +1023,8 @@ function ManualBody({
           </span>
         )}
       </div>
+
+      {/* Instructions */}
       <div>
         <div className="text-muted-foreground mb-1">Hướng dẫn thực hiện</div>
         {isEditing ? (
@@ -710,12 +1044,56 @@ function ManualBody({
           </div>
         )}
       </div>
-      {executionStatus === "running" && (
-        <Button size="xs" className="bg-green-600 hover:bg-green-700 text-white">
-          <CheckCircle className="h-3 w-3 mr-1" />
-          Đánh dấu hoàn thành
+
+      {/* Notes textarea — for recording results/output */}
+      <div>
+        <div className="text-muted-foreground mb-1 flex items-center gap-1">
+          <FileText className="h-3 w-3" />
+          Ghi chú kết quả
+        </div>
+        <Textarea
+          className="min-h-[50px] text-xs"
+          placeholder="Ghi lại kết quả thực hiện, output, hoặc ghi chú..."
+          rows={2}
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex flex-wrap gap-2">
+        {/* Mark complete — only when step is running */}
+        {executionStatus === "running" && (
+          <Button
+            size="xs"
+            className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => onExecuteSingle?.(stepIndex ?? 0)}
+          >
+            <CheckCircle className="h-3 w-3 mr-1" />
+            Đánh dấu hoàn thành
+          </Button>
+        )}
+
+        {/* Skip button */}
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => onUpdate?.(stepIndex ?? 0, { on_success: "skip" })}
+        >
+          <SkipForward className="h-3 w-3 mr-1" />
+          Bỏ qua bước này
         </Button>
-      )}
+
+        {/* Telegram reminder */}
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => onExecuteSingle?.(stepIndex ?? 0)}
+        >
+          <Send className="h-3 w-3 mr-1" />
+          Nhắc qua Telegram
+        </Button>
+      </div>
     </div>
   );
 }
@@ -727,9 +1105,14 @@ function EventBody({
   isEditing,
   getVal,
   setVal,
+  onExecuteSingle,
+  stepIndex,
 }: TypeBodyProps) {
+  const trigger = (getVal("trigger") as StepDefinition["trigger"]) ?? {};
+
   return (
-    <div className="space-y-2 text-xs">
+    <div className="space-y-3 text-xs">
+      {/* Event name */}
       <FieldRow
         icon={Zap}
         label="Tên sự kiện"
@@ -737,6 +1120,7 @@ function EventBody({
         editing={isEditing}
         onChange={(v) => setVal("executor", v)}
       />
+
       {/* Description */}
       {((getVal("cwd") as string) || isEditing) && (
         <FieldRow
@@ -747,7 +1131,46 @@ function EventBody({
           onChange={(v) => setVal("cwd", v)}
         />
       )}
-      <Button size="xs" variant="outline">
+
+      {/* Trigger type dropdown */}
+      <div className="flex items-center gap-2">
+        <Zap className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground shrink-0 w-24">Loại trigger</span>
+        {isEditing ? (
+          <NativeSelect
+            value={trigger.type ?? ""}
+            onChange={(v) =>
+              setVal("trigger", { ...trigger, type: v })
+            }
+            options={TRIGGER_TYPE_OPTIONS}
+          />
+        ) : (
+          <span className="text-foreground">
+            {trigger.type
+              ? TRIGGER_TYPE_OPTIONS.find((o) => o.value === trigger.type)
+                  ?.label ?? trigger.type
+              : "—"}
+          </span>
+        )}
+      </div>
+
+      {/* Event log section */}
+      <div>
+        <div className="text-muted-foreground mb-1 flex items-center gap-1">
+          <MessageSquare className="h-3 w-3" />
+          Lịch sử sự kiện
+        </div>
+        <div className="bg-muted/50 rounded px-2 py-2 text-[11px] text-muted-foreground italic">
+          Chưa có lịch sử sự kiện
+        </div>
+      </div>
+
+      {/* Manual trigger button */}
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => onExecuteSingle?.(stepIndex ?? 0)}
+      >
         <Zap className="h-3 w-3 mr-1" />
         Kích hoạt thủ công
       </Button>
@@ -755,14 +1178,70 @@ function EventBody({
   );
 }
 
+/* ─── Notification Config (shared) ─── */
+
+function NotificationConfig({
+  notification,
+  isEditing,
+  onChange,
+  label,
+}: {
+  notification: NonNullable<StepDefinition["notification"]>;
+  isEditing: boolean;
+  onChange: (n: StepDefinition["notification"]) => void;
+  label: string;
+}) {
+  const channel = notification.channel ?? "";
+  const message = notification.message ?? "";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-muted-foreground flex items-center gap-1 text-xs">
+        <Bell className="h-3 w-3" />
+        {label}
+      </div>
+      {isEditing ? (
+        <div className="space-y-1.5">
+          <NativeSelect
+            value={channel}
+            onChange={(v) => onChange({ ...notification, channel: v })}
+            options={NOTIFICATION_OPTIONS}
+          />
+          {channel && (
+            <Input
+              className="h-7 text-xs"
+              placeholder="Nội dung thông báo..."
+              value={message}
+              onChange={(e) =>
+                onChange({ ...notification, message: e.target.value })
+              }
+            />
+          )}
+        </div>
+      ) : (
+        <span className="text-xs text-foreground">
+          {channel ? (
+            <>
+              <Badge variant="outline" className="text-[10px] mr-1.5">
+                {NOTIFICATION_OPTIONS.find((o) => o.value === channel)?.label ??
+                  channel}
+              </Badge>
+              {message && (
+                <span className="text-muted-foreground">{message}</span>
+              )}
+            </>
+          ) : (
+            <span className="text-muted-foreground">Không thông báo</span>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ─── Shared IO Config ─── */
 
-function IOConfig({
-  step,
-  isEditing,
-  getVal,
-  setVal,
-}: TypeBodyProps) {
+function IOConfig({ step, isEditing, getVal, setVal }: TypeBodyProps) {
   const input = getVal("input") as StepDefinition["input"];
   const output = getVal("output") as StepDefinition["output"];
 
@@ -772,10 +1251,11 @@ function IOConfig({
     <div className="grid grid-cols-2 gap-3 text-xs">
       {(input?.source || isEditing) && (
         <div>
-          <div className="text-muted-foreground mb-1">Đầu vào</div>
+          <div className="text-muted-foreground mb-1">Đầu vào (source)</div>
           {isEditing ? (
             <Input
               className="h-7 text-xs font-mono"
+              placeholder="VD: step.1.output"
               value={input?.source ?? ""}
               onChange={(e) =>
                 setVal("input", { ...input, source: e.target.value })
@@ -790,10 +1270,11 @@ function IOConfig({
       )}
       {(output?.destination || isEditing) && (
         <div>
-          <div className="text-muted-foreground mb-1">Đầu ra</div>
+          <div className="text-muted-foreground mb-1">Đầu ra (destination)</div>
           {isEditing ? (
             <Input
               className="h-7 text-xs font-mono"
+              placeholder="VD: memory/reports/output.json"
               value={output?.destination ?? ""}
               onChange={(e) =>
                 setVal("output", { ...output, destination: e.target.value })
@@ -811,13 +1292,6 @@ function IOConfig({
 }
 
 /* ─── Shared sub-components ─── */
-
-interface TypeBodyProps {
-  step: StepDefinition;
-  isEditing: boolean;
-  getVal: <K extends keyof StepDefinition>(key: K) => StepDefinition[K];
-  setVal: <K extends keyof StepDefinition>(key: K, value: StepDefinition[K]) => void;
-}
 
 function FieldRow({
   icon: Icon,
@@ -845,7 +1319,12 @@ function FieldRow({
           onChange={(e) => onChange(e.target.value)}
         />
       ) : (
-        <span className={cn("text-foreground truncate", mono && "font-mono text-[11px]")}>
+        <span
+          className={cn(
+            "text-foreground truncate",
+            mono && "font-mono text-[11px]",
+          )}
+        >
           {value || "—"}
         </span>
       )}

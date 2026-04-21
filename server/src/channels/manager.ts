@@ -109,6 +109,8 @@ class ChannelManager {
     const channel = this.channels.get(msg.channel);
 
     if (!channel) {
+      // Facebook channels have their own outbound handler in webhook.ts — skip silently
+      if (msg.channel.startsWith('fb-')) return;
       console.warn(`[Manager] Channel not found for dispatch: ${msg.channel}`);
       await this.logSentMessage(msg, 'failed', 'Channel not found');
       return;
@@ -222,7 +224,7 @@ class ChannelManager {
     const { error } = await supabase.from('channel_sent_messages').insert({
       channel_name: msg.channel,
       thread_id: msg.chatId,
-      thread_type: 'dm', // Inferred from original message — will be refined
+      thread_type: msg.metadata?.peerKind === 'comment' ? 'comment' : msg.metadata?.peerKind === 'group' ? 'group' : 'dm',
       to_uid: msg.chatId,
       body: msg.content,
       content_type: msg.contentType || 'text',
@@ -317,7 +319,86 @@ function wrapLegacyChannel(
 
     async send(msg: OutboundMessage): Promise<void> {
       const threadType = msg.metadata?.threadType || 'dm';
-      const result = await legacy.send(msg.chatId, msg.content, threadType);
+      const agentSlug = msg.metadata?.agentSlug;
+      const media = msg.media || [];
+
+      // Strategy:
+      //   1. For each IMAGE in media[]: try legacy.sendImage(localPath)
+      //      — Zalo personal supports direct image upload from local fs.
+      //      For URL-only images, fall through to URL appending.
+      //   2. For non-image media (PDF, video, doc): append the URL to the
+      //      text content as a clickable link. Zalo/FB auto-render previews.
+      //   3. Send the (possibly augmented) text once at the end.
+
+      const urlAppends: string[] = [];
+
+      if (media.length > 0) {
+        for (const m of media) {
+          const isImage = (m.mimeType || '').startsWith('image/');
+          const hasLocalPath = !!m.path;
+          const hasUrl = !!m.url;
+
+          // Branch 1: image with local path → legacy.sendImage()
+          if (isImage && hasLocalPath && typeof legacy.sendImage === 'function') {
+            try {
+              const imgResult = await legacy.sendImage(
+                msg.chatId,
+                m.path,
+                threadType,
+                undefined,
+                agentSlug,
+              );
+              if (!imgResult?.success) {
+                console.warn(`[Manager/wrapLegacy] sendImage failed for ${m.filename}: ${imgResult?.error}`);
+                if (hasUrl) urlAppends.push(`📎 ${m.filename || 'Hình'}: ${m.url}`);
+              }
+              continue;
+            } catch (err: any) {
+              console.warn(`[Manager/wrapLegacy] sendImage threw for ${m.filename}: ${err.message}`);
+              if (hasUrl) urlAppends.push(`📎 ${m.filename || 'Hình'}: ${m.url}`);
+              continue;
+            }
+          }
+
+          // Branch 2: non-image with local path → legacy.sendFile() (PDF/video/doc)
+          //          EXPERIMENTAL — falls back to URL-append on error.
+          if (!isImage && hasLocalPath && typeof legacy.sendFile === 'function') {
+            try {
+              const fileResult = await legacy.sendFile(
+                msg.chatId,
+                m.path,
+                threadType,
+                m.caption,
+                agentSlug,
+              );
+              if (!fileResult?.success) {
+                console.warn(`[Manager/wrapLegacy] sendFile failed for ${m.filename}: ${fileResult?.error}`);
+                if (hasUrl) urlAppends.push(`📎 ${m.filename || 'File'}: ${m.url}`);
+              }
+              continue;
+            } catch (err: any) {
+              console.warn(`[Manager/wrapLegacy] sendFile threw for ${m.filename}: ${err.message}`);
+              if (hasUrl) urlAppends.push(`📎 ${m.filename || 'File'}: ${m.url}`);
+              continue;
+            }
+          }
+
+          // Branch 3: URL-only (no local path) → append clickable link
+          if (hasUrl) {
+            const label = m.filename || (isImage ? 'Hình' : 'File');
+            urlAppends.push(`📎 ${label}: ${m.url}`);
+            continue;
+          }
+
+          console.warn(`[Manager/wrapLegacy] Skipped media (no path/url): ${m.filename}`);
+        }
+      }
+
+      const finalContent = urlAppends.length > 0
+        ? `${msg.content}\n\n${urlAppends.join('\n')}`
+        : msg.content;
+
+      const result = await legacy.send(msg.chatId, finalContent, threadType);
       if (!result.success) {
         throw new Error(result.error || 'Send failed');
       }

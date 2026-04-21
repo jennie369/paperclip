@@ -97,7 +97,7 @@ export default function EntityDetailPanel({
   }
 
   return (
-    <div className="w-80 border-l border-border bg-card flex flex-col h-full overflow-hidden">
+    <div className="w-full bg-transparent flex flex-col h-full overflow-hidden text-slate-800 dark:text-slate-100">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 min-w-0">
@@ -107,12 +107,14 @@ export default function EntityDetailPanel({
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               className="text-sm font-semibold bg-input border border-border rounded px-2 py-0.5 w-full"
+              title="Tên thực thể"
+              placeholder="Tên..."
             />
           ) : (
             <span className="text-sm font-semibold truncate">{entity.name}</span>
           )}
         </div>
-        <button onClick={onClose} className="p-1 hover:bg-muted rounded">
+        <button onClick={onClose} className="p-1 hover:bg-muted rounded text-slate-800 dark:text-slate-100" title="Đóng bảng chia tiết">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -122,8 +124,7 @@ export default function EntityDetailPanel({
         {/* Type badge */}
         <div className="flex items-center gap-2">
           <span
-            className="px-2 py-0.5 rounded-full text-xs font-medium"
-            style={{ backgroundColor: config?.color + "20", color: config?.color }}
+            className={`px-2 py-0.5 rounded-full text-xs font-medium ${config?.bgClass || ""} ${config?.textClass || ""}`}
             title={config?.tooltip}
           >
             {config?.label || entity.entity_type}
@@ -142,6 +143,8 @@ export default function EntityDetailPanel({
               onChange={(e) => setEditDesc(e.target.value)}
               className="w-full text-sm bg-input border border-border rounded p-2 resize-none"
               rows={3}
+              title="Mô tả thực thể"
+              placeholder="Nhập mô tả..."
             />
           ) : (
             <p className="text-sm text-foreground/80">
@@ -176,8 +179,7 @@ export default function EntityDetailPanel({
               <div key={type} className="mb-3">
                 <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
                   <span
-                    className="w-2 h-2 rounded-full inline-block"
-                    style={{ backgroundColor: relConfig?.color || "#6B7280" }}
+                    className={`w-2 h-2 rounded-full inline-block ${relConfig?.bgClass || "bg-gray-500"}`}
                   />
                   {relConfig?.label || type} ({items.length})
                 </div>
@@ -235,6 +237,7 @@ export default function EntityDetailPanel({
             <button
               onClick={() => onTraverse(entityId)}
               className="flex-1 px-3 py-1.5 bg-muted text-foreground rounded text-xs font-medium hover:bg-muted/80 flex items-center justify-center gap-1"
+              title="Khám phá các liên kết lân cận theo dạng mạng lưới tuyến đường"
             >
               <GitBranch className="w-3 h-3" />
               Traverse
@@ -246,6 +249,7 @@ export default function EntityDetailPanel({
                 }
               }}
               className="px-2 py-1.5 bg-destructive/10 text-destructive rounded text-xs hover:bg-destructive/20"
+              title="Xóa vĩnh viễn thực thể"
             >
               <Trash2 className="w-3 h-3" />
             </button>

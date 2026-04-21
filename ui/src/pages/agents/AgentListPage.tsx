@@ -1,6 +1,21 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  rectSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
   Bot,
   Plus,
@@ -20,6 +35,19 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 
+const STORAGE_KEY = 'agent-card-order';
+
+function loadCardOrder(): string[] | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function saveCardOrder(order: string[]): void {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(order)); } catch {}
+}
+
 export function AgentListPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -29,6 +57,45 @@ export function AgentListPage() {
     queryKey: ["agent-configs"],
     queryFn: agentConfigsApi.fetchAll,
   });
+
+  // Drag-drop order
+  const agentSlugs = agents.map((a) => a.slug);
+  const [order, setOrder] = useState<string[]>(() => {
+    const saved = loadCardOrder();
+    if (!saved) return [];
+    return saved;
+  });
+
+  useEffect(() => {
+    if (agentSlugs.length === 0) return;
+    setOrder((prev) => {
+      const currentSet = new Set(agentSlugs);
+      const result: string[] = [];
+      for (const s of prev) if (currentSet.has(s)) result.push(s);
+      for (const s of agentSlugs) if (!prev.includes(s)) result.push(s);
+      return result;
+    });
+  }, [agentSlugs.join(',')]);
+
+  useEffect(() => {
+    if (order.length > 0) saveCardOrder(order);
+  }, [order]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setOrder((prev) => {
+      const oldIdx = prev.indexOf(String(active.id));
+      const newIdx = prev.indexOf(String(over.id));
+      if (oldIdx === -1 || newIdx === -1) return prev;
+      return arrayMove(prev, oldIdx, newIdx);
+    });
+  }, []);
+
+  const agentMap = new Map(agents.map((a) => [a.slug, a]));
+  const sortedAgents = order.map((s) => agentMap.get(s)).filter(Boolean) as AgentConfig[];
 
   const toggleMut = useMutation({
     mutationFn: ({ slug, enabled }: { slug: string; enabled: boolean }) =>
@@ -94,26 +161,30 @@ export function AgentListPage() {
         </div>
       )}
 
-      {/* Agent Grid */}
-      {!isLoading && agents.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {agents.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              onEdit={() => navigate(`/agents-config/${agent.slug}/edit`)}
-              onTest={() => navigate(`/agents-config/${agent.slug}/test`)}
-              onToggle={() =>
-                toggleMut.mutate({
-                  slug: agent.slug,
-                  enabled: !agent.enabled,
-                })
-              }
-              onDelete={() => setDeleteSlug(agent.slug)}
-              isToggling={toggleMut.isPending}
-            />
-          ))}
-        </div>
+      {/* Agent Grid (drag-drop reorderable) */}
+      {!isLoading && sortedAgents.length > 0 && (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={order} strategy={rectSortingStrategy}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {sortedAgents.map((agent) => (
+                <SortableAgentCard
+                  key={agent.slug}
+                  agent={agent}
+                  onEdit={() => navigate(`/agents-config/${agent.slug}/edit`)}
+                  onTest={() => navigate(`/agents-config/${agent.slug}/test`)}
+                  onToggle={() =>
+                    toggleMut.mutate({
+                      slug: agent.slug,
+                      enabled: !agent.enabled,
+                    })
+                  }
+                  onDelete={() => setDeleteSlug(agent.slug)}
+                  isToggling={toggleMut.isPending}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       )}
 
       {/* Delete confirmation */}
@@ -129,6 +200,28 @@ export function AgentListPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function SortableAgentCard(props: {
+  agent: AgentConfig;
+  onEdit: () => void;
+  onTest: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+  isToggling: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.agent.slug });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 50 : undefined,
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
+      <AgentCard {...props} />
     </div>
   );
 }

@@ -246,7 +246,11 @@ export function validateCron(expression: string): string | null {
  * until a matching minute is found (up to a safety limit of ~4 years to
  * prevent infinite loops on impossible schedules).
  *
- * @param cron  — Parsed cron schedule.
+ * GEMRAL FIX 2026-04-15: Interprets cron fields in **system local time**
+ * (POSIX crontab convention), not UTC. Previous UTC interpretation caused
+ * "0 9 * * *" to fire at HCM 16:00 for users in Asia/Ho_Chi_Minh.
+ *
+ * @param cron  — Parsed cron schedule (interpreted in local TZ).
  * @param after — The reference date. The returned date will be strictly after this.
  * @returns The next matching `Date`, or `null` if no match found within the search window.
  */
@@ -254,8 +258,8 @@ export function nextCronTick(cron: ParsedCron, after: Date): Date | null {
   // Work in local minutes — start from the minute after `after`
   const d = new Date(after.getTime());
   // Advance to the next whole minute
-  d.setUTCSeconds(0, 0);
-  d.setUTCMinutes(d.getUTCMinutes() + 1);
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() + 1);
 
   // Safety: search up to 4 years worth of minutes (~2.1M iterations max).
   // Uses 366 to account for leap years.
@@ -263,11 +267,11 @@ export function nextCronTick(cron: ParsedCron, after: Date): Date | null {
   const maxIterations = MAX_CRON_SEARCH_YEARS * 366 * 24 * 60;
 
   for (let i = 0; i < maxIterations; i++) {
-    const month = d.getUTCMonth() + 1; // 1-12
-    const dayOfMonth = d.getUTCDate(); // 1-31
-    const dayOfWeek = d.getUTCDay(); // 0-6
-    const hour = d.getUTCHours(); // 0-23
-    const minute = d.getUTCMinutes(); // 0-59
+    const month = d.getMonth() + 1; // 1-12
+    const dayOfMonth = d.getDate(); // 1-31
+    const dayOfWeek = d.getDay(); // 0-6
+    const hour = d.getHours(); // 0-23
+    const minute = d.getMinutes(); // 0-59
 
     // Check month
     if (!cron.months.includes(month)) {
@@ -279,8 +283,8 @@ export function nextCronTick(cron: ParsedCron, after: Date): Date | null {
     // Check day of month AND day of week (both must match)
     if (!cron.daysOfMonth.includes(dayOfMonth) || !cron.daysOfWeek.includes(dayOfWeek)) {
       // Advance one day
-      d.setUTCDate(d.getUTCDate() + 1);
-      d.setUTCHours(0, 0, 0, 0);
+      d.setDate(d.getDate() + 1);
+      d.setHours(0, 0, 0, 0);
       continue;
     }
 
@@ -289,11 +293,11 @@ export function nextCronTick(cron: ParsedCron, after: Date): Date | null {
       // Advance to next matching hour within the day
       const nextHour = findNext(cron.hours, hour);
       if (nextHour !== null) {
-        d.setUTCHours(nextHour, 0, 0, 0);
+        d.setHours(nextHour, 0, 0, 0);
       } else {
         // No matching hour left today — advance to next day
-        d.setUTCDate(d.getUTCDate() + 1);
-        d.setUTCHours(0, 0, 0, 0);
+        d.setDate(d.getDate() + 1);
+        d.setHours(0, 0, 0, 0);
       }
       continue;
     }
@@ -302,10 +306,10 @@ export function nextCronTick(cron: ParsedCron, after: Date): Date | null {
     if (!cron.minutes.includes(minute)) {
       const nextMin = findNext(cron.minutes, minute);
       if (nextMin !== null) {
-        d.setUTCMinutes(nextMin, 0, 0);
+        d.setMinutes(nextMin, 0, 0);
       } else {
         // No matching minute left this hour — advance to next hour
-        d.setUTCHours(d.getUTCHours() + 1, 0, 0, 0);
+        d.setHours(d.getHours() + 1, 0, 0, 0);
       }
       continue;
     }
@@ -350,12 +354,12 @@ function findNext(sortedValues: number[], current: number): number | null {
 }
 
 /**
- * Advance `d` (mutated in place) to midnight UTC of the first day of the next
- * month whose 1-based month number is in `months`.
+ * Advance `d` (mutated in place) to midnight local time of the first day of
+ * the next month whose 1-based month number is in `months`.
  */
 function advanceToNextMonth(d: Date, months: number[]): void {
-  let year = d.getUTCFullYear();
-  let month = d.getUTCMonth() + 1; // 1-based
+  let year = d.getFullYear();
+  let month = d.getMonth() + 1; // 1-based
 
   // Walk months forward until we find one in the set (max 48 iterations = 4 years)
   for (let i = 0; i < 48; i++) {
@@ -365,8 +369,8 @@ function advanceToNextMonth(d: Date, months: number[]): void {
       year++;
     }
     if (months.includes(month)) {
-      d.setUTCFullYear(year, month - 1, 1);
-      d.setUTCHours(0, 0, 0, 0);
+      d.setFullYear(year, month - 1, 1);
+      d.setHours(0, 0, 0, 0);
       return;
     }
   }

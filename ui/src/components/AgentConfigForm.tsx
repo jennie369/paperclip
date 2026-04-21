@@ -49,6 +49,7 @@ import { ClaudeLocalAdvancedFields } from "../adapters/claude-local/config-field
 import { MarkdownEditor } from "./MarkdownEditor";
 import { ChoosePathButton } from "./PathInstructionsModal";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
+import { HeartbeatScheduleBuilder } from "./HeartbeatScheduleBuilder";
 
 /* ---- Create mode values ---- */
 
@@ -906,6 +907,18 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 numberHint={help.intervalSec}
                 showNumber={eff("heartbeat", "enabled", heartbeat.enabled !== false)}
               />
+              {/* GEMRAL FIX 2026-04-15: Replaced raw cron input with preset-based builder. */}
+              {/* Backend still receives/stores a cron string — UI layer encodes/decodes. */}
+              {/* Backend interprets cron in system local time (HCM) per cron.ts fix 2026-04-15. */}
+              <Field
+                label="Lịch biểu chạy (tùy chọn)"
+                hint="Chọn preset dễ hiểu, hoặc 'Tùy chỉnh (cron)' cho trường hợp đặc biệt. Khi set sẽ ghi đè intervalSec. Thời gian theo giờ Việt Nam."
+              >
+                <HeartbeatScheduleBuilder
+                  value={String(eff("heartbeat", "cronExpression", heartbeat.cronExpression ?? "") ?? "")}
+                  onChange={(cron) => mark("heartbeat", "cronExpression", cron)}
+                />
+              </Field>
               {showSessionCompactionCard && (
                 <SessionCompactionPolicyCard
                   adapterType={adapterType}

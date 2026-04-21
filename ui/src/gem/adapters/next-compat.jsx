@@ -5,8 +5,9 @@
 
 import { useNavigate, useLocation, useSearchParams as useRRSearchParams, Link as RRLink } from 'react-router-dom';
 
-// Content Center pages live under /admin/cc in Gemral
-const CC_BASE = '/admin/cc';
+// Content Center pages live under /:companyPrefix/cc in Paperclip.
+// GEMRAL company prefix = "GEM". Was "/admin/cc" in old Gemral Next.js app.
+const CC_BASE = '/GEM/cc';
 
 // Content Center internal routes that need prefixing
 // These are paths that CC pages use (Next.js style) that map to /admin/cc/*

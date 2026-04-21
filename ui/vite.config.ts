@@ -32,4 +32,12 @@ export default defineConfig({
       },
     },
   },
+  // Jennie 2026-04-19 — tạm disable esbuild-transpile để bypass Win temp access-denied bug.
+  // Source là modern JSX + TS rất nhẹ; output esnext không cần downlevel. Rollup + @vitejs/plugin-react
+  // (babel) vẫn handle JSX/TS. Revert khi fix được root cause filesystem.
+  build: {
+    target: "esnext",
+    minify: false,
+  },
+  esbuild: false,
 });

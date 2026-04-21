@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -12,7 +12,6 @@
     "isolatedModules": true,
     "noEmit": true,
     "allowJs": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@gem/ui": ["./src/gem/ui"],

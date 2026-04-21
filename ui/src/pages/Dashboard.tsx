@@ -15,36 +15,137 @@ import { queryKeys } from "../lib/queryKeys";
 import { MetricCard } from "../components/MetricCard";
 import { EmptyState } from "../components/EmptyState";
 import { StatusIcon } from "../components/StatusIcon";
-
 import { ActivityRow } from "../components/ActivityRow";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
+import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle, GripVertical } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { PageSkeleton } from "../components/PageSkeleton";
 import type { Agent, Issue } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
+import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 import { ChannelStatusCards } from "@/components/ops/ChannelStatusCards";
 import { AgentStatusGrid } from "@/components/ops/AgentStatusGrid";
 import { CRMPipelineCard } from "@/components/ops/CRMPipelineCard";
 import { ActivityFeed } from "@/components/ops/ActivityFeed";
 import { CapabilitiesGrid } from "@/components/ops/CapabilitiesGrid";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+// ─── Card order persistence ────────────────────────────────────────────────
+
+const DEFAULT_CARD_ORDER = [
+  "channels-agents",
+  "capabilities",
+  "crm-activity",
+  "active-agents",
+  "metrics",
+  "charts",
+  "kg-widget",
+  "tasks-activity",
+] as const;
+
+type CardId = (typeof DEFAULT_CARD_ORDER)[number];
+
+const CARD_ORDER_STORAGE_KEY = "paperclip-dashboard-card-order-v1";
+
+function loadCardOrder(): CardId[] {
+  try {
+    const stored = localStorage.getItem(CARD_ORDER_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as string[];
+      const validSet = new Set<string>(DEFAULT_CARD_ORDER);
+      const filtered = parsed.filter((id) => validSet.has(id)) as CardId[];
+      const missing = Array.from(DEFAULT_CARD_ORDER).filter((id) => !filtered.includes(id));
+      return [...filtered, ...missing];
+    }
+  } catch {
+    // ignore corrupt localStorage
+  }
+  return Array.from(DEFAULT_CARD_ORDER);
+}
+
+function saveCardOrder(order: CardId[]): void {
+  try {
+    localStorage.setItem(CARD_ORDER_STORAGE_KEY, JSON.stringify(order));
+  } catch {
+    // ignore quota errors
+  }
+}
+
+// ─── Sortable card wrapper ─────────────────────────────────────────────────
+
+function DashboardCard({ id, children }: { id: CardId; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : 1,
+        zIndex: isDragging ? 10 : undefined,
+      }}
+      className="relative group"
+    >
+      {/* Drag handle — appears on hover */}
+      <button
+        {...attributes}
+        {...listeners}
+        aria-label="Kéo để sắp xếp lại"
+        tabIndex={-1}
+        className="absolute top-2 right-2 z-20 p-1 rounded opacity-0 group-hover:opacity-40 hover:!opacity-80 cursor-grab active:cursor-grabbing text-muted-foreground touch-none select-none bg-background/60"
+      >
+        <GripVertical size={14} />
+      </button>
+      {children}
+    </div>
+  );
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
 function getRecentIssues(issues: Issue[]): Issue[] {
-  return [...issues]
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return [...issues].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  );
 }
+
+// ─── Dashboard ────────────────────────────────────────────────────────────
 
 export function Dashboard() {
   const { selectedCompanyId, companies } = useCompany();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
+
+  const [cardOrder, setCardOrder] = useState<CardId[]>(() => loadCardOrder());
   const [animatedActivityIds, setAnimatedActivityIds] = useState<Set<string>>(new Set());
   const seenActivityIdsRef = useRef<Set<string>>(new Set());
   const hydratedActivityRef = useRef(false);
   const activityAnimationTimersRef = useRef<number[]>([]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -82,6 +183,21 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
 
+  useLiveInvalidate({
+    tables: [
+      "crm_customers",
+      "crm_tickets",
+      "crm_orders",
+      "gem_sop_executions",
+      "gem_pipelines",
+      "channel_pending_messages",
+      "activity_log",
+      "cc_scripts",
+      "cc_generation_jobs",
+    ],
+    queryKeys: [["crm", "stats"], ["dashboard"], ["activity"], ["heartbeats"]],
+  });
+
   const { data: runs } = useQuery({
     queryKey: queryKeys.heartbeats(selectedCompanyId!),
     queryFn: () => heartbeatsApi.list(selectedCompanyId!),
@@ -92,9 +208,7 @@ export function Dashboard() {
   const recentActivity = useMemo(() => (activity ?? []).slice(0, 10), [activity]);
 
   useEffect(() => {
-    for (const timer of activityAnimationTimersRef.current) {
-      window.clearTimeout(timer);
-    }
+    for (const timer of activityAnimationTimersRef.current) window.clearTimeout(timer);
     activityAnimationTimersRef.current = [];
     seenActivityIdsRef.current = new Set();
     hydratedActivityRef.current = false;
@@ -103,30 +217,24 @@ export function Dashboard() {
 
   useEffect(() => {
     if (recentActivity.length === 0) return;
-
     const seen = seenActivityIdsRef.current;
-    const currentIds = recentActivity.map((event) => event.id);
-
+    const currentIds = recentActivity.map((e) => e.id);
     if (!hydratedActivityRef.current) {
       for (const id of currentIds) seen.add(id);
       hydratedActivityRef.current = true;
       return;
     }
-
     const newIds = currentIds.filter((id) => !seen.has(id));
     if (newIds.length === 0) {
       for (const id of currentIds) seen.add(id);
       return;
     }
-
     setAnimatedActivityIds((prev) => {
       const next = new Set(prev);
       for (const id of newIds) next.add(id);
       return next;
     });
-
     for (const id of newIds) seen.add(id);
-
     const timer = window.setTimeout(() => {
       setAnimatedActivityIds((prev) => {
         const next = new Set(prev);
@@ -140,9 +248,7 @@ export function Dashboard() {
 
   useEffect(() => {
     return () => {
-      for (const timer of activityAnimationTimersRef.current) {
-        window.clearTimeout(timer);
-      }
+      for (const timer of activityAnimationTimersRef.current) window.clearTimeout(timer);
     };
   }, []);
 
@@ -171,6 +277,225 @@ export function Dashboard() {
     return agents.find((a) => a.id === id)?.name ?? null;
   };
 
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setCardOrder((prev) => {
+        const oldIndex = prev.indexOf(active.id as CardId);
+        const newIndex = prev.indexOf(over.id as CardId);
+        const next = arrayMove(prev, oldIndex, newIndex);
+        saveCardOrder(next);
+        return next;
+      });
+    }
+  }
+
+  // ── Render card by ID ────────────────────────────────────────────────────
+
+  function renderCardContent(id: CardId) {
+    switch (id) {
+      case "channels-agents":
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="rounded-xl border bg-card p-4">
+              <ChannelStatusCards />
+            </div>
+            <div className="rounded-xl border bg-card p-4">
+              <AgentStatusGrid />
+            </div>
+          </div>
+        );
+
+      case "capabilities":
+        return (
+          <div className="rounded-xl border bg-card p-4">
+            <CapabilitiesGrid />
+          </div>
+        );
+
+      case "crm-activity":
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="rounded-xl border bg-card p-4">
+              <CRMPipelineCard />
+            </div>
+            <div className="rounded-xl border bg-card p-4">
+              <ActivityFeed />
+            </div>
+          </div>
+        );
+
+      case "active-agents":
+        return <ActiveAgentsPanel companyId={selectedCompanyId!} />;
+
+      case "metrics":
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <MetricCard
+              icon={Bot}
+              value={
+                (data?.agents?.active ?? 0) +
+                  (data?.agents?.running ?? 0) +
+                  (data?.agents?.paused ?? 0) +
+                  (data?.agents?.error ?? 0) ||
+                (agents?.length ?? 0)
+              }
+              label="Agents Enabled"
+              to="/agents"
+              description={
+                <span>
+                  {data?.agents?.running ?? 0} running{", "}
+                  {data?.agents?.paused ?? 0} paused{", "}
+                  {data?.agents?.error ?? 0} errors
+                </span>
+              }
+            />
+            <MetricCard
+              icon={CircleDot}
+              value={data?.tasks?.inProgress ?? 0}
+              label="Tasks In Progress"
+              to="/issues"
+              description={
+                <span>
+                  {data?.tasks?.open ?? 0} open{", "}
+                  {data?.tasks?.blocked ?? 0} blocked
+                </span>
+              }
+            />
+          </div>
+        );
+
+      case "charts":
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <ChartCard title="Run Activity" subtitle="Last 14 days">
+              <RunActivityChart runs={runs ?? []} />
+            </ChartCard>
+            <ChartCard title="Issues by Priority" subtitle="Last 14 days">
+              <PriorityChart issues={issues ?? []} />
+            </ChartCard>
+          </div>
+        );
+
+      case "kg-widget":
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <KGMiniWidget />
+          </div>
+        );
+
+      case "tasks-activity":
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                Recent Tasks
+              </h3>
+              {recentIssues.length === 0 ? (
+                <div className="border border-border p-4">
+                  <p className="text-sm text-muted-foreground">No tasks yet.</p>
+                </div>
+              ) : (
+                <div className="border border-border divide-y divide-border overflow-hidden">
+                  {recentIssues.slice(0, 10).map((issue) => (
+                    <Link
+                      key={issue.id}
+                      to={`/issues/${issue.identifier ?? issue.id}`}
+                      className="px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block"
+                    >
+                      <div className="flex items-start gap-2 sm:items-center sm:gap-3">
+                        <span className="shrink-0 sm:hidden">
+                          <StatusIcon status={issue.status} />
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col gap-1 sm:contents">
+                          <span className="line-clamp-2 text-sm sm:order-2 sm:flex-1 sm:min-w-0 sm:line-clamp-none sm:truncate">
+                            {issue.title}
+                          </span>
+                          <span className="flex items-center gap-2 sm:order-1 sm:shrink-0">
+                            <span className="hidden sm:inline-flex">
+                              <StatusIcon status={issue.status} />
+                            </span>
+                            <span className="text-xs font-mono text-muted-foreground">
+                              {issue.identifier ?? issue.id.slice(0, 8)}
+                            </span>
+                            {issue.assigneeAgentId &&
+                              (() => {
+                                const name = agentName(issue.assigneeAgentId);
+                                return name ? (
+                                  <span className="hidden sm:inline-flex">
+                                    <Identity name={name} size="sm" />
+                                  </span>
+                                ) : null;
+                              })()}
+                            <span className="text-xs text-muted-foreground sm:hidden">&middot;</span>
+                            <span className="text-xs text-muted-foreground shrink-0 sm:order-last">
+                              {timeAgo(issue.updatedAt)}
+                            </span>
+                          </span>
+                        </span>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                Recent Activity
+              </h3>
+              {recentActivity.length === 0 ? (
+                <div className="border border-border p-4">
+                  <p className="text-sm text-muted-foreground">No activity yet.</p>
+                </div>
+              ) : (
+                <div className="border border-border divide-y divide-border overflow-hidden">
+                  {recentActivity.map((event) => {
+                    const entityLink =
+                      event.entityType === "issue"
+                        ? `/issues/${entityNameMap.get(`issue:${event.entityId}`) ?? event.entityId}`
+                        : event.entityType === "agent"
+                          ? `/agents/${event.entityId}`
+                          : event.entityType === "project"
+                            ? `/projects/${event.entityId}`
+                            : event.entityType === "heartbeat_run"
+                              ? `/agents/${event.agentId}`
+                              : null;
+                    const entityLabel =
+                      entityNameMap.get(`${event.entityType}:${event.entityId}`) ?? event.entityType;
+                    return (
+                      <Link
+                        key={event.id}
+                        to={entityLink ?? "/activity"}
+                        className={`px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block ${animatedActivityIds.has(event.id) ? "bg-accent/30" : ""}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xs font-mono text-muted-foreground shrink-0">
+                              {event.actorType === "agent" ? "AG" : "BO"}
+                            </span>
+                            <span className="truncate">
+                              {event.actorType === "agent" ? "Agent" : "Board"}{" "}
+                              {event.action?.replace(/_/g, ".")} <strong>{entityLabel}</strong>
+                            </span>
+                          </div>
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {timeAgo(event.createdAt)}
+                          </span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+    }
+  }
+
+  // ── Early returns ────────────────────────────────────────────────────────
+
   if (!selectedCompanyId) {
     if (companies.length === 0) {
       return (
@@ -193,6 +518,8 @@ export function Dashboard() {
 
   const hasNoAgents = agents !== undefined && agents.length === 0;
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
   return (
     <div className="space-y-6">
       {error && <p className="text-sm text-destructive">{error.message}</p>}
@@ -201,9 +528,7 @@ export function Dashboard() {
         <div className="flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-500/25 dark:bg-amber-950/60">
           <div className="flex items-center gap-2.5">
             <Bot className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            <p className="text-sm text-amber-900 dark:text-amber-100">
-              You have no agents.
-            </p>
+            <p className="text-sm text-amber-900 dark:text-amber-100">You have no agents.</p>
           </div>
           <button
             onClick={() => openOnboarding({ initialStep: 2, companyId: selectedCompanyId! })}
@@ -214,41 +539,19 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Operations Center — Channel + Agents + CRM + Activity */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-xl border bg-card p-4">
-          <ChannelStatusCards />
-        </div>
-        <div className="rounded-xl border bg-card p-4">
-          <AgentStatusGrid />
-        </div>
-      </div>
-      {/* Capabilities Grid — ngay sau Kênh Chat + Agents */}
-      <div className="rounded-xl border bg-card p-4">
-        <CapabilitiesGrid />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-xl border bg-card p-4">
-          <CRMPipelineCard />
-        </div>
-        <div className="rounded-xl border bg-card p-4">
-          <ActivityFeed />
-        </div>
-      </div>
-
-      <ActiveAgentsPanel companyId={selectedCompanyId!} />
-
+      {/* Budget incidents — always at top, not draggable */}
       {data?.budgets?.activeIncidents ? (
         <div className="flex items-start justify-between gap-3 rounded-xl border border-red-500/20 bg-[linear-gradient(180deg,rgba(255,80,80,0.12),rgba(255,255,255,0.02))] px-4 py-3">
           <div className="flex items-start gap-2.5">
             <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
             <div>
               <p className="text-sm font-medium text-red-50">
-                {data.budgets.activeIncidents} active budget incident{data.budgets.activeIncidents === 1 ? "" : "s"}
+                {data.budgets.activeIncidents} active budget incident
+                {data.budgets.activeIncidents === 1 ? "" : "s"}
               </p>
               <p className="text-xs text-red-100/70">
-                {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects paused · {data.budgets.pendingApprovals} pending budget approvals
+                {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects
+                paused · {data.budgets.pendingApprovals} pending budget approvals
               </p>
             </div>
           </div>
@@ -258,47 +561,18 @@ export function Dashboard() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 xl:grid-cols-2 gap-1 sm:gap-2">
-        <MetricCard
-          icon={Bot}
-          value={(data?.agents?.active ?? 0) + (data?.agents?.running ?? 0) + (data?.agents?.paused ?? 0) + (data?.agents?.error ?? 0) || (agents?.length ?? 0)}
-          label="Agents Enabled"
-          to="/agents"
-          description={
-            <span>
-              {data?.agents?.running ?? 0} running{", "}
-              {data?.agents?.paused ?? 0} paused{", "}
-              {data?.agents?.error ?? 0} errors
-            </span>
-          }
-        />
-        <MetricCard
-          icon={CircleDot}
-          value={data?.tasks?.inProgress ?? 0}
-          label="Tasks In Progress"
-          to="/issues"
-          description={
-            <span>
-              {data?.tasks?.open ?? 0} open{", "}
-              {data?.tasks?.blocked ?? 0} blocked
-            </span>
-          }
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <ChartCard title="Run Activity" subtitle="Last 14 days">
-          <RunActivityChart runs={runs ?? []} />
-        </ChartCard>
-        <ChartCard title="Issues by Priority" subtitle="Last 14 days">
-          <PriorityChart issues={issues ?? []} />
-        </ChartCard>
-      </div>
-
-      {/* Knowledge Graph Mini Widget */}
-      <div className="grid grid-cols-2 gap-4">
-        <KGMiniWidget />
-      </div>
+      {/* Draggable cards */}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={cardOrder} strategy={verticalListSortingStrategy}>
+          <div className="space-y-6">
+            {cardOrder.map((id) => (
+              <DashboardCard key={id} id={id}>
+                {renderCardContent(id)}
+              </DashboardCard>
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
 
       <PluginSlotOutlet
         slotTypes={["dashboardWidget"]}
@@ -306,101 +580,6 @@ export function Dashboard() {
         className="grid gap-4 md:grid-cols-2"
         itemClassName="rounded-lg border bg-card p-4 shadow-sm"
       />
-
-          {/* Recent Tasks */}
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                Recent Tasks
-              </h3>
-              {recentIssues.length === 0 ? (
-                <div className="border border-border p-4">
-                  <p className="text-sm text-muted-foreground">No tasks yet.</p>
-                </div>
-              ) : (
-                <div className="border border-border divide-y divide-border overflow-hidden">
-                  {recentIssues.slice(0, 10).map((issue) => (
-                    <Link
-                      key={issue.id}
-                      to={`/issues/${issue.identifier ?? issue.id}`}
-                      className="px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block"
-                    >
-                      <div className="flex items-start gap-2 sm:items-center sm:gap-3">
-                        {/* Status icon - left column on mobile */}
-                        <span className="shrink-0 sm:hidden">
-                          <StatusIcon status={issue.status} />
-                        </span>
-
-                        {/* Right column on mobile: title + metadata stacked */}
-                        <span className="flex min-w-0 flex-1 flex-col gap-1 sm:contents">
-                          <span className="line-clamp-2 text-sm sm:order-2 sm:flex-1 sm:min-w-0 sm:line-clamp-none sm:truncate">
-                            {issue.title}
-                          </span>
-                          <span className="flex items-center gap-2 sm:order-1 sm:shrink-0">
-                            <span className="hidden sm:inline-flex"><StatusIcon status={issue.status} /></span>
-                            <span className="text-xs font-mono text-muted-foreground">
-                              {issue.identifier ?? issue.id.slice(0, 8)}
-                            </span>
-                            {issue.assigneeAgentId && (() => {
-                              const name = agentName(issue.assigneeAgentId);
-                              return name
-                                ? <span className="hidden sm:inline-flex"><Identity name={name} size="sm" /></span>
-                                : null;
-                            })()}
-                            <span className="text-xs text-muted-foreground sm:hidden">&middot;</span>
-                            <span className="text-xs text-muted-foreground shrink-0 sm:order-last">
-                              {timeAgo(issue.updatedAt)}
-                            </span>
-                          </span>
-                        </span>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Recent Activity */}
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                Recent Activity
-              </h3>
-              {recentActivity.length === 0 ? (
-                <div className="border border-border p-4">
-                  <p className="text-sm text-muted-foreground">No activity yet.</p>
-                </div>
-              ) : (
-                <div className="border border-border divide-y divide-border overflow-hidden">
-                  {recentActivity.map((event) => {
-                    const entityLink = event.entityType === "issue" ? `/issues/${entityNameMap.get(`issue:${event.entityId}`) ?? event.entityId}`
-                      : event.entityType === "agent" ? `/agents/${event.entityId}`
-                      : event.entityType === "project" ? `/projects/${event.entityId}`
-                      : event.entityType === "heartbeat_run" ? `/agents/${event.agentId}`
-                      : null;
-                    const entityLabel = entityNameMap.get(`${event.entityType}:${event.entityId}`) ?? event.entityType;
-                    return (
-                      <Link
-                        key={event.id}
-                        to={entityLink ?? "/activity"}
-                        className={`px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block ${animatedActivityIds.has(event.id) ? "bg-accent/30" : ""}`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-xs font-mono text-muted-foreground shrink-0">{event.actorType === "agent" ? "AG" : "BO"}</span>
-                            <span className="truncate">
-                              {event.actorType === "agent" ? "Agent" : "Board"} {event.action?.replace(/_/g, ".")} <strong>{entityLabel}</strong>
-                            </span>
-                          </div>
-                          <span className="text-xs text-muted-foreground shrink-0">{timeAgo(event.createdAt)}</span>
-                        </div>
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
     </div>
   );
 }

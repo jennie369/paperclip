@@ -69,7 +69,7 @@ export function ScannerPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Card className="p-3 text-center"><div className="text-xl font-bold">{stats.today_scans || 0}</div><div className="text-[10px] text-muted-foreground">Scans hôm nay</div></Card>
           <Card className="p-3 text-center"><div className="text-xl font-bold">{stats.patterns_found || 0}</div><div className="text-[10px] text-muted-foreground">Patterns</div></Card>
           <Card className="p-3 text-center"><div className="text-xl font-bold">{stats.alerts_sent || 0}</div><div className="text-[10px] text-muted-foreground">Alerts</div></Card>
@@ -81,7 +81,7 @@ export function ScannerPage() {
       {winRates && (
         <Card className="p-4">
           <h3 className="text-sm font-semibold mb-3">Win Rate theo Pattern</h3>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {Object.entries(winRates.by_pattern || {}).map(([pattern, rate]: [string, any]) => (
               <div key={pattern} className="flex items-center justify-between p-2 rounded-lg bg-muted/30">
                 <span className="text-xs font-medium">{pattern}</span>
@@ -138,7 +138,7 @@ export function ScannerPage() {
       {/* Backtest */}
       <Card className="p-4">
         <h3 className="text-sm font-semibold mb-3">Backtest & Thống kê</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <h4 className="text-xs font-medium text-muted-foreground mb-2">Tổng quan hiệu suất</h4>
             <div className="space-y-2">

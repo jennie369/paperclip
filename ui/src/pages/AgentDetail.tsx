@@ -949,6 +949,7 @@ export function AgentDetail() {
           runtimeState={runtimeState}
           agentId={agent.id}
           agentRouteId={canonicalAgentRef}
+          allAgents={allAgents ?? []}
         />
       )}
 
@@ -1098,6 +1099,7 @@ function AgentOverview({
   runtimeState,
   agentId,
   agentRouteId,
+  allAgents,
 }: {
   agent: Agent;
   runs: HeartbeatRun[];
@@ -1105,6 +1107,7 @@ function AgentOverview({
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
+  allAgents: Agent[];
 }) {
   return (
     <div className="space-y-8">
@@ -2257,10 +2260,13 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
 
       {/* stderr excerpt for failed runs */}
       {run.stderrExcerpt && (
-        <div className="space-y-1">
-          <span className="text-xs font-medium text-red-600 dark:text-red-400">stderr</span>
+        <details className="group space-y-1">
+          <summary className="text-xs font-medium text-red-600 dark:text-red-400 cursor-pointer list-none flex items-center gap-1 focus:outline-none select-none [&::-webkit-details-marker]:hidden">
+            <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+            stderr
+          </summary>
           <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">{run.stderrExcerpt}</pre>
-        </div>
+        </details>
       )}
 
       {/* stdout excerpt when no log is available */}
@@ -2712,14 +2718,17 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
             </div>
           )}
           {adapterInvokePayload.prompt !== undefined && (
-            <div>
-              <div className="text-xs text-muted-foreground mb-1">Prompt</div>
+            <details className="group">
+              <summary className="text-xs text-muted-foreground mb-1 cursor-pointer list-none flex items-center gap-1 focus:outline-none select-none [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90 -ml-1" />
+                Prompt
+              </summary>
               <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap">
                 {typeof adapterInvokePayload.prompt === "string"
                   ? redactHomePathUserSegments(adapterInvokePayload.prompt)
                   : JSON.stringify(redactHomePathUserSegmentsInValue(adapterInvokePayload.prompt), null, 2)}
               </pre>
-            </div>
+            </details>
           )}
           {adapterInvokePayload.context !== undefined && (
             <div>
@@ -2813,12 +2822,15 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
             </div>
           )}
           {run.stderrExcerpt && run.stderrExcerpt.trim() && (
-            <div>
-              <div className="text-xs text-red-700 dark:text-red-300 mb-1">stderr excerpt</div>
-              <pre className="bg-red-50 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap text-red-800 dark:text-red-100">
+            <details className="group">
+              <summary className="text-xs text-red-700 dark:text-red-300 mb-1 cursor-pointer list-none flex items-center gap-1 focus:outline-none select-none [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90 -ml-1" />
+                stderr excerpt
+              </summary>
+              <pre className="bg-red-50 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap text-red-800 dark:text-red-100 mt-1">
                 {redactHomePathUserSegments(run.stderrExcerpt)}
               </pre>
-            </div>
+            </details>
           )}
           {run.resultJson && (
             <div>

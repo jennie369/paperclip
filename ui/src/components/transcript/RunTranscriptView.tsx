@@ -12,6 +12,122 @@ import {
   Wrench,
 } from "lucide-react";
 
+/** Attempt to parse value as JSON; return parsed object or null */
+function tryParseJson(value: unknown): unknown | null {
+  if (typeof value === "object" && value !== null) return value;
+  if (typeof value === "string") {
+    try { return JSON.parse(value); } catch { return null; }
+  }
+  return null;
+}
+
+/** Syntax-highlight a JSON token stream with spans */
+function JsonTokens({ json }: { json: unknown }) {
+  const text = JSON.stringify(json, null, 2);
+  // Colorize keys, strings, numbers, booleans, null
+  const tokens = text.split(/("(?:[^"\\]|\\.)*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g);
+  return (
+    <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 11, lineHeight: 1.6 }}>
+      {tokens.map((token, i) => {
+        if (/^"/.test(token)) {
+          // key if followed by ':' in source (heuristic: check next non-whitespace char)
+          const isKey = i + 1 < tokens.length && tokens[i + 1]?.trimStart().startsWith(":");
+          return <span key={i} style={{ color: isKey ? "hsl(210 75% 55%)" : "hsl(140 55% 42%)" }}>{token}</span>;
+        }
+        if (token === "true" || token === "false") return <span key={i} style={{ color: "hsl(35 80% 52%)" }}>{token}</span>;
+        if (token === "null") return <span key={i} style={{ color: "hsl(0 60% 55%)" }}>{token}</span>;
+        if (/^-?\d/.test(token)) return <span key={i} style={{ color: "hsl(275 65% 55%)" }}>{token}</span>;
+        return <span key={i} style={{ color: "hsl(220 15% 55%)" }}>{token}</span>;
+      })}
+    </span>
+  );
+}
+
+/**
+ * Smart renderer for tool input/result payloads.
+ * - JSON → syntax-highlighted, collapsible if large
+ * - Plain text → human-readable pre block
+ */
+function SmartPayload({
+  value,
+  isError = false,
+  asMarkdown = false,
+}: {
+  value: unknown;
+  isError?: boolean;
+  asMarkdown?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const parsed = tryParseJson(value);
+  const isJson = parsed !== null;
+  const text = isJson ? JSON.stringify(parsed, null, 2) : String(value ?? "");
+  const lines = text.split("\n");
+  const isTall = lines.length > 14;
+  const errorColor = "text-red-700 dark:text-red-300";
+
+  if (!text.trim()) {
+    return <span className="text-[11px] italic text-muted-foreground">&lt;empty&gt;</span>;
+  }
+
+  if (isJson) {
+    return (
+      <div className="relative">
+        <div
+          className={cn(
+            "overflow-x-auto rounded-lg border border-border/40 bg-muted/30 px-3 py-2",
+            isTall && !expanded ? "max-h-[180px] overflow-y-hidden" : "",
+            isError ? errorColor : "",
+          )}
+        >
+          <pre className={cn("whitespace-pre-wrap break-words", isError ? errorColor : "")}>
+            <JsonTokens json={parsed} />
+          </pre>
+        </div>
+        {isTall && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {expanded ? "Show less ↑" : `Show all ${lines.length} lines ↓`}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (asMarkdown) {
+    return (
+      <MarkdownBody className={cn("text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", isError && errorColor)}>
+        {text}
+      </MarkdownBody>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <pre
+        className={cn(
+          "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px]",
+          isTall && !expanded ? "max-h-[180px] overflow-y-hidden" : "",
+          isError ? errorColor : "text-foreground/80",
+        )}
+      >
+        {text}
+      </pre>
+      {isTall && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {expanded ? "Show less ↑" : `Show all ${lines.length} lines ↓`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export type TranscriptMode = "nice" | "raw";
 export type TranscriptDensity = "comfortable" | "compact";
 
@@ -113,6 +229,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+/** Convert literal \r\n and \n escape sequences (stored as 4 chars) to real newlines */
+function cleanText(value: string): string {
+  return value
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n");
 }
 
 function truncate(value: string, max: number): string {
@@ -298,7 +422,12 @@ function parseSystemActivity(text: string): { activityId?: string; name: string;
 
 function shouldHideNiceModeStderr(text: string): boolean {
   const normalized = compactWhitespace(text).toLowerCase();
-  return normalized.startsWith("[paperclip] skipping saved session resume");
+  return (
+    normalized.startsWith("[paperclip] skipping saved session resume") ||
+    normalized.includes("node-pty") ||
+    normalized.includes("attachconsole failed") ||
+    normalized.includes("getconsoleprocesslist")
+  );
 }
 
 function groupCommandBlocks(blocks: TranscriptBlock[]): TranscriptBlock[] {
@@ -397,8 +526,9 @@ export function normalizeTranscript(entries: TranscriptEntry[], streaming: boole
 
     if (entry.kind === "assistant" || entry.kind === "user") {
       const isStreaming = streaming && entry.kind === "assistant" && entry.delta === true;
+      const cleanedText = cleanText(entry.text);
       if (previous?.type === "message" && previous.role === entry.kind) {
-        previous.text += previous.text.endsWith("\n") || entry.text.startsWith("\n") ? entry.text : `\n${entry.text}`;
+        previous.text += previous.text.endsWith("\n") || cleanedText.startsWith("\n") ? cleanedText : `\n${cleanedText}`;
         previous.ts = entry.ts;
         previous.streaming = previous.streaming || isStreaming;
       } else {
@@ -406,7 +536,7 @@ export function normalizeTranscript(entries: TranscriptEntry[], streaming: boole
           type: "message",
           role: entry.kind,
           ts: entry.ts,
-          text: entry.text,
+          text: cleanedText,
           streaming: isStreaming,
         });
       }
@@ -415,15 +545,16 @@ export function normalizeTranscript(entries: TranscriptEntry[], streaming: boole
 
     if (entry.kind === "thinking") {
       const isStreaming = streaming && entry.delta === true;
+      const cleanedText = cleanText(entry.text);
       if (previous?.type === "thinking") {
-        previous.text += previous.text.endsWith("\n") || entry.text.startsWith("\n") ? entry.text : `\n${entry.text}`;
+        previous.text += previous.text.endsWith("\n") || cleanedText.startsWith("\n") ? cleanedText : `\n${cleanedText}`;
         previous.ts = entry.ts;
         previous.streaming = previous.streaming || isStreaming;
       } else {
         blocks.push({
           type: "thinking",
           ts: entry.ts,
-          text: entry.text,
+          text: cleanedText,
           streaming: isStreaming,
         });
       }
@@ -589,14 +720,8 @@ function TranscriptMessageBlock({
   const isAssistant = block.role === "assistant";
   const compact = density === "compact";
 
-  return (
-    <div>
-      {!isAssistant && (
-        <div className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          <User className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
-          <span>User</span>
-        </div>
-      )}
+  const content = (
+    <>
       <MarkdownBody
         className={cn(
           "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
@@ -614,8 +739,25 @@ function TranscriptMessageBlock({
           Streaming
         </div>
       )}
-    </div>
+    </>
   );
+
+  if (!isAssistant) {
+    return (
+      <details className="group" open>
+        <summary className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground cursor-pointer list-none select-none focus:outline-none [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90 text-muted-foreground/70" />
+          <User className={compact ? "h-3.5 w-3.5 -ml-1" : "h-4 w-4 -ml-1"} />
+          <span>User</span>
+        </summary>
+        <div className="pl-6">
+          {content}
+        </div>
+      </details>
+    );
+  }
+
+  return <div>{content}</div>;
 }
 
 function TranscriptThinkingBlock({
@@ -717,23 +859,18 @@ function TranscriptToolCard({
           <div className={detailsClass}>
             <div className={cn("grid gap-3", compact ? "grid-cols-1" : "lg:grid-cols-2")}>
               <div>
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                   Input
                 </div>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/80">
-                  {formatToolPayload(block.input) || "<empty>"}
-                </pre>
+                <SmartPayload value={block.input} />
               </div>
               <div>
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                   Result
                 </div>
-                <pre className={cn(
-                  "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px]",
-                  block.status === "error" ? "text-red-700 dark:text-red-300" : "text-foreground/80",
-                )}>
-                  {block.result ? formatToolPayload(block.result) : "Waiting for result..."}
-                </pre>
+                {block.result
+                  ? <SmartPayload value={block.result} isError={block.isError} asMarkdown={!block.isError} />
+                  : <span className="text-[11px] italic text-muted-foreground">Waiting for result…</span>}
               </div>
             </div>
           </div>
@@ -858,12 +995,11 @@ function TranscriptCommandGroup({
                 </span>
               </div>
               {item.result && (
-                <pre className={cn(
-                  "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px]",
-                  item.status === "error" ? "text-red-700 dark:text-red-300" : "text-foreground/80",
-                )}>
-                  {formatToolPayload(item.result)}
-                </pre>
+                <SmartPayload
+                  value={item.result}
+                  isError={item.isError}
+                  asMarkdown={!item.isError}
+                />
               )}
             </div>
           ))}
@@ -981,20 +1117,13 @@ function TranscriptToolGroup({
               </div>
               <div className={cn("grid gap-2 pl-7", compact ? "grid-cols-1" : "lg:grid-cols-2")}>
                 <div>
-                  <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Input</div>
-                  <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-foreground/80">
-                    {formatToolPayload(item.input) || "<empty>"}
-                  </pre>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Input</div>
+                  <SmartPayload value={item.input} />
                 </div>
                 {item.result && (
                   <div>
-                    <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Result</div>
-                    <pre className={cn(
-                      "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px]",
-                      item.status === "error" ? "text-red-700 dark:text-red-300" : "text-foreground/80",
-                    )}>
-                      {formatToolPayload(item.result)}
-                    </pre>
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Result</div>
+                    <SmartPayload value={item.result} isError={item.isError} asMarkdown={!item.isError} />
                   </div>
                 )}
               </div>

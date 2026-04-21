@@ -22,10 +22,24 @@ class MessageBus extends EventEmitter {
 
     const sessionKey = `${msg.channel}:${msg.chatId}:${msg.senderId}`;
 
+    // Guard: skip DB persist if channel_instances row doesn't exist.
+    // Avoids FK violation flood that exhausts the PgBouncer connection pool.
+    const { data: channelRow } = await supabase
+      .from('channel_instances')
+      .select('name')
+      .eq('name', msg.channel)
+      .maybeSingle();
+
+    if (!channelRow) {
+      // Channel not registered — emit locally for in-memory routing but don't persist.
+      this.emit('inbound', msg);
+      return null;
+    }
+
     const { data, error } = await supabase.from('channel_pending_messages').insert({
       channel_name: msg.channel,
       thread_id: msg.chatId,
-      thread_type: msg.peerKind === 'group' ? 'group' : 'dm',
+      thread_type: msg.peerKind === 'group' ? 'group' : msg.peerKind === 'comment' ? 'comment' : 'dm',
       from_uid: msg.senderId,
       sender_name: msg.senderName,
       message_id: msg.id,
@@ -42,6 +56,8 @@ class MessageBus extends EventEmitter {
 
     if (error) {
       console.error('[Bus] Failed to persist inbound message:', error.message);
+      // Still emit locally so in-memory consumers aren't starved.
+      this.emit('inbound', msg);
       return null;
     }
 

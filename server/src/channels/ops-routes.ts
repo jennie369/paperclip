@@ -581,6 +581,7 @@ router.post('/content-pipeline/generate', async (req, res) => {
     const {
       content_type,
       topic,
+      title, // optional document title (separate from topic/brief)
       brand_voice,
       pillar,
       email_day,
@@ -597,6 +598,29 @@ router.post('/content-pipeline/generate', async (req, res) => {
       posted_time_slot,
       scheduled_at,
       publish_mode,
+      // 2026-04-19 — DOC-* output format override (markdown/html/both).
+      // Batch processor reads input_params.output_format (lowercase with underscore).
+      output_format,
+      // 2026-04-19 (Plan v2 Phase B) — Email marketing schema passthrough.
+      // Khi content_type='email' hoặc DOC-ONB-*/DOC-AFF-*/DOC-CS-011, UI gửi
+      // các field này để populate cc_email_campaigns khi Notion Approved.
+      from_name,
+      from_email,
+      email_template,
+      audience_type,
+      reply_to,
+      preview_text,
+      campaign_type,
+      // 2026-04-19 Path A — Drip step override. UI set khi Jennie tick "Override drip step".
+      // Batch processor lưu vào cc_scripts.metadata.drip_step_id_override.
+      // Notion webhook khi Approve sẽ auto-link cc_email_campaigns vào step.
+      drip_step_id_override,
+      // 2026-04-19 V2 — Sequence id (meta-data để UI trace lại + Notion tag).
+      drip_sequence_id,
+      // 2026-04-19 V2 — Per-step extra prompt. UI gõ textarea → batch_processor append
+      // vào user prompt. Fallback cascade: extra_prompt → step.generation_hint (từ DB)
+      // → DOC_ONB_DAY_HINTS (hardcoded baseline trong batch_processor).
+      extra_prompt,
     } = req.body || {};
     const ct: string = content_type || 'social_post';
     // For DOC-* rows we want job_type = 'doc_tai_lieu' so batch_processor knows
@@ -622,6 +646,8 @@ router.post('/content-pipeline/generate', async (req, res) => {
     if (posted_time_slot) inputParams.posted_time_slot = posted_time_slot;
     if (scheduled_at) inputParams.scheduled_at = scheduled_at;
     if (publish_mode) inputParams.publish_mode = publish_mode;
+    if (title) inputParams.title = title;
+    if (output_format) inputParams.output_format = output_format;
     if (email_day !== undefined && email_day !== null && email_day !== '') {
       inputParams.email_day = email_day;
     }
@@ -630,12 +656,37 @@ router.post('/content-pipeline/generate', async (req, res) => {
     } else if (ct.startsWith('DOC-')) {
       inputParams.sop_id = ct; // DOC-* content_type doubles as SOP id
     }
-    const { data, error } = await supabase.from('cc_generation_jobs').insert({
+    // 2026-04-19 — Email schema fields (Phase B of plan v2)
+    if (from_name) inputParams.from_name = from_name;
+    if (from_email) inputParams.from_email = from_email;
+    if (email_template) inputParams.email_template = email_template;
+    if (audience_type) inputParams.audience_type = audience_type;
+    if (reply_to) inputParams.reply_to = reply_to;
+    if (preview_text) inputParams.preview_text = preview_text;
+    if (campaign_type) inputParams.campaign_type = campaign_type;
+    if (drip_step_id_override) inputParams.drip_step_id_override = drip_step_id_override;
+    if (drip_sequence_id) inputParams.drip_sequence_id = drip_sequence_id;
+    if (extra_prompt && typeof extra_prompt === 'string' && extra_prompt.trim().length > 0) {
+      inputParams.extra_prompt = extra_prompt.trim();
+    }
+    // 2026-04-19 FIX — KHÔNG JSON.stringify inputParams vì input_params là jsonb.
+    // Supabase-js tự serialize object. Double-encode trước đây khiến batch processor
+    // phải json.loads() lại, và SQL query phải unescape `"{\"key\":...}"` làm lộn xộn.
+    //
+    // 2026-04-19 Phase 5 — ALSO set top-level columns (track/pillar/persona/writing_mode)
+    // vì auto_save_to_cc_scripts ưu tiên đọc job.get("track") trước fallback input_params.
+    // Nếu bỏ, cc_scripts.pillar luôn default "lifestyle" mặc dù UI chọn khác.
+    const jobInsert: Record<string, unknown> = {
       job_type: jobType,
       content_type: ct,
       status: 'queued',
-      input_params: JSON.stringify(inputParams),
-    }).select('*').single();
+      input_params: inputParams,
+    };
+    if (track) jobInsert.track = track;
+    if (pillar) jobInsert.pillar = pillar;
+    if (persona) jobInsert.persona = persona;
+    if (writing_mode) jobInsert.writing_mode = writing_mode;
+    const { data, error } = await supabase.from('cc_generation_jobs').insert(jobInsert).select('*').single();
     if (error) throw error;
     res.json(data);
   } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -1864,6 +1915,138 @@ router.get('/content-pipeline/jobs/recent', async (req, res) => {
     res.json({ jobs });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Lỗi tải recent jobs' });
+  }
+});
+
+// 2026-04-19 Cách B — Drip sequence editor: UI load existing sequences + steps,
+// generate content override cho step, link campaign_id vào step.
+
+// GET /email/sequences — list ALL sequences với steps (cho UI dropdown)
+// 2026-04-19: Removed is_active filter — DOC-ONB sequences hiện inactive (not yet live)
+// nhưng UI generator vẫn cần pick để bind. Trả include_inactive qua query nếu cần filter.
+// Thêm generation_hint vào steps để UI prefill textarea override.
+router.get('/email/sequences', async (req, res) => {
+  try {
+    const activeOnly = req.query.active === '1';
+    let seqQ = supabase
+      .from('email_sequences')
+      .select('id, name, description, segment, trigger_event, is_active')
+      .order('name');
+    if (activeOnly) seqQ = seqQ.eq('is_active', true);
+    const { data: sequences, error: seqErr } = await seqQ;
+    if (seqErr) throw seqErr;
+
+    const { data: steps, error: stepsErr } = await supabase
+      .from('email_sequence_steps')
+      .select('id, sequence_id, step_order, delay_minutes, channel, template, subject_override, campaign_id_override, is_active, generation_hint')
+      .order('step_order');
+    if (stepsErr) throw stepsErr;
+
+    // Group steps by sequence
+    const result = (sequences || []).map((seq: any) => ({
+      ...seq,
+      steps: (steps || []).filter((s: any) => s.sequence_id === seq.id),
+    }));
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /email/steps/:stepId/hint — Save generation_hint cho step (V2 "Save hint for next time").
+// Body: { generation_hint: string | null }. null = clear → fallback về DOC_ONB_DAY_HINTS default.
+router.patch('/email/steps/:stepId/hint', async (req, res) => {
+  try {
+    const { generation_hint } = req.body || {};
+    if (generation_hint !== null && typeof generation_hint !== 'string') {
+      return res.status(400).json({ error: 'generation_hint must be string or null' });
+    }
+    const { data, error } = await supabase
+      .from('email_sequence_steps')
+      .update({ generation_hint: generation_hint || null, updated_at: new Date().toISOString() })
+      .eq('id', req.params.stepId)
+      .select('id, template, generation_hint')
+      .single();
+    if (error) throw error;
+    res.json({ ok: true, step: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /email/steps/:stepId/link-campaign — set step.campaign_id_override
+// Body: { campaign_id: uuid | null }. null = clear override → fallback hardcode.
+router.post('/email/steps/:stepId/link-campaign', async (req, res) => {
+  try {
+    const { campaign_id } = req.body || {};
+    const { data, error } = await supabase
+      .from('email_sequence_steps')
+      .update({ campaign_id_override: campaign_id || null })
+      .eq('id', req.params.stepId)
+      .select('id, template, campaign_id_override')
+      .single();
+    if (error) throw error;
+    res.json({ ok: true, step: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /email/steps/:stepId/save-campaign — one-shot: tạo cc_email_campaigns
+// từ HTML body + subject + sender, set status=approved, link ngay vào step.
+// Dành cho drip override: bypass Notion, chị generate xong UI gọi trực tiếp.
+router.post('/email/steps/:stepId/save-campaign', async (req, res) => {
+  try {
+    const {
+      html_body, subject, preview_text,
+      from_name, from_email, reply_to,
+      template_key, track,
+    } = req.body || {};
+    if (!html_body || !subject) {
+      return res.status(400).json({ error: 'html_body + subject required' });
+    }
+    // Get step → extract sequence segment để audience_type khớp
+    const { data: step, error: stepErr } = await supabase
+      .from('email_sequence_steps')
+      .select('id, template, sequence_id, sequence:email_sequences(segment)')
+      .eq('id', req.params.stepId)
+      .single();
+    if (stepErr || !step) return res.status(404).json({ error: 'step not found' });
+
+    const audienceType = (step as any).sequence?.segment ?? 'all';
+
+    // Insert campaign (status=approved ngay để trigger enqueue nếu có users)
+    const { data: campaign, error: campErr } = await supabase
+      .from('cc_email_campaigns')
+      .insert({
+        template_key: template_key || step.template,
+        sop_id: `drip_override:${step.id}`,
+        from_name: from_name || 'GEM',
+        from_email: from_email || 'hello@gemral.com',
+        reply_to: reply_to || from_email || 'hello@gemral.com',
+        subject,
+        preview_text: preview_text || null,
+        html_body,
+        campaign_type: 'recurring',
+        track: track || 'wealth',
+        audience_type: audienceType,
+        status: 'approved',
+        metadata: { source: 'drip_override_ui', step_id: step.id },
+      })
+      .select('id')
+      .single();
+    if (campErr) return res.status(500).json({ error: `insert campaign: ${campErr.message}` });
+
+    // Link step → campaign
+    const { error: linkErr } = await supabase
+      .from('email_sequence_steps')
+      .update({ campaign_id_override: campaign.id })
+      .eq('id', req.params.stepId);
+    if (linkErr) return res.status(500).json({ error: `link step: ${linkErr.message}` });
+
+    res.json({ ok: true, campaign_id: campaign.id, step_id: req.params.stepId, audience_type: audienceType });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

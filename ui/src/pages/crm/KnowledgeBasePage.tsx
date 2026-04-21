@@ -121,7 +121,7 @@ export function KnowledgeBasePage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Card className="p-4 text-center"><div className="text-2xl font-bold">{stats.collections}</div><div className="text-xs text-muted-foreground">Bộ sưu tập</div></Card>
           <Card className="p-4 text-center"><div className="text-2xl font-bold">{stats.documents}</div><div className="text-xs text-muted-foreground">Tài liệu</div></Card>
           <Card className="p-4 text-center"><div className="text-2xl font-bold">{stats.chunks}</div><div className="text-xs text-muted-foreground">Chunks</div></Card>

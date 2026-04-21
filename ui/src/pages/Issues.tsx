@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useState } from "react";
 import { useLocation, useSearchParams } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
@@ -22,6 +22,16 @@ export function Issues() {
 
   const initialSearch = searchParams.get("q") ?? "";
   const participantAgentId = searchParams.get("participantAgentId") ?? undefined;
+  // 2026-04-17 — include hidden issues (e.g. heartbeat threads) toggle.
+  // Use React state (NOT derived from searchParams) because the router hook
+  // doesn't re-subscribe to window.history.replaceState — setting ?hidden=1
+  // via replaceState didn't trigger a re-render → button looked dead. State
+  // is seeded from URL once on mount so deep-links still work.
+  const [includeHidden, setIncludeHidden] = useState<boolean>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("hidden");
+    return raw === "1" || raw === "true";
+  });
   const handleSearchChange = useCallback((search: string) => {
     const trimmedSearch = search.trim();
     const currentSearch = new URLSearchParams(window.location.search).get("q") ?? "";
@@ -80,8 +90,12 @@ export function Issues() {
   }, [setBreadcrumbs]);
 
   const { data: issues, isLoading, error } = useQuery({
-    queryKey: [...queryKeys.issues.list(selectedCompanyId!), "participant-agent", participantAgentId ?? "__all__"],
-    queryFn: () => issuesApi.list(selectedCompanyId!, { participantAgentId }),
+    queryKey: [
+      ...queryKeys.issues.list(selectedCompanyId!),
+      "participant-agent", participantAgentId ?? "__all__",
+      "hidden", includeHidden ? "1" : "0",
+    ],
+    queryFn: () => issuesApi.list(selectedCompanyId!, { participantAgentId, includeHidden }),
     enabled: !!selectedCompanyId,
   });
 
@@ -97,21 +111,51 @@ export function Issues() {
     return <EmptyState icon={CircleDot} message="Select a company to view issues." />;
   }
 
+  // Flip React state AND sync URL so deep-link still works. State change
+  // re-runs the query (includeHidden is in queryKey).
+  const toggleIncludeHidden = () => {
+    const next = !includeHidden;
+    setIncludeHidden(next);
+    const url = new URL(window.location.href);
+    if (next) {
+      url.searchParams.set("hidden", "1");
+    } else {
+      url.searchParams.delete("hidden");
+    }
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+
   return (
-    <IssuesList
-      issues={issues ?? []}
-      isLoading={isLoading}
-      error={error as Error | null}
-      agents={agents}
-      projects={projects}
-      liveIssueIds={liveIssueIds}
-      viewStateKey="paperclip:issues-view"
-      issueLinkState={issueLinkState}
-      initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
-      initialSearch={initialSearch}
-      onSearchChange={handleSearchChange}
-      onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
-      searchFilters={participantAgentId ? { participantAgentId } : undefined}
-    />
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 px-4 pt-3">
+        <button
+          type="button"
+          onClick={toggleIncludeHidden}
+          className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+            includeHidden
+              ? "bg-gold/15 border-gold/40 text-gold"
+              : "bg-transparent border-border text-txt-3 hover:text-txt hover:border-border-2"
+          }`}
+          title="Bật để xem issues ẩn (Heartbeat Threads, system-generated)"
+        >
+          {includeHidden ? "✓ Đang hiện issues ẩn" : "Hiện issues ẩn (Heartbeat Threads)"}
+        </button>
+      </div>
+      <IssuesList
+        issues={issues ?? []}
+        isLoading={isLoading}
+        error={error as Error | null}
+        agents={agents}
+        projects={projects}
+        liveIssueIds={liveIssueIds}
+        viewStateKey="paperclip:issues-view"
+        issueLinkState={issueLinkState}
+        initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
+        initialSearch={initialSearch}
+        onSearchChange={handleSearchChange}
+        onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
+        searchFilters={participantAgentId ? { participantAgentId } : undefined}
+      />
+    </div>
   );
 }

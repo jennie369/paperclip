@@ -8,7 +8,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'gold' | 'outline' | 'ghost' | 'danger';
   size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
-  icon?: React.ElementType;
+  icon?: React.ElementType<any>;
   iconPosition?: 'left' | 'right';
   fullWidth?: boolean;
   tooltip?: string;

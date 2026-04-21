@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { NavLink, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Plus } from "lucide-react";
@@ -62,11 +62,11 @@ function SortableProjectItem({
   return (
     <div
       ref={setNodeRef}
-      style={{
+      {...{ style: {
         transform: CSS.Transform.toString(transform),
         transition,
         zIndex: isDragging ? 10 : undefined,
-      }}
+      } }}
       className={cn(isDragging && "opacity-80")}
       {...attributes}
       {...listeners}
@@ -86,7 +86,7 @@ function SortableProjectItem({
         >
           <span
             className="shrink-0 h-3.5 w-3.5 rounded-sm"
-            style={{ backgroundColor: project.color ?? "#6366f1" }}
+            {...{ style: { backgroundColor: project.color ?? "#6366f1" } }}
           />
           <span className="flex-1 truncate">{project.name}</span>
           {project.pauseReason === "budget" ? <BudgetSidebarMarker title="Project paused by budget" /> : null}
@@ -115,7 +115,7 @@ function SortableProjectItem({
   );
 }
 
-export function SidebarProjects() {
+export function SidebarProjects({ label = "Projects", onLabelChange }: { label?: string, onLabelChange?: (label: string) => void }) {
   const [open, setOpen] = useState(true);
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { openNewProject } = useDialog();
@@ -204,6 +204,7 @@ export function SidebarProjects() {
 
       <CollapsibleContent>
         <DndContext
+          id="projects-context"
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}

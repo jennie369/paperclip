@@ -71,7 +71,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function isSafeMarkdownLinkUrl(url: string): boolean {
+function isSafeMarkdownLinkUrl(url: string | null | undefined): boolean {
+  if (!url) return true;
   const trimmed = url.trim();
   if (!trimmed) return true;
   return !/^(javascript|data|vbscript):/i.test(trimmed);
@@ -301,9 +302,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   }, [hasImageUpload]);
 
   useEffect(() => {
-    if (value !== latestValueRef.current) {
-      ref.current?.setMarkdown(value);
-      latestValueRef.current = value;
+    const safeValue = value ?? "";
+    if (safeValue !== latestValueRef.current) {
+      ref.current?.setMarkdown(safeValue);
+      latestValueRef.current = safeValue;
     }
   }, [value]);
 
@@ -544,7 +546,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     >
       <MDXEditor
         ref={ref}
-        markdown={value}
+        markdown={value ?? ""}
         placeholder={placeholder}
         onChange={(next) => {
           latestValueRef.current = next;

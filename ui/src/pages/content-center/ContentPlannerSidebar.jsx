@@ -4,6 +4,7 @@ import {
   Calendar, ChevronLeft, ChevronRight, Upload, Download,
   Copy, X, Plus, Clock, Trash2, FileText, Mail, Newspaper,
   Globe, Video, Hash, Pencil, Check, AlertTriangle, Loader2,
+  Play, Square,
 } from 'lucide-react';
 import { plannerService } from '@gem/services';
 
@@ -263,8 +264,42 @@ export default function ContentPlannerSidebar({
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [hoveredBrief, setHoveredBrief] = useState(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
   const sidebarRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  // Poll batch status every 5s
+  useEffect(() => {
+    let mounted = true;
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/ops/content-pipeline/batch/status');
+        if (r.ok && mounted) {
+          const data = await r.json();
+          setBatchRunning(data.running);
+        }
+      } catch {}
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => { mounted = false; clearInterval(t); };
+  }, []);
+
+  const handleBatchToggle = useCallback(async () => {
+    setBatchLoading(true);
+    try {
+      const endpoint = batchRunning
+        ? '/api/ops/content-pipeline/batch/stop'
+        : '/api/ops/content-pipeline/batch/start';
+      const r = await fetch(endpoint, { method: 'POST' });
+      if (r.ok) {
+        const data = await r.json();
+        setBatchRunning(data.running);
+      }
+    } catch {}
+    setBatchLoading(false);
+  }, [batchRunning]);
 
   // Find the active tooltip item
   const tooltipItem = useMemo(() => {
@@ -650,6 +685,25 @@ export default function ContentPlannerSidebar({
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-txt-3">{monthEventCount} mục trong tháng</span>
               <div className="flex items-center gap-1">
+                <button
+                  onClick={handleBatchToggle}
+                  disabled={batchLoading}
+                  title={batchRunning ? 'Dừng Batch Processor' : 'Chạy Batch Processor'}
+                  className={[
+                    'flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold transition-all',
+                    batchLoading ? 'opacity-50 cursor-wait' :
+                    batchRunning
+                      ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20'
+                      : 'bg-emerald/10 text-emerald hover:bg-emerald/20 border border-emerald/20',
+                  ].join(' ')}
+                >
+                  {batchLoading
+                    ? <Loader2 size={10} className="animate-spin" />
+                    : batchRunning
+                      ? <Square size={10} />
+                      : <Play size={10} />}
+                  {batchRunning ? 'Stop' : 'Batch'}
+                </button>
                 <button onClick={handleImportClick} className="p-1 rounded hover:bg-purple/10 text-txt-3 hover:text-purple transition-colors" title="Import (.md, .html)">
                   <Upload size={12} />
                 </button>

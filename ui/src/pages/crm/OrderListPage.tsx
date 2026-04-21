@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { crmApi } from "@/api/crm";
 import { SimpleModal } from "./components/SimpleModal";
+import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 
 function formatVND(n: number): string {
   return new Intl.NumberFormat('vi-VN').format(n || 0) + '₫';
@@ -76,6 +77,12 @@ export function OrderListPage() {
     queryKey: ['crm', 'order-stats'],
     queryFn: () => crmApi.getOrderStats(),
     staleTime: 30_000,
+  });
+
+  // Live: auto-refresh khi crm_orders hoặc shopify_orders thay đổi (new order from webhook, status change)
+  useLiveInvalidate({
+    tables: ['crm_orders', 'shopify_orders'],
+    queryKeys: [['crm', 'orders'], ['crm', 'order-stats'], ['crm', 'stats']],
   });
 
   const selectedProduct = PRODUCTS.find(p => p.value === form.product);

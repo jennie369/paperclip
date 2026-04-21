@@ -26,17 +26,19 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response.ok && url.origin === self.location.origin) {
+        if (response.status === 200 && url.origin === self.location.origin) {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          caches.open(CACHE_NAME)
+            .then((cache) => cache.put(request, clone))
+            .catch(console.error); // Catch any caching errors (like quota exceeded)
         }
         return response;
       })
       .catch(() => {
         if (request.mode === "navigate") {
-          return caches.match("/") || new Response("Offline", { status: 503 });
+          return caches.match("/").then(res => res || new Response("Offline", { status: 503 }));
         }
-        return caches.match(request);
+        return caches.match(request).then(res => res || Response.error());
       })
   );
 });
