@@ -167,6 +167,37 @@ const TOOLS = [
       required: ['query'],
     },
   },
+  // ── Delegation tools (feature-flagged server-side via PAPERCLIP_DELEGATION_ENABLED) ──
+  // Caller context is derived by the server from x-paperclip-run-id header,
+  // which the handler reads from PAPERCLIP_RUN_ID env var inherited from the
+  // Claude CLI → heartbeat spawn chain (see buildPaperclipEnv in adapter-utils).
+  {
+    name: 'delegate_to_agent',
+    description: 'Giao một subtask cho agent khác (CTO/CMO/CSM…) và chạy song song. Agent mục tiêu sẽ tỉnh dậy qua heartbeat và thực thi. Trả về traceId để dùng với await_delegation. Khi feature flag tắt server trả 503.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        target_agent_id: { type: 'string', description: 'UUID của agent mục tiêu (tra từ agents table của company).' },
+        task: { type: 'string', description: 'Mô tả rõ ràng công việc cần agent mục tiêu làm. Bao gồm context + tiêu chí hoàn thành.' },
+        turn_mode: { type: 'string', description: '"ask" | "do" | "delegate". Mặc định "do".' },
+        timeout_ms: { type: 'number', description: 'Thời gian tối đa chờ, tính bằng ms. Default 300000 (5 phút), max 1800000 (30 phút).' },
+        caller_issue_id: { type: 'string', description: 'UUID issue cha (optional). Dùng cho cycle detection + depth cap.' },
+      },
+      required: ['target_agent_id', 'task'],
+    },
+  },
+  {
+    name: 'await_delegation',
+    description: 'Chờ một hoặc nhiều delegation hoàn thành và trả về kết quả gộp. Blocking poll tối đa timeout_ms, auto-cancel pending khi hết giờ.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        trace_ids: { type: 'array', items: { type: 'string' }, description: 'Danh sách traceId từ delegate_to_agent.' },
+        timeout_ms: { type: 'number', description: 'Thời gian tối đa chờ. Default 300000.' },
+      },
+      required: ['trace_ids'],
+    },
+  },
 ];
 
 // ─── Tool handlers ───
@@ -577,6 +608,103 @@ async function handleSearchKnowledge(args: any): Promise<string> {
   });
 }
 
+// ─── Delegation handlers (HTTP callback to Paperclip server) ───
+//
+// These run inside the MCP subprocess spawned by Claude CLI. They do NOT
+// have in-process access to the service or Drizzle DB — they HTTP-call
+// back to the parent Paperclip server, which enforces auth/flag/company
+// isolation via the route.
+//
+// Required env (set by claude-local adapter, inherited through Claude CLI):
+//   PAPERCLIP_API_URL    http://localhost:3100 (or configured host)
+//   PAPERCLIP_RUN_ID     heartbeat run UUID → becomes x-paperclip-run-id
+//
+// If PAPERCLIP_RUN_ID is missing, the server can't resolve the caller
+// identity and returns 401. That's the correct behavior.
+
+function paperclipApiUrl(): string {
+  return process.env.PAPERCLIP_API_URL || 'http://127.0.0.1:3100';
+}
+
+function paperclipRunIdHeader(): Record<string, string> {
+  const runId = process.env.PAPERCLIP_RUN_ID;
+  return runId ? { 'x-paperclip-run-id': runId } : {};
+}
+
+async function callPaperclipJson(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const url = `${paperclipApiUrl()}${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...paperclipRunIdHeader(),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let parsed: unknown = null;
+  try {
+    parsed = await res.json();
+  } catch {
+    parsed = null;
+  }
+  return { status: res.status, body: parsed };
+}
+
+async function handleDelegateToAgent(args: any): Promise<string> {
+  const body: Record<string, unknown> = {
+    targetAgentId: args.target_agent_id,
+    task: args.task,
+  };
+  if (args.turn_mode) body.turnMode = args.turn_mode;
+  if (args.timeout_ms) body.timeoutMs = args.timeout_ms;
+  if (args.caller_issue_id) body.callerIssueId = args.caller_issue_id;
+
+  const { status, body: resBody } = await callPaperclipJson(
+    'POST',
+    '/api/delegations',
+    body,
+  );
+  if (status === 503) {
+    return JSON.stringify({ success: false, error: 'Feature delegation đang tắt (PAPERCLIP_DELEGATION_ENABLED=false).' });
+  }
+  if (status === 401) {
+    return JSON.stringify({ success: false, error: 'Không xác thực được run id — MCP subprocess thiếu PAPERCLIP_RUN_ID env var.' });
+  }
+  if (status >= 400) {
+    const err = (resBody as { error?: string } | null)?.error ?? `HTTP ${status}`;
+    return JSON.stringify({ success: false, error: err });
+  }
+  return JSON.stringify({ success: true, ...(resBody as object) });
+}
+
+async function handleAwaitDelegation(args: any): Promise<string> {
+  const body: Record<string, unknown> = {
+    traceIds: Array.isArray(args.trace_ids) ? args.trace_ids : [],
+  };
+  if (args.timeout_ms) body.timeoutMs = args.timeout_ms;
+  if (body.traceIds instanceof Array && (body.traceIds as unknown[]).length === 0) {
+    return JSON.stringify({ success: false, error: 'trace_ids rỗng.' });
+  }
+
+  const { status, body: resBody } = await callPaperclipJson(
+    'POST',
+    '/api/delegations/await',
+    body,
+  );
+  if (status === 503) {
+    return JSON.stringify({ success: false, error: 'Feature delegation đang tắt.' });
+  }
+  if (status >= 400) {
+    const err = (resBody as { error?: string } | null)?.error ?? `HTTP ${status}`;
+    return JSON.stringify({ success: false, error: err });
+  }
+  return JSON.stringify({ success: true, ...(resBody as object) });
+}
+
 // ─── Helpers ───
 
 function formatVND(n: number): string {
@@ -636,6 +764,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case 'search_knowledge':
         result = await handleSearchKnowledge(args);
+        break;
+      case 'delegate_to_agent':
+        result = await handleDelegateToAgent(args);
+        break;
+      case 'await_delegation':
+        result = await handleAwaitDelegation(args);
         break;
       default:
         result = JSON.stringify({ error: `Tool không tồn tại: ${name}` });
