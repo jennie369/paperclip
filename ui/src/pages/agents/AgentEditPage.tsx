@@ -25,7 +25,7 @@ import {
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 
-const PROVIDERS: AgentProvider[] = ["claude", "gemini", "openrouter", "ollama"];
+const PROVIDERS: AgentProvider[] = ["claude", "gemini", "openrouter"];
 
 export function AgentEditPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -102,7 +102,7 @@ export function AgentEditPage() {
         session_timeout: agent.session_timeout ?? 3600,
         enabled: agent.enabled ?? true,
         chrome: (agent as any).chrome === true,
-        skip_permissions: (agent as any).skip_permissions === true || (agent as any).skip_permissions === undefined,
+        skip_permissions: (agent as any).skip_permissions === true,
         can_create_agents: (agent as any).can_create_agents === true,
         extra_args: Array.isArray((agent as any).extra_args) ? (agent as any).extra_args.join(", ") : ((agent as any).extra_args || ""),
         command: (agent as any).command || "",
@@ -137,6 +137,8 @@ export function AgentEditPage() {
     const models = PROVIDER_MODELS[provider] || [];
     updateField("provider", provider);
     updateField("model", models[0] || "");
+    // Auto-set command from provider (no need for separate Command field)
+    updateField("command", provider === "gemini" ? "gemini" : provider === "openrouter" ? "" : "claude");
   }
 
   if (!isCreate && isLoading) {
@@ -159,7 +161,7 @@ export function AgentEditPage() {
             variant="outline"
             size="sm"
             className="mt-3"
-            onClick={() => navigate("/agents-config")}
+            onClick={() => navigate("/ops/sop-engine")}
           >
             Quay lại
           </Button>
@@ -174,7 +176,7 @@ export function AgentEditPage() {
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/agents-config")}>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/ops/sop-engine")}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
@@ -318,6 +320,17 @@ export function AgentEditPage() {
             <span>2.0 (Sáng tạo)</span>
           </div>
         </Field>
+        <Field label="Model">
+          <select
+            className="input-field"
+            value={form.model}
+            onChange={(e) => updateField("model", e.target.value)}
+          >
+            {availableModels.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Max tokens">
           <input
             type="number"
@@ -330,111 +343,7 @@ export function AgentEditPage() {
         </Field>
       </FormSection>
 
-      <FormSection title="Prompt & Persona">
-        <Field label="System prompt" hint="Hướng dẫn chính cho agent. Nếu trống sẽ dùng persona_file hoặc fallback.">
-          <textarea
-            className="input-field min-h-[120px] resize-y font-mono text-xs"
-            placeholder="Bạn là trợ lý chăm sóc khách hàng..."
-            value={form.system_prompt}
-            onChange={(e) => updateField("system_prompt", e.target.value)}
-            rows={6}
-          />
-        </Field>
-        <Field label="Persona file" hint="Tên file trong thư mục agents/{slug}/ (vd: AGENTS.md)">
-          <input
-            className="input-field"
-            placeholder="vd: AGENTS.md"
-            value={form.persona_file}
-            onChange={(e) => updateField("persona_file", e.target.value)}
-          />
-        </Field>
-        <Field label="Tin nhắn fallback" hint="Hiển thị khi agent gặp lỗi">
-          <input
-            className="input-field"
-            value={form.fallback_message}
-            onChange={(e) => updateField("fallback_message", e.target.value)}
-          />
-        </Field>
-      </FormSection>
-
-      <FormSection title="Phiên hội thoại">
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Giới hạn lịch sử">
-            <input
-              type="number"
-              className="input-field"
-              value={form.history_limit}
-              onChange={(e) => updateField("history_limit", Number(e.target.value))}
-              min={1}
-              max={500}
-            />
-            <p className="text-[10px] text-muted-foreground mt-1">
-              Số tin nhắn giữ cho ngữ cảnh
-            </p>
-          </Field>
-          <Field label="Thời gian hết phiên (giây)">
-            <input
-              type="number"
-              className="input-field"
-              value={form.session_timeout}
-              onChange={(e) => updateField("session_timeout", Number(e.target.value))}
-              min={60}
-            />
-            <p className="text-[10px] text-muted-foreground mt-1">
-              Mặc định: 3600 (1 giờ)
-            </p>
-          </Field>
-        </div>
-      </FormSection>
-
       <FormSection title="Permissions & Configuration">
-        <Field label="Command" hint="VD: claude, ollama. Để trống mặc định dùng claude.">
-          <input
-            className="input-field"
-            placeholder={form.provider === "ollama" ? "ollama" : "claude"}
-            value={form.command || ""}
-            onChange={(e) => updateField("command", e.target.value)}
-          />
-          {form.provider === "ollama" && (
-            <div className="mt-2 p-2.5 rounded-md bg-muted/50 border border-border">
-              <p className="text-[10px] text-muted-foreground mb-2 font-medium">⚡ Preset — bấm để tự điền Command + Extra args + Model:</p>
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  { label: "gemma4:2b", model: "gemma4:2b" },
-                  { label: "gemma4:e2b", model: "gemma4:e2b" },
-                  { label: "gemma4:e4b", model: "gemma4:e4b" },
-                  { label: "gemma4:26b", model: "gemma4:26b" },
-                  { label: "gemma4:31b", model: "gemma4:31b" },
-                ].map((preset) => (
-                  <button
-                    key={preset.model}
-                    type="button"
-                    className="rounded border border-border bg-background hover:bg-accent px-2.5 py-1 text-xs text-foreground transition-colors font-mono"
-                    onClick={() => {
-                      updateField("command", "ollama");
-                      updateField("extra_args", "launch, claude");
-                      updateField("model", preset.model);
-                    }}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10px] text-muted-foreground mt-1.5">→ chạy: <code className="font-mono">ollama launch claude --model &lt;model&gt;</code></p>
-            </div>
-          )}
-        </Field>
-        <Field label="Model">
-          <select
-            className="input-field"
-            value={form.model}
-            onChange={(e) => updateField("model", e.target.value)}
-          >
-            {availableModels.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-        </Field>
         
         <Field label="Thinking effort" hint="Mức độ suy nghĩ của agent. Auto = tự quyết định.">
           <div className="flex gap-2">
@@ -536,18 +445,37 @@ export function AgentEditPage() {
                 ? `${baseCmd} ${subCmds.join(" ")} `
                 : `${baseCmd} `;
               const lines: string[] = [];
+              const projectRoot = "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner";
 
-              // Auto-reply command (router.ts)
-              lines.push("# === Auto-reply (Zalo/FB chat) ===");
-              lines.push(cmdPrefix + "\\");
-              if (form.model) lines.push(`  --model ${form.model} \\`);
-              lines.push("  --output-format json \\");
-              lines.push(`  --max-turns ${form.max_turns || 1} \\`);
-              lines.push("  --dangerously-skip-permissions \\");
-              lines.push(`  --mcp-config agents/${s}/mcp.json \\`);
-              if (flagArgs.length > 0) lines.push(`  ${flagArgs.join(" ")} \\`);
-              lines.push(`  -p "<tin nhắn từ khách>"`);
-              lines.push(`  # CWD: agents/${s}/`);
+              // ── Auto-reply command (router.ts — Phase 1 pattern) ──
+              // Claude provider: --print - (stdin), stream-json, --add-dir skills, PROJECT_ROOT CWD
+              // Gemini provider: --output-format stream-json, --resume session, --approval-mode yolo
+              if (form.provider === "gemini") {
+                lines.push("# === Auto-reply (Zalo/FB chat) — Gemini ===");
+                lines.push("gemini \\");
+                lines.push("  -o stream-json \\");
+                if (form.model) lines.push(`  -m ${form.model} \\`);
+                lines.push("  -y \\");
+                lines.push("  -r <session_id> \\");
+                lines.push("  -p @<temp>/prompt.txt");
+                lines.push(`  # CWD: ${projectRoot}`);
+                lines.push("  # prompt.txt = system_prompt + history + tin nhắn khách");
+              } else {
+                lines.push("# === Auto-reply (Zalo/FB chat) — Claude ===");
+                lines.push(`${cmdPrefix}\\`);
+                lines.push("  --print - \\");        // ← stdin (KHÔNG phải -p)
+                lines.push("  --output-format stream-json \\");  // ← stream (KHÔNG phải json)
+                lines.push("  --verbose \\");
+                lines.push("  --dangerously-skip-permissions \\");
+                if (form.model) lines.push(`  --model ${form.model} \\`);
+                lines.push(`  --max-turns ${form.max_turns || 5} \\`);
+                lines.push("  --append-system-prompt-file <tmp>/agent-instructions.md \\");
+                lines.push("  --add-dir <tmp>/paperclip-chat-skills-XXXXXX \\");
+                lines.push(`  --mcp-config agents/${s}/mcp.json \\`);
+                if (flagArgs.length > 0) lines.push(`  ${flagArgs.join(" ")} \\`);
+                lines.push("  # stdin: <tin nhắn từ khách> (via --print -)");
+                lines.push(`  # CWD: ${projectRoot}`);  // ← PROJECT ROOT (KHÔNG phải agents/{slug}/)
+              }
               lines.push("");
 
               // Heartbeat command
@@ -580,22 +508,91 @@ export function AgentEditPage() {
           <button
             className="absolute top-2 right-2 text-[10px] px-2 py-1 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
             onClick={() => {
-              const parts = ["claude"];
-              if (form.model) parts.push(`--model ${form.model}`);
-              parts.push("--output-format json");
-              parts.push(`--max-turns ${form.max_turns || 1}`);
-              parts.push("--dangerously-skip-permissions");
-              parts.push(`--mcp-config agents/${form.slug || slug}/mcp.json`);
-              if (form.extra_args) parts.push(form.extra_args);
-              navigator.clipboard.writeText(parts.join(" "));
+              const s = form.slug || slug || "agent";
+              let cmd: string;
+              if (form.provider === "gemini") {
+                const parts = ["gemini", "--output-format stream-json"];
+                if (form.model) parts.push(`--model ${form.model}`);
+                parts.push("--approval-mode yolo", "--sandbox=none", "--prompt \"<tin nhắn>\"");
+                cmd = parts.join(" ");
+              } else {
+                const baseCmd = form.command || "claude";
+                const parts = [baseCmd, "--print -", "--output-format stream-json", "--verbose", "--dangerously-skip-permissions"];
+                if (form.model) parts.push(`--model ${form.model}`);
+                parts.push(`--max-turns ${form.max_turns || 5}`);
+                parts.push("--append-system-prompt-file <tmp>/agent-instructions.md");
+                parts.push("--add-dir <tmp>/paperclip-chat-skills-XXXXXX");
+                parts.push(`--mcp-config agents/${s}/mcp.json`);
+                if (form.extra_args) parts.push(form.extra_args);
+                cmd = parts.join(" ");
+              }
+              navigator.clipboard.writeText(cmd);
             }}
           >
-            Sao chép
+            Sao chập
           </button>
           <p className="text-[10px] text-muted-foreground mt-1">
-            Lệnh thật từ <code>server/src/channels/router.ts</code> — <code>--dangerously-skip-permissions</code> LUÔN bật (hardcoded trong server).
-            Gemini dùng: <code>gemini -p "..." -m model</code>
+            Lệnh thật từ <code>server/src/channels/router.ts</code> — Phase 1 pattern:
+            Claude dùng <code>--print -</code> (stdin) + <code>stream-json</code> + <code>--add-dir</code> (skills) + CWD=PROJECT_ROOT.
+            Gemini dùng <code>--output-format stream-json --approval-mode yolo --sandbox=none --resume session</code>.
           </p>
+        </div>
+      </FormSection>
+
+      <FormSection title="Prompt & Persona">
+        <Field label="System prompt" hint="Hướng dẫn chính cho agent. Nếu trống sẽ dùng persona_file hoặc fallback.">
+          <textarea
+            className="input-field min-h-[120px] resize-y font-mono text-xs"
+            placeholder="Bạn là trợ lý chăm sóc khách hàng..."
+            value={form.system_prompt}
+            onChange={(e) => updateField("system_prompt", e.target.value)}
+            rows={6}
+          />
+        </Field>
+        <Field label="Persona file" hint="Tên file trong thư mục agents/{slug}/ (vd: AGENTS.md)">
+          <input
+            className="input-field"
+            placeholder="vd: AGENTS.md"
+            value={form.persona_file}
+            onChange={(e) => updateField("persona_file", e.target.value)}
+          />
+        </Field>
+        <Field label="Tin nhắn fallback" hint="Hiển thị khi agent gặp lỗi">
+          <input
+            className="input-field"
+            value={form.fallback_message}
+            onChange={(e) => updateField("fallback_message", e.target.value)}
+          />
+        </Field>
+      </FormSection>
+
+      <FormSection title="Phiên hội thoại">
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Giới hạn lịch sử">
+            <input
+              type="number"
+              className="input-field"
+              value={form.history_limit}
+              onChange={(e) => updateField("history_limit", Number(e.target.value))}
+              min={1}
+              max={500}
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Số tin nhắn giữ cho ngữ cảnh
+            </p>
+          </Field>
+          <Field label="Thời gian hết phiên (giây)">
+            <input
+              type="number"
+              className="input-field"
+              value={form.session_timeout}
+              onChange={(e) => updateField("session_timeout", Number(e.target.value))}
+              min={60}
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Mặc định: 3600 (1 giờ)
+            </p>
+          </Field>
         </div>
       </FormSection>
 
@@ -721,7 +718,7 @@ export function AgentEditPage() {
             const r = await fetch(`/api/channels/agent-configs/${slug}`, { method: "DELETE" });
             if (r.ok) {
               qc.invalidateQueries({ queryKey: ["agent-configs"] });
-              navigate("/agents-config");
+              navigate("/ops/sop-engine");
             } else {
               const err = await r.json().catch(() => ({ error: "Lỗi xóa agent" }));
               alert(err.error || "Không thể xóa agent. Có thể agent đang được gán cho kênh.");
