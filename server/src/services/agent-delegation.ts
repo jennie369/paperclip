@@ -98,15 +98,18 @@ export interface DelegationResult {
 }
 
 // Minimal shape of heartbeatService needed here. Kept structural so tests can
-// mock without importing the full heartbeat module (heavy).
+// mock without importing the full heartbeat module (heavy). Literal union
+// types for `source` + `triggerDetail` MUST match `heartbeat.ts` WakeupOptions
+// so the real `heartbeatService(db)` is assignable to this interface.
 export interface WakeupDep {
   wakeup: (
     agentId: string,
-    opts: {
-      source?: string;
-      triggerDetail?: string;
+    opts?: {
+      source?: "timer" | "assignment" | "on_demand" | "automation";
+      triggerDetail?: "manual" | "ping" | "callback" | "system";
       reason?: string | null;
       payload?: Record<string, unknown> | null;
+      idempotencyKey?: string | null;
       requestedByActorType?: "user" | "agent" | "system";
       requestedByActorId?: string | null;
       contextSnapshot?: Record<string, unknown>;
