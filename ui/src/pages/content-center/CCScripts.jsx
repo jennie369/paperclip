@@ -418,11 +418,9 @@ export default function ScriptsListPage() {
             const id = script.id;
 
             return (
-              <Card
+              <div
                 key={id}
-                variant="glass"
-                padding="none"
-                hoverable
+                className="rounded-card border border-border bg-glass-bg hover:border-gold/30 transition-colors"
               >
                 <div
                   className="flex items-center gap-4 px-5 py-4 cursor-pointer"
@@ -522,7 +520,7 @@ export default function ScriptsListPage() {
                     </div>
                   </div>
                 )}
-              </Card>
+              </div>
             );
           })}
         </div>

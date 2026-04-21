@@ -1,7 +1,8 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   Sparkles,
+  HelpCircle,
   Loader2,
   RefreshCw,
   Copy,
@@ -46,7 +47,9 @@ import {
   GripVertical,
   Layers,
   Mic,
+  Play,
 } from 'lucide-react';
+import emailRegistry from '@/config/email_template_registry.json';
 import { Card } from '@gem/ui';
 import { Select } from '@gem/ui';
 import { Textarea } from '@gem/ui';
@@ -120,6 +123,81 @@ const DOC_SOP_OPTIONS = [
   { value: 'DOC-ONB-005', label: 'Onboarding Tần Số Tình Yêu (6 emails)', group: 'Onboarding Email', emailCount: 6 },
   { value: 'DOC-ONB-006', label: 'Onboarding Tư Duy Triệu Phú (7 emails)', group: 'Onboarding Email', emailCount: 7 },
   { value: 'DOC-ONB-007', label: 'Onboarding 7 Ngày Tần Số Gốc (7 emails)', group: 'Onboarding Email', emailCount: 7 },
+  // Customer Support / User guides (2026-04-19)
+  { value: 'DOC-CS-005', label: 'Hướng Dẫn Sử Dụng App Gemral', group: 'Hướng Dẫn App' },
+  { value: 'DOC-CS-006', label: 'Hướng Dẫn Ritual & Vision Board', group: 'Hướng Dẫn App' },
+  { value: 'DOC-CS-007', label: 'Hướng Dẫn GEM Scanner (User)', group: 'Hướng Dẫn App' },
+  { value: 'DOC-CS-008', label: 'Hướng Dẫn GEM Master AI & Tarot', group: 'Hướng Dẫn App' },
+  { value: 'DOC-CS-009', label: 'Hướng Dẫn Paper Trading', group: 'Hướng Dẫn App' },
+  { value: 'DOC-CS-010', label: 'Hướng Dẫn Forum (Tạo bài, badges)', group: 'Hướng Dẫn App' },
+  { value: 'DOC-CS-011', label: 'Post-Purchase Care', group: 'Hướng Dẫn App' },
+];
+
+// Quick-select title chips for DOC — grouped by doc family for fast picking.
+const DOC_TITLE_CHIPS = [
+  // User guides (CS)
+  'Hướng Dẫn Sử Dụng App Gemral — Bản Đầy Đủ 2026',
+  'Hướng Dẫn Ritual & Vision Board — Daily Practice',
+  'Hướng Dẫn GEM Scanner — User Manual',
+  'Hướng Dẫn GEM Master AI & Tarot',
+  'Hướng Dẫn Paper Trading — Risk-Free Practice',
+  'Hướng Dẫn Forum & Badge System',
+  'Post-Purchase Care Plan — 30 ngày sau mua',
+  // Course descriptions (CRS)
+  'Khóa 7 Ngày Khai Mở Tần Số Gốc',
+  'Khóa Tần Số Tình Yêu',
+  'Khóa Tư Duy Triệu Phú',
+  'Trading Starter — GEM Academy',
+  'Trading Tier 1-2-3 — So sánh & Roadmap',
+  // Marketing (MKT)
+  'Brand Overview Kit — Gemral 2026',
+  'Social Media Kit — Toolkit cho CTV/KOL',
+  // Affiliate (AFF)
+  'Hướng Dẫn Đăng Ký CTV',
+  'KOL Partnership Kit',
+  'CTV Sales Script — Master Deck',
+  'Affiliate Link Guide',
+  // Funnel (FNL)
+  'Free → Paid Funnel',
+  'Spiritual Funnel — Soul-First Journey',
+  'Upsell Matrix & Cross-sell Map',
+  // Onboarding (ONB)
+  'Onboarding Email Series — Trading Starter',
+  'Onboarding Email Series — Tần Số Tình Yêu',
+  'Onboarding Email Series — 7 Ngày Tần Số Gốc',
+];
+
+// Quick-select Preview Text chips (60-100 chars) — chị Jennie chọn nhanh thay vì gõ.
+// Dùng cho inbox preview của email (Gmail/Outlook hiện text này cạnh subject).
+const PREVIEW_TEXT_CHIPS = [
+  'Khám phá tính năng mới giúp bạn bắt pattern chính xác hơn 75%',
+  'Bí mật các trader kỷ luật luôn giữ được — Jennie chia sẻ',
+  'Đừng bỏ lỡ — Ưu đãi 48h dành riêng cho bạn',
+  'Jennie muốn chia sẻ với bạn điều này hôm nay',
+  'Năng lượng tuần mới — Thông điệp quan trọng từ vũ trụ',
+  '5 phút đọc, thay đổi cách bạn nhìn trading mãi mãi',
+  'Lá bài Tarot tuần này nói gì về hành trình của bạn?',
+  'Ba tháng đủ để thay đổi cuộc đời — bắt đầu hôm nay',
+  'Bạn đã thử tính năng GEM Scanner này chưa?',
+  'Chào mừng! Đây là bước đầu trong hành trình cùng Gemral',
+  'Flash Sale 48h — Giảm 30% khoá học Trading tại Gemral',
+  'Thử một điều nhỏ hôm nay, thay đổi lớn trong tuần sau',
+];
+
+// Posted Account — SSOT match Notion Content Calendar column `Posted Account`
+const POSTED_ACCOUNT_OPTIONS = [
+  { value: 'profile_jennie', label: 'Profile Jennie (cá nhân)' },
+  { value: 'page_jennie', label: 'Page Jennie (fanpage)' },
+  { value: 'page_gemral', label: 'Page Gemral (brand)' },
+  { value: 'email', label: 'Email (Resend)' },
+  { value: 'forum', label: 'Forum (Gemral community)' },
+];
+
+// Publish Mode — SSOT match Notion + cc_scripts.publish_mode enum
+const PUBLISH_MODE_OPTIONS = [
+  { value: 'scheduled', label: 'Scheduled — lên lịch theo calendar' },
+  { value: 'immediate', label: 'Immediate — publish ngay sau generate' },
+  { value: 'threshold_5', label: 'Threshold 5 — chờ batch ≥5 bài mới post' },
 ];
 
 // ============================================================================
@@ -165,6 +243,28 @@ const EMAIL_TYPE_OPTIONS = [
   { value: 'weekly_digest', label: 'Weekly Digest (Tổng hợp tuần)' },
   { value: 'personal_note', label: 'Thư cá nhân từ Jennie' },
 ];
+
+// 2026-04-19 — Auto-map "Loại email" UI dropdown → template key trong email_template_registry.json.
+// Khi chị đổi emailType, UI tự set campaignTemplate + campaignSegment phù hợp.
+const EMAIL_TYPE_TO_TEMPLATE = {
+  newsletter: { template: 'daily_newsletter_general', segment: 'all' },
+  product_launch: { template: 'custom', segment: 'all' },
+  promotion: { template: 'custom', segment: 'paid' },
+  welcome: { template: 'welcome_new_user', segment: 'free' },
+  event: { template: 'webinar_confirmation', segment: 'all' },
+  educational: { template: 'daily_newsletter_trading', segment: 'all' },
+  reengagement: { template: 'new_user_day30', segment: 'free' },
+  tier_upgrade: { template: 'tier_upgrade', segment: 'tier1' },
+  course_enrollment: { template: 'welcome_student', segment: 'students' },
+  onboarding_series: { template: 'new_user_day0', segment: 'students' },
+  milestone: { template: 'custom', segment: 'paid' },
+  survey_feedback: { template: 'custom', segment: 'all' },
+  cart_abandonment: { template: 'custom', segment: 'all' },
+  referral: { template: 'custom', segment: 'paid' },
+  seasonal: { template: 'custom', segment: 'all' },
+  weekly_digest: { template: 'daily_newsletter_general', segment: 'all' },
+  personal_note: { template: 'custom', segment: 'all' },
+};
 
 // ============================================================================
 // Email Toolbox — Draggable components for email builder
@@ -957,6 +1057,28 @@ function CheckboxGroup({
 // Page Component
 // ============================================================================
 
+// 2026-04-19 — Reusable label with inline help tooltip (native title + hover Info icon).
+// Usage: <FieldLabel label="Sender (From)" tip="Địa chỉ email gửi đi..." />
+function FieldLabel({ label, tip, required = false, className = '' }) {
+  return (
+    <div className={`flex items-center gap-1.5 mb-1.5 ${className}`}>
+      <label className="text-[11px] font-semibold text-txt-2">
+        {label}
+        {required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+      {tip && (
+        <span
+          title={tip}
+          className="text-txt-3 cursor-help hover:text-gold transition-colors"
+          aria-label={tip}
+        >
+          <HelpCircle size={11} />
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function AiGenPage() {
   const searchParams = useSearchParams();
 
@@ -970,7 +1092,72 @@ export default function AiGenPage() {
   // selectedDocIds: DOC-xxx values user ticked (each = 1 generation job).
   // selectedDocEmailDays: {DOC-ONB-xxx: 'all' | 1..N} — which day of onboarding email series.
   const [selectedDocIds, setSelectedDocIds] = useState([]);
+
+  // 2026-04-19 — Auto-apply campaign defaults khi tick DOC-*. Nếu SOP có entry trong
+  // emailRegistry.doc_defaults (DOC-ONB-*, DOC-AFF-*, DOC-CS-011), auto-fill sender +
+  // template + segment. User vẫn có thể override qua dropdown sau.
+  useEffect(() => {
+    if (!selectedDocIds?.length) return;
+    const lastDoc = selectedDocIds[selectedDocIds.length - 1];
+    const defaults = emailRegistry?.doc_defaults?.[lastDoc];
+    if (!defaults) return;
+    const sender = emailRegistry.senders.find((s) => s.key === defaults.sender);
+    if (sender) {
+      setCampaignFromKey(sender.key);
+      setCampaignReplyTo(sender.from_email);
+    }
+    if (defaults.template) setCampaignTemplate(defaults.template);
+    if (defaults.segment) setCampaignSegment(defaults.segment);
+  }, [selectedDocIds]);
   const [selectedDocEmailDays, setSelectedDocEmailDays] = useState({});
+  // docOutputFormat: 'auto' = use batch_processor default rule (DOC-ONB→html, DOC-AFF/MKT/CRS-S→both, rest→markdown),
+  // 'markdown' | 'html' | 'both' = explicit override per Jennie's request (2026-04-19).
+  const [docOutputFormat, setDocOutputFormat] = useState('auto');
+  // 2026-04-19 — DOC-specific title (separate from generic `topic`/`brief`).
+  // Default empty → falls back to selected SOP label. User can override via
+  // text input or quick-select chip (see DOC_TITLE_CHIPS below).
+  const [docTitle, setDocTitle] = useState('');
+  // 2026-04-19 (Plan v2 Phase A) — Email marketing campaign fields.
+  // Prefix `campaign` tránh conflict với state email send hiện tại (emailSender, emailRecipients).
+  // SSOT: memory/config/email_template_registry.json (mirror ở ui/src/config).
+  const [campaignFromKey, setCampaignFromKey] = useState('hello'); // sender.key trong registry
+  const [campaignTemplate, setCampaignTemplate] = useState('custom');
+  const [campaignSegment, setCampaignSegment] = useState('all');
+  const [campaignReplyTo, setCampaignReplyTo] = useState('hello@gemral.com');
+  const [campaignPreviewText, setCampaignPreviewText] = useState('');
+  const [campaignScheduledAt, setCampaignScheduledAt] = useState('');
+  const [campaignType, setCampaignType] = useState('one_time');
+
+  // -- Batch Processor (Play/Stop) --
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/ops/content-pipeline/batch/status');
+        if (!cancelled && r.ok) {
+          const d = await r.json();
+          setBatchRunning(!!d.running);
+        }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const handleBatchToggle = useCallback(async () => {
+    setBatchLoading(true);
+    try {
+      const endpoint = batchRunning
+        ? '/api/ops/content-pipeline/batch/stop'
+        : '/api/ops/content-pipeline/batch/start';
+      const r = await fetch(endpoint, { method: 'POST' });
+      if (r.ok) setBatchRunning(!batchRunning);
+    } catch {} finally { setBatchLoading(false); }
+  }, [batchRunning]);
 
   // -- Speech-to-text (Groq Whisper large-v3) --
   const [isRecording, setIsRecording] = useState(false);
@@ -1214,6 +1401,59 @@ export default function AiGenPage() {
   // -- Email state --
   const [manualEmailHtml, setManualEmailHtml] = useState('');
   const [emailType, setEmailType] = useState('newsletter');
+  // 2026-04-19 — Auto-apply campaign defaults khi emailType đổi (Email Marketing section).
+  // Placed right after emailType declaration để tránh TDZ (ReferenceError 'Cannot access before initialization').
+  useEffect(() => {
+    const map = EMAIL_TYPE_TO_TEMPLATE[emailType];
+    if (!map) return;
+    if (map.template) setCampaignTemplate(map.template);
+    if (map.segment) setCampaignSegment(map.segment);
+  }, [emailType]);
+
+  // 2026-04-19 Cách B — Drip Override state + sequences fetch
+  // V2 (2026-04-19) — overrideEmailMap thay thế selectedStepId đơn-step:
+  //   Array<{ stepId, extraPrompt, saveHint }> length = emailCount của DOC-ONB-*.
+  //   Legacy selectedStepId giữ lại để backward-compat với single-email (non-ONB) override.
+  const [dripOverrideEnabled, setDripOverrideEnabled] = useState(false);
+  const [dripSequences, setDripSequences] = useState([]);
+  const [selectedSequenceId, setSelectedSequenceId] = useState('');
+  const [selectedStepId, setSelectedStepId] = useState('');
+  const [overrideEmailMap, setOverrideEmailMap] = useState([]);
+  useEffect(() => {
+    if (!dripOverrideEnabled || dripSequences.length > 0) return;
+    fetch('/api/ops/email/sequences')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setDripSequences(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [dripOverrideEnabled, dripSequences.length]);
+  // Khi sequence đổi hoặc DOC-ONB-* selection đổi → reset map theo emailCount
+  // + prefill stepId theo thứ tự + extraPrompt từ step.generation_hint (baseline DB).
+  const activeOnbDoc = useMemo(() => {
+    if (!dripOverrideEnabled) return null;
+    for (const id of selectedDocIds) {
+      const opt = DOC_SOP_OPTIONS.find((o) => o.value === id);
+      if (opt?.emailCount && String(id).startsWith('DOC-ONB-')) return opt;
+    }
+    return null;
+  }, [selectedDocIds, dripOverrideEnabled]);
+  useEffect(() => {
+    if (!dripOverrideEnabled || !activeOnbDoc || !selectedSequenceId) {
+      setOverrideEmailMap([]);
+      return;
+    }
+    const seq = dripSequences.find((s) => s.id === selectedSequenceId);
+    const steps = (seq?.steps || []).slice().sort((a, b) => (a.step_order || 0) - (b.step_order || 0));
+    const count = activeOnbDoc.emailCount;
+    const nextMap = Array.from({ length: count }, (_, i) => {
+      const step = steps[i] || null; // align by order 1:1 (email N → step N)
+      return {
+        stepId: step?.id || '',
+        extraPrompt: step?.generation_hint || '',
+        saveHint: false,
+      };
+    });
+    setOverrideEmailMap(nextMap);
+  }, [dripOverrideEnabled, activeOnbDoc, selectedSequenceId, dripSequences]);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailRecipients, setEmailRecipients] = useState('');
   const [emailSender, setEmailSender] = useState('Jennie Uyen Chu <hello@gemral.com>');
@@ -1792,9 +2032,20 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
         return;
       }
       setGenerating(true);
+      setOutput('⏳ Đang queue jobs...');
+      setGenerationDone?.(false);
       try {
         let queued = 0;
         const errors = [];
+        const queuedJobIds = [];
+        // 2026-04-19 V2 — Drip override cho DOC-ONB-*: 1 DOC × emailCount → N jobs
+        // thay vì 1 job `email_day="all"`. Mỗi email bind 1 step + extra_prompt riêng.
+        // Ưu tiên persist generation_hint khi saveHint=true (PATCH trước POST generate).
+        const isOnbOverride = (docId) => {
+          if (!dripOverrideEnabled || !selectedSequenceId || !overrideEmailMap.length) return false;
+          const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
+          return opt?.emailCount && String(docId).startsWith('DOC-ONB-');
+        };
         for (const docId of selectedDocIds) {
           const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
           // 2026-04-17 FIX — pass the user-chosen metadata (brand voice, persona,
@@ -1806,33 +2057,112 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
           // state, not hardcoded. cc_scripts has posted_account column that
           // Playwright publisher reads to pick the Meta BS session; hardcoding
           // 'trading' pillar also broke framework image composition rules.
-          const payload = {
+          // 2026-04-19 — derive `track` from pillar so batch_processor nhận đúng taxonomy
+          // (WEALTH/SPIRITUAL/WELLNESS/INTEGRATION). Default = WEALTH if pillar unknown.
+          // 2026-04-19 — track column DB check: lowercase only [wealth|wellness|integration|spiritual|education]
+          const pillarToTrack = {
+            trading: 'wealth',
+            wealth: 'wealth',
+            spiritual: 'spiritual',
+            'tam-linh': 'spiritual',
+            wellness: 'wellness',
+            health: 'wellness',
+            lifestyle: 'integration',
+            integration: 'integration',
+            education: 'education',
+          };
+          const resolvedPillar = contentPillar || 'trading';
+          const resolvedTrack = pillarToTrack[resolvedPillar.toLowerCase()] || 'wealth';
+          const resolvedTitle = (docTitle && docTitle.trim()) || opt?.label || docId;
+          // 2026-04-19 — Email schema luôn được truyền cho MỌI DOC-* (per Jennie's ask).
+          // Webhook khi Approve sẽ chỉ tạo cc_email_campaigns nếu content_type email-like,
+          // còn lại thì data này vẫn lưu vào Notion properties để chị track.
+          const senderPreset = emailRegistry.senders.find((s) => s.key === campaignFromKey);
+          const basePayload = {
             content_type: docId,
             sop_id: docId,
-            topic: brief.trim() || opt?.label || docId,
+            topic: brief.trim() || resolvedTitle,
+            title: resolvedTitle,
             brand_voice: brandVoice || 'jennie',
-            pillar: contentPillar || 'trading',
+            pillar: resolvedPillar,
+            track: resolvedTrack,
             persona: persona && persona !== 'auto' ? persona : undefined,
             writing_mode: writingMode && writingMode !== 'auto' ? writingMode : undefined,
             ai_provider: aiProvider,
             ai_model: aiModel,
             posted_account: postedAccount,
             publish_mode: publishMode,
+            ...(senderPreset ? {
+              from_name: senderPreset.from_name,
+              from_email: senderPreset.from_email,
+              email_template: campaignTemplate,
+              audience_type: campaignSegment,
+              reply_to: campaignReplyTo || senderPreset.from_email,
+              preview_text: campaignPreviewText || undefined,
+              campaign_type: campaignType,
+              scheduled_at: campaignScheduledAt || undefined,
+            } : {}),
           };
-          if (opt?.emailCount) {
-            payload.email_day = selectedDocEmailDays[docId] ?? 'all';
+          if (docOutputFormat && docOutputFormat !== 'auto') {
+            basePayload.output_format = docOutputFormat;
           }
-          try {
-            const r = await fetch('/api/ops/content-pipeline/generate', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            });
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            queued += 1;
-          } catch (err) {
-            console.error(`[DOC-QUEUE] Failed to queue ${docId}:`, err);
-            errors.push(`${docId}: ${err.message}`);
+
+          // Build list of payloads: 1 nếu không override, N nếu DOC-ONB-* + override
+          const payloads = [];
+          if (isOnbOverride(docId)) {
+            // Persist hints trước khi queue (chạy tuần tự để log dễ debug)
+            for (let i = 0; i < overrideEmailMap.length; i += 1) {
+              const slot = overrideEmailMap[i];
+              if (!slot?.stepId) continue;
+              if (slot.saveHint && slot.extraPrompt?.trim()) {
+                try {
+                  await fetch(`/api/ops/email/steps/${slot.stepId}/hint`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ generation_hint: slot.extraPrompt.trim() }),
+                  });
+                } catch (e) {
+                  console.warn(`[HINT-SAVE] step=${slot.stepId} failed:`, e);
+                }
+              }
+            }
+            for (let i = 1; i <= opt.emailCount; i += 1) {
+              const slot = overrideEmailMap[i - 1] || {};
+              payloads.push({
+                ...basePayload,
+                email_day: i,
+                drip_sequence_id: selectedSequenceId || undefined,
+                drip_step_id_override: slot.stepId || undefined,
+                extra_prompt: slot.extraPrompt?.trim() ? slot.extraPrompt.trim() : undefined,
+              });
+            }
+          } else {
+            const singleJob = { ...basePayload };
+            if (opt?.emailCount) {
+              singleJob.email_day = selectedDocEmailDays[docId] ?? 'all';
+            }
+            if (dripOverrideEnabled && selectedStepId) {
+              singleJob.drip_step_id_override = selectedStepId;
+            }
+            payloads.push(singleJob);
+          }
+
+          for (const payload of payloads) {
+            try {
+              const r = await fetch('/api/ops/content-pipeline/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              });
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              const job = await r.json();
+              queuedJobIds.push(job?.id);
+              queued += 1;
+            } catch (err) {
+              const tag = payload.email_day ? `${docId} day${payload.email_day}` : docId;
+              console.error(`[DOC-QUEUE] Failed to queue ${tag}:`, err);
+              errors.push(`${tag}: ${err.message}`);
+            }
           }
         }
         if (queued > 0) {
@@ -1840,6 +2170,50 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
         }
         if (errors.length) {
           addToast?.('error', `${errors.length} job(s) fail: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '...' : ''}`);
+        }
+        // 2026-04-19 — Inline output poll for DOC-*. Jennie báo: trước đây queue xong
+        // phải chuyển qua tab Nội Dung mới thấy, không giống flow social/script hiện
+        // kết quả ngay. Fix: poll batch-jobs/:id mỗi 4s (tối đa 5 phút), khi status=
+        // 'completed' → fetch cc_scripts.body và setOutput. Với multi-job, show tiến
+        // độ + content của job cuối complete.
+        if (queuedJobIds.length > 0) {
+          setOutput(`⏳ Đang generate ${queuedJobIds.length} tài liệu... (poll mỗi 4s, tối đa 5 phút)\n\nJob IDs:\n${queuedJobIds.join('\n')}`);
+          const pollStart = Date.now();
+          const POLL_INTERVAL = 4000;
+          const POLL_TIMEOUT = 5 * 60 * 1000;
+          const completed = new Set();
+          while (completed.size < queuedJobIds.length && Date.now() - pollStart < POLL_TIMEOUT) {
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+            for (const jid of queuedJobIds) {
+              if (!jid || completed.has(jid)) continue;
+              try {
+                const jr = await fetch(`/api/ops/sop-engine/batch-jobs/${jid}`);
+                if (!jr.ok) continue;
+                const job = await jr.json();
+                if (job.status === 'completed' || job.status === 'failed') {
+                  completed.add(jid);
+                  if (job.status === 'completed' && job.entity_id) {
+                    try {
+                      const sr = await fetch(`/api/ops/content-pipeline/scripts?id=${job.entity_id}&limit=1`);
+                      if (sr.ok) {
+                        const rows = await sr.json();
+                        const body = Array.isArray(rows) && rows[0]?.body ? rows[0].body : '';
+                        if (body) {
+                          setOutput(body);
+                          setGenerationDone?.(true);
+                        }
+                      }
+                    } catch (e) { console.warn('[DOC-POLL] fetch script failed', e); }
+                  } else if (job.status === 'failed') {
+                    setOutput(`❌ Job ${jid} FAILED\n\n${job.error_message || 'unknown error'}`);
+                  }
+                }
+              } catch (e) { console.warn('[DOC-POLL] fetch job failed', e); }
+            }
+          }
+          if (completed.size === 0) {
+            setOutput(`⚠️ Timeout sau 5 phút. ${queuedJobIds.length} job(s) vẫn đang chạy. Xem tab Nội Dung để check kết quả.`);
+          }
         }
       } finally {
         setGenerating(false);
@@ -3402,6 +3776,25 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             <h2 className="font-heading text-xl font-semibold text-txt">
               Trình Tạo Nội Dung AI
             </h2>
+            <button
+              onClick={handleBatchToggle}
+              disabled={batchLoading}
+              title={batchRunning ? 'Dừng Batch Processor' : 'Chạy Batch Processor'}
+              className={[
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
+                batchLoading ? 'opacity-50 cursor-wait' :
+                batchRunning
+                  ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/30'
+                  : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30',
+              ].join(' ')}
+            >
+              {batchLoading
+                ? <Loader2 size={14} className="animate-spin" />
+                : batchRunning
+                  ? <Square size={14} />
+                  : <Play size={14} />}
+              {batchRunning ? 'Stop Batch' : 'Chạy Batch'}
+            </button>
           </div>
           {hasActiveJobs && (
             <div className="flex items-center gap-2">
@@ -4019,6 +4412,345 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                 </button>
                 <span className="ml-auto text-[11px] text-txt-3">Đã chọn: {selectedDocIds.length}/{DOC_SOP_OPTIONS.length}</span>
               </div>
+              {/* ── DOC META BLOCK: Title + Output Format + Posted Account + Publish Mode ──
+                  Gom tất cả field publishing vào 1 chỗ để Jennie bấm chọn 1 lượt (2026-04-19). */}
+              <div className="space-y-3 pt-3 border-t border-border/40" style={{ userSelect: 'text' }}>
+                {/* Title */}
+                <div>
+                  <FieldLabel label="Tiêu đề tài liệu" tip="Tên chính thức của tài liệu — hiện trên trang chi tiết script, Notion, email subject. Để trống sẽ dùng label của SOP đã tick." />
+                  <input
+                    type="text"
+                    value={docTitle}
+                    onChange={(e) => setDocTitle(e.target.value)}
+                    placeholder="VD: Hướng Dẫn Sử Dụng App Gemral — Bản Đầy Đủ 2026"
+                    disabled={generating}
+                    className="w-full px-3 py-2 text-[13px] rounded-md border border-border bg-bg-4 text-txt placeholder:text-txt-3"
+                  />
+                  <p className="text-[11px] text-txt-3 mt-1">Nếu để trống → dùng label SOP đã chọn làm tiêu đề</p>
+                </div>
+                {/* Quick-select title chips */}
+                <div>
+                  <FieldLabel label="Chọn nhanh tiêu đề" tip="Click 1 chip để auto-điền Tiêu đề. Các gợi ý phân theo nhóm SOP (CS/CRS/MKT/AFF/FNL/ONB) — mỗi chip là title đã được tối ưu sẵn." />
+                  <div className="flex flex-wrap gap-1.5">
+                    {DOC_TITLE_CHIPS.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        disabled={generating}
+                        onClick={() => setDocTitle(t)}
+                        className={`px-3 py-1.5 text-[12px] font-medium rounded-lg border transition-all cursor-pointer ${docTitle === t
+                          ? 'border-blue/40 bg-blue/10 text-blue'
+                          : 'border-border bg-bg-4 text-txt-2 hover:border-border-2 hover:text-txt'
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Row: Posted Account + Publish Mode + Output Format */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <FieldLabel label="Posted Account" tip="Kênh đăng bài. Page Jennie/Profile Jennie = tone cá nhân (brandVoice='jennie'). Page Gemral/Email/Forum = tone thương hiệu chung (brandVoice='generic'). Playwright publisher đọc field này để chọn session đăng." />
+                    <select
+                      className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                      disabled={generating}
+                      value={postedAccount}
+                      onChange={(e) => setPostedAccount(e.target.value)}
+                    >
+                      {POSTED_ACCOUNT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Publish Mode" tip="Cách đăng: Scheduled = chờ lịch cron/Notion Scheduled Date. Immediate = Approved xong đăng ngay trong 5 phút. Threshold 5 = gom đủ 5 bài cùng account rồi đăng tuần tự (cách nhau 3 phút)." />
+                    <select
+                      className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                      disabled={generating}
+                      value={publishMode}
+                      onChange={(e) => setPublishMode(e.target.value)}
+                    >
+                      {PUBLISH_MODE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Định dạng xuất" tip="Auto = theo rule SOP (DOC-ONB→HTML email, Kit/Course→Cả hai, còn lại→Markdown). Markdown = file .md để edit. HTML = email-ready với brand design. Cả hai = output cả 2 phần tách bằng separator." />
+                    <select
+                      className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                      disabled={generating}
+                      value={docOutputFormat}
+                      onChange={(e) => setDocOutputFormat(e.target.value)}
+                    >
+                      <option value="auto">Auto (theo SOP rule)</option>
+                      <option value="markdown">Markdown (.md)</option>
+                      <option value="html">HTML (email / brand doc)</option>
+                      <option value="both">Cả hai (MD + HTML)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              {/* ── EMAIL META BLOCK: shown khi tick DOC-ONB-* / DOC-AFF-* / DOC-CS-011 ──
+                  Reusable cùng email job type. SSOT từ email_template_registry.json */}
+              {selectedDocIds.length > 0 && (
+                <div className="space-y-3 pt-3 border-t border-border/40 mt-3" style={{ userSelect: 'text' }}>
+                  <h4 className="text-xs font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
+                    <Mail size={14} />
+                    Email Schema (auto-fill theo SOP, tùy chỉnh nếu muốn)
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <FieldLabel label="Sender (From)" tip="Địa chỉ email người gửi. Brand (hello/info/no_reply/support) cho bulk + transactional. Personal (jennie/jennieuyenchu) cho newsletter cá nhân. Partnership cho CTV/KOL. Thay đổi sender sẽ auto-update Reply-To." />
+                      <select
+                        className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                        disabled={generating}
+                        value={campaignFromKey}
+                        onChange={(e) => {
+                          setCampaignFromKey(e.target.value);
+                          const s = emailRegistry.senders.find((x) => x.key === e.target.value);
+                          if (s) setCampaignReplyTo(s.from_email);
+                        }}
+                      >
+                        {['Brand', 'Personal', 'Partnership'].map((g) => (
+                          <optgroup key={g} label={g}>
+                            {emailRegistry.senders.filter((s) => s.group === g).map((s) => (
+                              <option key={s.key} value={s.key}>{s.from_name} &lt;{s.from_email}&gt; — {s.usage}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <FieldLabel label="Template" tip="44 template hardcode trong send-email edge function — mỗi template có layout cố định (subject + body + CTA pattern). Dùng 'custom' nếu muốn content động (body đến từ cc_script mỗi lần gửi). Template auto-fill theo SOP khi tick DOC-*." />
+                      <select
+                        className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                        disabled={generating}
+                        value={campaignTemplate}
+                        onChange={(e) => setCampaignTemplate(e.target.value)}
+                      >
+                        {Array.from(new Set(emailRegistry.templates.map((t) => t.group))).map((g) => (
+                          <optgroup key={g} label={g}>
+                            {emailRegistry.templates.filter((t) => t.group === g).map((t) => (
+                              <option key={t.key} value={t.key}>{t.key}{t.subgroup ? ` (${t.subgroup})` : ''}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <FieldLabel label="Audience Segment" tip="Nhóm người nhận. All = toàn bộ user có email. Paying Tier = free/tier1-3/paid theo trạng thái mua. Role = ctv/affiliate. Stage = waitlist/students. Webhook sẽ query profiles theo segment này khi Approve, rồi bulk insert cc_email_sends. Khi user thuộc nhiều segment: priority ctv>paid>tier3>tier2>tier1>students>affiliate>free>waitlist." />
+                      <select
+                        className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                        disabled={generating}
+                        value={campaignSegment}
+                        onChange={(e) => setCampaignSegment(e.target.value)}
+                      >
+                        {['All', 'Paying Tier', 'Role', 'Stage'].map((g) => (
+                          <optgroup key={g} label={g}>
+                            {emailRegistry.segments.filter((s) => s.group === g).map((s) => (
+                              <option key={s.key} value={s.key}>{s.label}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <FieldLabel label="Campaign Type" tip="One-time = campaign gửi 1 lần (newsletter tuần, flash sale, welcome broadcast). Mỗi ngày cần gửi nội dung khác = tạo campaign mới mỗi ngày với template='custom'. Recurring = campaign lặp lại cùng nội dung (chủ yếu cho drip sequence nội bộ đã có sẵn trong email_sequences). Đa số case chị dùng One-time." />
+                      <select
+                        className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                        disabled={generating}
+                        value={campaignType}
+                        onChange={(e) => setCampaignType(e.target.value)}
+                      >
+                        <option value="one_time">One-time (gửi 1 lần, nội dung snapshot)</option>
+                        <option value="recurring">Recurring (drip sequence, lặp theo cron)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <FieldLabel label="Reply-To" tip="Email mà user reply sẽ đến. Mặc định = From Email (auto-update khi đổi Sender). Có thể override sang địa chỉ khác (vd: hello@gemral.com để centralize support) dù gửi từ jennie@." />
+                      <input
+                        type="email"
+                        className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                        disabled={generating}
+                        value={campaignReplyTo}
+                        onChange={(e) => setCampaignReplyTo(e.target.value)}
+                        placeholder="hello@gemral.com"
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel label="Scheduled Send At" tip="Thời điểm cron gửi email (timezone local). Để trống sẽ dùng Scheduled Date từ Notion page. Nếu Notion cũng trống → gửi ngay khi Approve. Format: datetime-local." />
+                      <input
+                        type="datetime-local"
+                        className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                        disabled={generating}
+                        value={campaignScheduledAt}
+                        onChange={(e) => setCampaignScheduledAt(e.target.value)}
+                      />
+                      <p className="text-[10px] text-txt-3 mt-0.5">Để trống = dùng Scheduled Date từ Notion</p>
+                    </div>
+                  </div>
+                  <div>
+                    <FieldLabel label="Preview Text" tip="Text hiện cạnh subject trong inbox user (Gmail/Outlook). Nếu để trống, email client sẽ cắt đoạn đầu body làm preview → thường xấu. Viết 60-100 ký tự hook user mở email. Click chip quick-select hoặc gõ tay." />
+                    <input
+                      type="text"
+                      className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                      disabled={generating}
+                      value={campaignPreviewText}
+                      onChange={(e) => setCampaignPreviewText(e.target.value)}
+                      placeholder="VD: Khám phá tính năng GEM Scanner giúp bạn bắt pattern chính xác hơn..."
+                      maxLength={150}
+                    />
+                    <p className="text-[10px] text-txt-3 mt-0.5">{campaignPreviewText.length}/150 ký tự (khuyên 60-100)</p>
+                    {/* Preview Text quick-select chips */}
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {PREVIEW_TEXT_CHIPS.map((txt) => (
+                        <button
+                          key={txt}
+                          type="button"
+                          disabled={generating}
+                          onClick={() => setCampaignPreviewText(txt)}
+                          className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-all cursor-pointer ${campaignPreviewText === txt
+                            ? 'border-blue/40 bg-blue/10 text-blue'
+                            : 'border-border bg-bg-4 text-txt-2 hover:border-border-2 hover:text-txt'
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          title="Click để dùng preview text này"
+                        >
+                          {txt.slice(0, 50)}{txt.length > 50 ? '…' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* ── DRIP OVERRIDE cho DOC (2026-04-19 V2) ─────────────────
+                      Hiển thị khi tick bất kỳ DOC-* nào. Khi tick DOC-ONB-*
+                      (có emailCount) → render N-row map (1 email = 1 drip step).
+                      Khi tick DOC khác → legacy single-step mode. */}
+                  <div className="pt-3 border-t border-border/40 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="accent-[var(--gold)] w-4 h-4" disabled={generating} checked={dripOverrideEnabled} onChange={(e) => setDripOverrideEnabled(e.target.checked)} />
+                      <span className="text-[12px] font-semibold text-txt-2">Override drip sequence</span>
+                      <span title="DOC-ONB-* = 1 DOC bind vào N bước của drip sequence. Mỗi email có thể tuỳ chỉnh prompt riêng. Tick 'Save hint' để lưu prompt textarea vào DB (lần sau auto-prefill)." className="text-txt-3 cursor-help hover:text-gold">
+                        <HelpCircle size={11} />
+                      </span>
+                    </label>
+                    {dripOverrideEnabled && (
+                      <div className="space-y-3 pl-6 p-3 rounded border border-gold/20 bg-gold/5">
+                        <div>
+                          <FieldLabel label="Sequence" tip="Chuỗi drip email. VD: DOC-ONB-001 → Onboarding Trading Starter (5 steps). Auto-map theo order: email 1→step 1, email 2→step 2..." />
+                          <select
+                            className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                            disabled={generating}
+                            value={selectedSequenceId}
+                            onChange={(e) => { setSelectedSequenceId(e.target.value); setSelectedStepId(''); }}
+                          >
+                            <option value="">— Chọn sequence —</option>
+                            {dripSequences.map((seq) => (
+                              <option key={seq.id} value={seq.id}>
+                                {seq.name} ({seq.segment}) · {seq.steps?.length || 0} steps{seq.is_active ? '' : ' · INACTIVE'}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* MODE 1 — DOC-ONB-* (multi-email map) */}
+                        {selectedSequenceId && activeOnbDoc && overrideEmailMap.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-[11px] text-gold">
+                              🎯 Map {activeOnbDoc.emailCount} emails × {activeOnbDoc.value} → {activeOnbDoc.emailCount} jobs
+                            </p>
+                            {overrideEmailMap.map((slot, idx) => {
+                              const seq = dripSequences.find((s) => s.id === selectedSequenceId);
+                              const steps = (seq?.steps || []).slice().sort((a, b) => (a.step_order || 0) - (b.step_order || 0));
+                              return (
+                                <div key={idx} className="p-2 rounded border border-border/60 bg-bg-4/50 space-y-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-semibold text-gold min-w-[70px]">Email {idx + 1}/{activeOnbDoc.emailCount}</span>
+                                    <select
+                                      className="flex-1 text-[11px] px-2 py-1.5 rounded border border-border bg-bg-3 text-txt"
+                                      disabled={generating}
+                                      value={slot.stepId}
+                                      onChange={(e) => {
+                                        const stepId = e.target.value;
+                                        const step = steps.find((s) => s.id === stepId);
+                                        setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                          i === idx ? { ...s, stepId, extraPrompt: step?.generation_hint || s.extraPrompt } : s
+                                        ));
+                                      }}
+                                    >
+                                      <option value="">— Skip (email này không bind step) —</option>
+                                      {steps.map((st) => {
+                                        const days = Math.round(st.delay_minutes / 1440);
+                                        const hasOverride = !!st.campaign_id_override;
+                                        return (
+                                          <option key={st.id} value={st.id}>
+                                            Step {st.step_order} — {st.template} (day {days}){hasOverride ? ' · đã override' : ''}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  </div>
+                                  {slot.stepId && (
+                                    <>
+                                      <textarea
+                                        className="w-full text-[11px] px-2 py-1.5 rounded border border-border bg-bg-3 text-txt resize-y font-mono"
+                                        rows={2}
+                                        disabled={generating}
+                                        value={slot.extraPrompt}
+                                        onChange={(e) => setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                          i === idx ? { ...s, extraPrompt: e.target.value } : s
+                                        ))}
+                                        placeholder="Prompt thêm cho email này (optional — nếu trống, batch dùng step.generation_hint / baseline DOC_ONB_DAY_HINTS)"
+                                      />
+                                      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                                        <input
+                                          type="checkbox"
+                                          className="accent-[var(--gold)] w-3 h-3"
+                                          disabled={generating}
+                                          checked={slot.saveHint}
+                                          onChange={(e) => setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                            i === idx ? { ...s, saveHint: e.target.checked } : s
+                                          ))}
+                                        />
+                                        <span className="text-[10px] text-txt-3">Save prompt này vào step để lần sau auto-prefill</span>
+                                      </label>
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* MODE 2 — Legacy single-step (không phải DOC-ONB-*) */}
+                        {selectedSequenceId && !activeOnbDoc && (
+                          <div>
+                            <FieldLabel label="Step (legacy single-step)" tip="Tick 1 DOC-ONB-* để dùng chế độ map multi-step. Ở đây chọn 1 step đơn cho email lẻ." />
+                            <select
+                              className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                              disabled={generating}
+                              value={selectedStepId}
+                              onChange={(e) => setSelectedStepId(e.target.value)}
+                            >
+                              <option value="">— Chọn step —</option>
+                              {dripSequences.find((s) => s.id === selectedSequenceId)?.steps?.map((st) => {
+                                const days = Math.round(st.delay_minutes / 1440);
+                                const hasOverride = !!st.campaign_id_override;
+                                return (
+                                  <option key={st.id} value={st.id}>
+                                    Step {st.step_order} — {st.template} (day {days}){hasOverride ? ' · ĐÃ OVERRIDE' : ''}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               {Array.from(new Set(DOC_SOP_OPTIONS.map((o) => o.group))).map((group) => (
                 <div key={group} className="space-y-1.5">
                   <div className="text-[11px] font-semibold text-txt-3 uppercase tracking-wider">{group}</div>
@@ -4209,6 +4941,221 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                       {tpl.label}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* ── EMAIL SCHEMA + PUBLISHING (2026-04-19) ─────────────────
+                  Moved từ DOC section sang đây. Jennie chọn "Loại email" ở trên
+                  auto-fill Template/Segment qua EMAIL_TYPE_TO_TEMPLATE useEffect. */}
+              <div className="space-y-3 pt-3 mt-3 border-t border-border/40" style={{ userSelect: 'text' }}>
+                <h5 className="text-[11px] font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
+                  <Mail size={12} />
+                  Email Schema (auto-fill theo "Loại email" — tùy chỉnh nếu muốn)
+                </h5>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <FieldLabel label="Posted Account" tip="Kênh đăng/gửi. Email marketing chọn 'Email (Resend)'." />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={postedAccount} onChange={(e) => setPostedAccount(e.target.value)}>
+                      {POSTED_ACCOUNT_OPTIONS.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Publish Mode" tip="Scheduled = chờ cron. Immediate = gửi ngay sau Approve. Threshold 5 = gom đủ 5." />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={publishMode} onChange={(e) => setPublishMode(e.target.value)}>
+                      {PUBLISH_MODE_OPTIONS.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Định dạng xuất" tip="Email = HTML brand. 'Cả hai' nếu muốn MD edit source + HTML ready." />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={docOutputFormat} onChange={(e) => setDocOutputFormat(e.target.value)}>
+                      <option value="auto">Auto (HTML)</option>
+                      <option value="html">HTML</option>
+                      <option value="both">Cả hai (MD + HTML)</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <FieldLabel label="Sender (From)" tip="Địa chỉ email gửi đi. Brand/Personal/Partnership. Đổi Sender auto-set Reply-To." />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignFromKey} onChange={(e) => { setCampaignFromKey(e.target.value); const s = emailRegistry.senders.find((x) => x.key === e.target.value); if (s) setCampaignReplyTo(s.from_email); }}>
+                      {['Brand', 'Personal', 'Partnership'].map((g) => (
+                        <optgroup key={g} label={g}>{emailRegistry.senders.filter((s) => s.group === g).map((s) => (<option key={s.key} value={s.key}>{s.from_name} &lt;{s.from_email}&gt;</option>))}</optgroup>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Template" tip={'Auto-fill theo "Loại email". daily_newsletter_* = body động mỗi ngày. custom = HTML tùy chỉnh.'} />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignTemplate} onChange={(e) => setCampaignTemplate(e.target.value)}>
+                      {Array.from(new Set(emailRegistry.templates.map((t) => t.group))).map((g) => (
+                        <optgroup key={g} label={g}>{emailRegistry.templates.filter((t) => t.group === g).map((t) => (<option key={t.key} value={t.key}>{t.key}{t.subgroup ? ` (${t.subgroup})` : ''}</option>))}</optgroup>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Audience Segment" tip="Nhóm người nhận. Priority overlap: ctv>paid>tier3>tier2>tier1>students>affiliate>free>waitlist." />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignSegment} onChange={(e) => setCampaignSegment(e.target.value)}>
+                      {['All', 'Paying Tier', 'Role', 'Stage'].map((g) => (
+                        <optgroup key={g} label={g}>{emailRegistry.segments.filter((s) => s.group === g).map((s) => (<option key={s.key} value={s.key}>{s.label}</option>))}</optgroup>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Campaign Type" tip="One-time = 1 lần. Recurring = drip sequence lặp theo cron." />
+                    <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignType} onChange={(e) => setCampaignType(e.target.value)}>
+                      <option value="one_time">One-time</option>
+                      <option value="recurring">Recurring</option>
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel label="Reply-To" tip="Email mà user reply sẽ đến." />
+                    <input type="email" className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignReplyTo} onChange={(e) => setCampaignReplyTo(e.target.value)} placeholder="hello@gemral.com" />
+                  </div>
+                  <div>
+                    <FieldLabel label="Scheduled Send At" tip="Trống = dùng Scheduled Date từ Notion." />
+                    <input type="datetime-local" className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignScheduledAt} onChange={(e) => setCampaignScheduledAt(e.target.value)} />
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel label="Preview Text" tip="Text cạnh subject trong inbox. 60-100 chars. Click chip để auto-điền." />
+                  <input type="text" className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignPreviewText} onChange={(e) => setCampaignPreviewText(e.target.value)} placeholder="VD: Khám phá tính năng GEM Scanner..." maxLength={150} />
+                  <p className="text-[10px] text-txt-3 mt-0.5">{campaignPreviewText.length}/150 ký tự</p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {PREVIEW_TEXT_CHIPS.map((txt) => (
+                      <button key={txt} type="button" disabled={generating} onClick={() => setCampaignPreviewText(txt)} className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-all cursor-pointer ${campaignPreviewText === txt ? 'border-blue/40 bg-blue/10 text-blue' : 'border-border bg-bg-4 text-txt-2 hover:border-border-2 hover:text-txt'} disabled:opacity-50 disabled:cursor-not-allowed`} title="Click để dùng preview text này">
+                        {txt.slice(0, 50)}{txt.length > 50 ? '…' : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── DRIP OVERRIDE (2026-04-19 V2 — Map N emails → N steps) ─
+                    Khi DOC-ONB-* (emailCount) được tick → render 1 hàng cho mỗi
+                    email của series, mỗi hàng gồm step-dropdown + textarea
+                    prompt thêm (prefill từ step.generation_hint) + save-hint
+                    checkbox. Submit loop tạo N jobs tương ứng.
+
+                    Nếu không phải DOC-ONB-* → fallback UI single-step (legacy). */}
+                <div className="pt-3 border-t border-border/40 space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" className="accent-[var(--gold)] w-4 h-4" disabled={generating} checked={dripOverrideEnabled} onChange={(e) => setDripOverrideEnabled(e.target.checked)} />
+                    <span className="text-[12px] font-semibold text-txt-2">Override drip sequence</span>
+                    <span title="DOC-ONB-* = 1 DOC bind vào N bước của drip sequence. Mỗi email có thể tuỳ chỉnh prompt riêng. Tick Save hint để lưu prompt textarea vào DB (lần sau auto-prefill)." className="text-txt-3 cursor-help hover:text-gold">
+                      <HelpCircle size={11} />
+                    </span>
+                  </label>
+                  {dripOverrideEnabled && (
+                    <div className="space-y-3 pl-6 p-3 rounded border border-gold/20 bg-gold/5">
+                      <div>
+                        <FieldLabel label="Sequence" tip="Chuỗi drip email. Ví dụ: DOC-ONB-001 → Onboarding Trading Starter (5 steps). Order sẽ auto-map email 1→step 1, email 2→step 2..." />
+                        <select
+                          className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                          disabled={generating}
+                          value={selectedSequenceId}
+                          onChange={(e) => { setSelectedSequenceId(e.target.value); setSelectedStepId(''); }}
+                        >
+                          <option value="">— Chọn sequence —</option>
+                          {dripSequences.map((seq) => (
+                            <option key={seq.id} value={seq.id}>
+                              {seq.name} ({seq.segment}) · {seq.steps?.length || 0} steps{seq.is_active ? '' : ' · INACTIVE'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* MODE 1 — DOC-ONB-* (multi-email map) */}
+                      {selectedSequenceId && activeOnbDoc && overrideEmailMap.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-[11px] text-gold">
+                            🎯 Map {activeOnbDoc.emailCount} emails × {activeOnbDoc.value} → {activeOnbDoc.emailCount} jobs
+                          </p>
+                          {overrideEmailMap.map((slot, idx) => {
+                            const seq = dripSequences.find((s) => s.id === selectedSequenceId);
+                            const steps = (seq?.steps || []).slice().sort((a, b) => (a.step_order || 0) - (b.step_order || 0));
+                            return (
+                              <div key={idx} className="p-2 rounded border border-border/60 bg-bg-4/50 space-y-1.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] font-semibold text-gold min-w-[70px]">Email {idx + 1}/{activeOnbDoc.emailCount}</span>
+                                  <select
+                                    className="flex-1 text-[11px] px-2 py-1.5 rounded border border-border bg-bg-3 text-txt"
+                                    disabled={generating}
+                                    value={slot.stepId}
+                                    onChange={(e) => {
+                                      const stepId = e.target.value;
+                                      const step = steps.find((s) => s.id === stepId);
+                                      setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                        i === idx ? { ...s, stepId, extraPrompt: step?.generation_hint || s.extraPrompt } : s
+                                      ));
+                                    }}
+                                  >
+                                    <option value="">— Skip (email này không bind step) —</option>
+                                    {steps.map((st) => {
+                                      const days = Math.round(st.delay_minutes / 1440);
+                                      const hasOverride = !!st.campaign_id_override;
+                                      return (
+                                        <option key={st.id} value={st.id}>
+                                          Step {st.step_order} — {st.template} (day {days}){hasOverride ? ' · đã override' : ''}
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                </div>
+                                {slot.stepId && (
+                                  <>
+                                    <textarea
+                                      className="w-full text-[11px] px-2 py-1.5 rounded border border-border bg-bg-3 text-txt resize-y font-mono"
+                                      rows={2}
+                                      disabled={generating}
+                                      value={slot.extraPrompt}
+                                      onChange={(e) => setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                        i === idx ? { ...s, extraPrompt: e.target.value } : s
+                                      ))}
+                                      placeholder="Prompt thêm cho email này (optional — nếu trống, batch dùng step.generation_hint / baseline DOC_ONB_DAY_HINTS)"
+                                    />
+                                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        className="accent-[var(--gold)] w-3 h-3"
+                                        disabled={generating}
+                                        checked={slot.saveHint}
+                                        onChange={(e) => setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                          i === idx ? { ...s, saveHint: e.target.checked } : s
+                                        ))}
+                                      />
+                                      <span className="text-[10px] text-txt-3">Save prompt này vào step để lần sau auto-prefill</span>
+                                    </label>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* MODE 2 — Legacy single-step (không phải DOC-ONB-*, hoặc chưa chọn DOC-ONB-*) */}
+                      {selectedSequenceId && !activeOnbDoc && (
+                        <div>
+                          <FieldLabel label="Step (legacy single-step)" tip="Tick 1 DOC-ONB-* để dùng chế độ map multi-step. Ở đây chọn 1 step đơn cho email lẻ." />
+                          <select
+                            className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
+                            disabled={generating}
+                            value={selectedStepId}
+                            onChange={(e) => setSelectedStepId(e.target.value)}
+                          >
+                            <option value="">— Chọn step —</option>
+                            {dripSequences.find((s) => s.id === selectedSequenceId)?.steps?.map((st) => {
+                              const days = Math.round(st.delay_minutes / 1440);
+                              const hasOverride = !!st.campaign_id_override;
+                              return (
+                                <option key={st.id} value={st.id}>
+                                  Step {st.step_order} — {st.template} (day {days}){hasOverride ? ' · ĐÃ OVERRIDE' : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

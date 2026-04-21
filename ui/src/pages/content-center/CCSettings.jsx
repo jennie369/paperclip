@@ -362,7 +362,8 @@ export default function SettingsPage() {
                     className="w-full max-w-md"
                   >
                     <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (Khuyến nghị)</option>
-                    <option value="claude-opus-4-6">Claude Opus 4.6 (Mạnh nhất)</option>
+                    <option value="claude-opus-4-7">Claude Opus 4.7 (Mạnh nhất)</option>
+                    <option value="claude-opus-4-6">Claude Opus 4.6</option>
                     <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (Nhanh nhất)</option>
                   </CCSelect>
                 </div>
