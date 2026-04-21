@@ -71,10 +71,22 @@ export function delegationRoutes(db: Db) {
     },
   );
 
-  // Router-level gate. Runs before zod validate() so the smoke test
-  // `curl POST /api/delegations` (with any body, including empty) returns
-  // 503 cleanly while the flag is off. When we flip the flag (P4), this
-  // middleware becomes a pass-through.
+  // Read-only list for the UI — NOT gated by the feature flag. This lets
+  // P3 ship a visible observability page even while the feature is off
+  // (empty state instead of 503 error). Company isolation still applies.
+  router.get("/companies/:companyId/delegations", async (req, res) => {
+    const { companyId } = req.params;
+    assertCompanyAccess(req, companyId);
+    const limitParam = Number.parseInt(String(req.query.limit ?? ""), 10);
+    const limit = Number.isFinite(limitParam) ? limitParam : undefined;
+    const rows = await svc.listByCompany(companyId, { limit });
+    res.json(rows);
+  });
+
+  // Router-level gate for MUTATING / action endpoints below. Runs before
+  // zod validate() so the smoke test `curl POST /api/delegations` (with any
+  // body, including empty) returns 503 cleanly while the flag is off. When we
+  // flip the flag (P4), this middleware becomes a pass-through.
   router.use((_req, _res, next) => {
     if (!config.delegationEnabled) {
       return next(

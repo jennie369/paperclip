@@ -233,6 +233,26 @@ export function agentDelegationService(
       );
   }
 
+  async function listByCompany(
+    companyId: string,
+    opts: { limit?: number } = {},
+  ): Promise<DelegationRow[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 200, 1), 500);
+    const rows = await db
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, DELEGATION_ORIGIN_KIND),
+        ),
+      )
+      .orderBy(sql`${issues.createdAt} desc`)
+      .limit(limit);
+    const fallback: DelegationMeta = { timeoutMs: config.defaultTimeoutMs, turnMode: "do" };
+    return rows.map((row) => issueRowToDelegation(row, fallback));
+  }
+
   async function assertTargetAgent(companyId: string, targetAgentId: string) {
     const row = await db
       .select({
@@ -469,6 +489,7 @@ export function agentDelegationService(
     get,
     findByTraceId,
     listActiveByCaller,
+    listByCompany,
     config,
   };
 }

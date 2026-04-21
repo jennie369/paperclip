@@ -33,6 +33,7 @@ const mockSvc = vi.hoisted(() => ({
   get: vi.fn(),
   findByTraceId: vi.fn(),
   listActiveByCaller: vi.fn(),
+  listByCompany: vi.fn(),
 }));
 
 const mockAgentService = vi.hoisted(() => ({
@@ -323,6 +324,47 @@ describe("delegation routes — happy path", () => {
       .send({ reason: "nevermind" });
     expect(res.status).toBe(403);
     expect(mockSvc.cancel).not.toHaveBeenCalled();
+  });
+
+  it("GET /companies/:companyId/delegations is NOT flag-gated and returns list", async () => {
+    setFlag(false); // explicitly off — list must still work
+    mockSvc.listByCompany.mockResolvedValueOnce([
+      {
+        id: "issue-a",
+        traceId: TRACE_ID,
+        companyId: COMPANY_ID,
+        callerAgentId: AGENT_ID,
+        targetAgentId: TARGET_ID,
+        parentIssueId: null,
+        status: "done",
+        requestedAt: new Date(),
+        completedAt: new Date(),
+        depth: 1,
+        meta: { timeoutMs: 300_000, turnMode: "do" },
+        task: "seeded",
+      },
+    ]);
+    const res = await request(createApp(boardActor)).get(
+      `/api/companies/${COMPANY_ID}/delegations`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].traceId).toBe(TRACE_ID);
+    expect(mockSvc.listByCompany).toHaveBeenCalledWith(COMPANY_ID, { limit: undefined });
+  });
+
+  it("GET /companies/:companyId/delegations enforces company isolation for non-admin session users", async () => {
+    const sessionUser: ActorShape = {
+      type: "board",
+      userId: "user-1",
+      companyIds: [COMPANY_ID],
+      source: "session",
+      isInstanceAdmin: false,
+    };
+    const res = await request(createApp(sessionUser)).get(
+      `/api/companies/other-company-id/delegations`,
+    );
+    expect(res.status).toBe(403);
   });
 
   it("POST /cancel succeeds when caller matches", async () => {
