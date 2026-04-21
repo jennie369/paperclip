@@ -28,6 +28,11 @@ export interface BuildPromptParams {
   readonly track: Track;
   readonly pillar: Pillar;
   readonly productHooks?: readonly string[];
+  /**
+   * Content topic slug (from CCAIGen dropdown). When set to 'app_features',
+   * injects the use-case/benefit-first rule block. See getAppFeaturesRule().
+   */
+  readonly contentTopic?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,19 +133,70 @@ const WRITING_MODE_DESCRIPTIONS: Readonly<Record<WritingMode, string>> = {
 // ---------------------------------------------------------------------------
 // GEM Features & Courses
 // ---------------------------------------------------------------------------
+//
+// ⚠️ USE-CASE / BENEFIT FIRST — KHÔNG LIỆT KÊ TÍNH NĂNG
+//
+// Chị Jennie feedback 2026-04-15:
+//   "thêm option hoặc prompt để batch + AI + framework mặc định hiểu là viết về
+//    tính năng app gem thì phải viết kiểu use case chứ ko phải liệt kê tính năng
+//    đơn thuần. phải nói về lợi ích, cảm giác, thành công, sự tiện lợi, … sau khi
+//    đạt được kết quả từ việc sử dụng app/tính năng của app gem"
+//
+// Quy tắc viết mỗi entry phía dưới:
+//   ❌ BAD:  "GEM Scanner — công cụ quét tín hiệu crypto"
+//   ✅ GOOD: "GEM Scanner — trong khi bạn uống cà phê sáng, app đã tìm ra 3 setup
+//            sẵn sàng cho bạn. Cảm giác như có trợ lý chuyên nghiệp tự canh chart
+//            thay mình."
 
 export function getGemFeatures(): string {
   return [
-    'GEM Scanner — Công cụ quét tín hiệu crypto, tìm điểm mua bán tối ưu',
-    'GEM Vision Board — Bảng tầm nhìn kỹ thuật số, thiết lập mục tiêu và theo dõi hành trình',
-    'GEM Tarot — Bài tarot hướng dẫn năng lượng, kết nối trực giác với quyết định đầu tư',
-    'GEM Sư Phụ AI — Trợ lý AI tâm thức, hỏi đáp về thiền, năng lượng, và chiến lược sống',
-    'Templates giao dịch — Mẫu chiến lược trading đã được kiểm chứng',
-    'Paper Trade — Giao dịch thử nghiệm không rủi ro, luyện tập trước khi vào thật',
-    'Tần Số Tình Yêu — Khóa chữa lành tình yêu, nâng cao tần số trong mối quan hệ',
-    'Master AI — Khóa làm chủ AI, ứng dụng công nghệ vào cuộc sống và kinh doanh',
-    'App GEMRAL — Ứng dụng di động GEM, tất cả công cụ trong một nền tảng',
+    'GEM Scanner — Thay vì ngồi canh chart 8 tiếng/ngày, bạn mở app lúc sáng và thấy 3-5 setup đã formed sẵn với entry/SL/TP rõ ràng. Cảm giác: kiểm soát, tự tin, có thời gian cho gia đình thay vì dán mắt màn hình.',
+    'GEM Vision Board — Mỗi sáng mở app, bạn thấy mục tiêu 6 tháng cùng hình ảnh cụ thể kết quả mong muốn. Sau 3 tuần, bạn nhận ra não đã "khóa" vào đó và ra quyết định hàng ngày phù hợp với tầm nhìn — không còn lạc trong bận rộn.',
+    'GEM Tarot — Khi đứng giữa 2 lựa chọn đầu tư khó, rút 1 quẻ để nghe trực giác nói gì. Không phải "đúng/sai" — là khoảng lặng 3 phút giúp bạn lắng xuống, thấy mình thực sự muốn gì trước khi click mua.',
+    'GEM Master Sư Phụ AI — 2h sáng không ngủ được vì lo lệnh thua, bạn chat với AI "mình đang lo lắng" — AI không giảng bài trading, nó hỏi câu đúng để bạn nhìn ra pattern tâm lý của mình. Sáng hôm sau bạn ra quyết định tỉnh táo thay vì revenge trade.',
+    'Templates giao dịch — Thay vì 6 tháng đọc sách trading, bạn copy 1 template đã được backtest, điều chỉnh theo khẩu vị rủi ro của mình, và bắt đầu ngay tuần sau. Tiết kiệm 6 tháng, tránh đống sai lầm người khác đã trả giá.',
+    'Paper Trade — Thử 10 lệnh với vốn ảo, thấy mình có thói quen vào lệnh khi FOMO. Học được mà không mất tiền thật. Đến khi vào thật, bạn đã biết chính mình nhiều hơn 90% trader mới.',
+    'Tần Số Tình Yêu — Sau 3 buổi, bạn bớt check điện thoại xem người kia có trả lời chưa. Bạn thấy mình đủ — không vì ai "cho đủ". Mối quan hệ chuyển từ "cần" sang "chọn" — nhẹ nhàng hơn rất nhiều.',
+    'Master AI — 2 tuần sau khóa, bạn tiết kiệm 10-15 giờ/tuần nhờ AI làm việc hành chính, email, report. Thời gian đó dùng để chiến lược, chơi với con, hoặc nghỉ. Không phải "làm thêm" — mà "làm ít hơn mà đúng hơn".',
+    'App GEMRAL — Thay vì mở 5 app khác nhau (Binance chart, Google Calendar, Notion, Spotify thiền, Messenger hỏi coach), bạn chỉ cần 1 app cho trading + tâm thức + nhật ký + community. Ít friction, nhiều focus. Đây là app bạn mở đầu tiên mỗi sáng và cuối cùng mỗi tối.',
   ].join('\n');
+}
+
+/**
+ * Topic-specific rule — injected when topic involves App GEMRAL features.
+ * Use when: user selects "app_features" / "📱 Tính năng App GEMRAL" content topic.
+ *
+ * Callers:
+ *  - brandVoicePrompt.ts §8 GEM Features (always included)
+ *  - CCAIGen.jsx when contentTopic === 'app_features' (explicit prompt injection)
+ *  - batch_processor.py via knowledge file `FRAMEWORK_TINH_NANG_APP_GEMRAL_USECASE_FIRST.md`
+ */
+export function getAppFeaturesRule(): string {
+  return (
+    '═══════════════════════════════════════════════════════════\n' +
+    '🔴 QUY TẮC VIẾT VỀ TÍNH NĂNG APP GEMRAL — USE-CASE FIRST\n' +
+    '═══════════════════════════════════════════════════════════\n\n' +
+    'KHI VIẾT VỀ APP GEMRAL hoặc BẤT KỲ TÍNH NĂNG NÀO CỦA APP:\n\n' +
+    '❌ CẤM viết theo format liệt kê:\n' +
+    '   "App GEMRAL có: (1) Scanner, (2) Vision Board, (3) Tarot, (4) AI…"\n\n' +
+    '✅ BẮT BUỘC viết theo use-case / benefit / cảm giác:\n' +
+    '   Mỗi tính năng PHẢI trả lời 3 câu:\n' +
+    '     1. "Trước khi dùng, người đọc khổ như thế nào?" (đặt vấn đề cụ thể, một khoảnh khắc)\n' +
+    '     2. "Khi dùng, họ làm gì cụ thể?" (bước hành động ngắn gọn, không technical)\n' +
+    '     3. "Kết quả họ CẢM giác ra sao?" (cảm xúc cụ thể, không "tốt" chung chung)\n\n' +
+    'VÍ DỤ ĐÚNG:\n' +
+    '   "2h sáng trở mình không ngủ được vì mới thua 3 lệnh liên tiếp, tay cứ muốn mở app vào lệnh gỡ.\n' +
+    '    Thay vào đó, bạn mở GEM Master Sư Phụ, gõ: ‘mình đang muốn revenge trade’.\n' +
+    '    AI không bảo đừng — nó hỏi: ‘điều gì khiến mình cảm thấy mình phải gỡ ngay đêm nay?’\n' +
+    '    15 phút sau, bạn nhận ra lệnh thua không phải do market — là do sáng nay mâu thuẫn với người yêu.\n' +
+    '    Bạn đóng app, đi ngủ. Sáng hôm sau, sổ sạch, đầu tỉnh — không còn muốn gỡ nữa."\n\n' +
+    'VÍ DỤ SAI (tuyệt đối không được viết như này):\n' +
+    '   "GEM Master là AI thông minh giúp bạn tư vấn tâm lý giao dịch 24/7.\n' +
+    '    Tính năng chính: chat không giới hạn, ghi nhớ context, gợi ý giải pháp."\n\n' +
+    'Tone: empathic, specific, not salesy. Người đọc phải thấy MÌNH trong câu chuyện.\n' +
+    'Tránh: từ marketing ("đột phá", "cách mạng", "tuyệt vời"), bullet list tính năng, so sánh với competitor.\n' +
+    'Luôn dùng: khoảnh khắc cụ thể, cảm xúc rõ, hành động nhỏ, kết quả đo đếm được bằng cảm giác.'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +418,7 @@ export function buildSystemPrompt(params: BuildPromptParams): string {
     track,
     pillar,
     productHooks,
+    contentTopic,
   } = params;
 
   const sections: string[] = [];
@@ -441,6 +498,11 @@ export function buildSystemPrompt(params: BuildPromptParams): string {
     'Các công cụ và khóa học GEM để weave vào nội dung (rải đều, KHÔNG dồn cuối):\n\n' +
     getGemFeatures(),
   );
+
+  // ─── 8b. APP FEATURES RULE (conditional) ───
+  if (contentTopic === 'app_features') {
+    sections.push(getAppFeaturesRule());
+  }
 
   // ─── Product hooks (optional) ───
   if (productHooks && productHooks.length > 0) {

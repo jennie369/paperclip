@@ -15,7 +15,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Sparkles, FileText, CheckCircle, Rocket, Bot,
   ChevronLeft, ChevronRight, RefreshCw, Loader2,
-  Clock, X, Copy, Check, AlertCircle,
+  Clock, X, Copy, Check, AlertCircle, Trash2,
+  CheckSquare, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -91,10 +92,11 @@ function renderMd(md: string): string {
 
 // ─── ScriptCard (draggable) ───────────────────────────────────────
 function ScriptCard({
-  script, selected, onSelect, onExpand, expanded, inPool = false,
+  script, selected, onSelect, onExpand, expanded, inPool = false, onUpdate,
 }: {
   script: any; selected?: boolean; onSelect?: (id: string) => void;
   onExpand?: (id: string) => void; expanded?: boolean; inPool?: boolean;
+  onUpdate?: (id: string, fields: Record<string, any>) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `script:${script.id}`,
@@ -106,13 +108,31 @@ function ScriptCard({
 
   const status = STATUS_CFG[script.status] || STATUS_CFG.topic;
   const pillarBorder = PILLAR_BORDER[script.pillar] || "border-l-zinc-200";
-  const hasCopy = useRef(false);
   const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(script.title || "");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (script.body) { navigator.clipboard.writeText(script.body); setCopied(true); setTimeout(() => setCopied(false), 1500); }
   };
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditTitle(script.title || "");
+    setEditing(true);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const saveEdit = () => {
+    if (editTitle.trim() && editTitle !== script.title) {
+      onUpdate?.(script.id, { title: editTitle.trim() });
+    }
+    setEditing(false);
+  };
+
+  const cancelEdit = () => { setEditing(false); setEditTitle(script.title || ""); };
 
   return (
     <div
@@ -125,7 +145,7 @@ function ScriptCard({
         ${inPool ? "p-2" : "p-1.5"}
       `}
     >
-      {/* Top row: checkbox + drag handle + status */}
+      {/* Top row: checkbox + drag handle + status + edit */}
       <div className="flex items-center gap-1 mb-1">
         {onSelect && (
           <input
@@ -145,21 +165,42 @@ function ScriptCard({
         <span className={`text-[9px] px-1 py-0.5 rounded border shrink-0 ${status.cls}`}>
           {status.label}
         </span>
-        {script.body && (
-          <button onClick={handleCopy} className="ml-auto opacity-0 group-hover:opacity-100 shrink-0" title="Copy">
-            {copied ? <Check size={9} className="text-emerald-500" /> : <Copy size={9} className="text-zinc-400" />}
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-0.5">
+          {onUpdate && !editing && (
+            <button onClick={startEdit} className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 hover:bg-zinc-100 rounded" title="Sửa tiêu đề">
+              <Pencil size={9} className="text-zinc-400" />
+            </button>
+          )}
+          {script.body && (
+            <button onClick={handleCopy} className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5" title="Copy">
+              {copied ? <Check size={9} className="text-emerald-500" /> : <Copy size={9} className="text-zinc-400" />}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Title */}
-      <p
-        className="font-medium leading-snug cursor-pointer hover:text-primary line-clamp-2"
-        onClick={() => onExpand?.(script.id)}
-        title={script.title}
-      >
-        {script.title || "Không có tiêu đề"}
-      </p>
+      {/* Title — inline edit */}
+      {editing ? (
+        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+          <input
+            ref={inputRef}
+            value={editTitle}
+            onChange={e => setEditTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+            onBlur={saveEdit}
+            className="flex-1 border rounded px-1 py-0.5 text-xs bg-white focus:ring-1 focus:ring-primary/40 outline-none"
+          />
+        </div>
+      ) : (
+        <p
+          className="font-medium leading-snug cursor-pointer hover:text-primary line-clamp-2"
+          onClick={() => onExpand?.(script.id)}
+          onDoubleClick={onUpdate ? startEdit : undefined}
+          title={`${script.title}${onUpdate ? " (double-click để sửa)" : ""}`}
+        >
+          {script.title || "Không có tiêu đề"}
+        </p>
+      )}
 
       {/* Word count */}
       {script.word_count > 0 && (
@@ -167,7 +208,7 @@ function ScriptCard({
       )}
 
       {/* Expand panel */}
-      {expanded && <ScriptExpandPanel script={script} />}
+      {expanded && <ScriptExpandPanel script={script} onUpdate={onUpdate} />}
     </div>
   );
 }
@@ -185,9 +226,11 @@ function ScriptCardPreview({ script }: { script: any }) {
 }
 
 // ─── Inline expand panel ──────────────────────────────────────────
-function ScriptExpandPanel({ script }: { script: any }) {
+function ScriptExpandPanel({ script, onUpdate }: { script: any; onUpdate?: (id: string, fields: Record<string, any>) => void }) {
   const { pushToast } = useToast();
   const qc = useQueryClient();
+  const [editingBody, setEditingBody] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState(script.body || "");
 
   const approveMut = useMutation({
     mutationFn: async () => {
@@ -227,23 +270,52 @@ function ScriptExpandPanel({ script }: { script: any }) {
         </>
       ) : (
         <>
-          <div
-            className="text-[10px] leading-relaxed max-h-32 overflow-y-auto bg-zinc-50 rounded p-1.5"
-            dangerouslySetInnerHTML={{ __html: renderMd(script.body) }}
-          />
-          <div className="flex gap-1 flex-wrap">
-            {script.status === "draft" && (
-              <Button size="sm" variant="default" className="h-5 text-[9px] px-1.5 bg-emerald-600 hover:bg-emerald-700"
-                onClick={() => approveMut.mutate()} disabled={approveMut.isPending}>
-                {approveMut.isPending ? <Loader2 size={8} className="animate-spin" /> : <CheckCircle size={8} />}
-                Duyệt
-              </Button>
-            )}
-            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5"
-              onClick={() => { navigator.clipboard.writeText(script.body); pushToast({ title: "Đã copy", tone: "success" }); }}>
-              <Copy size={8} /> Copy
-            </Button>
-          </div>
+          {editingBody ? (
+            <div onClick={e => e.stopPropagation()}>
+              <textarea
+                value={bodyDraft}
+                onChange={e => setBodyDraft(e.target.value)}
+                rows={6}
+                className="w-full text-[10px] leading-relaxed bg-white border rounded p-1.5 font-mono resize-y outline-none focus:ring-1 focus:ring-primary/40"
+              />
+              <div className="flex gap-1 mt-1">
+                <Button size="sm" className="h-5 text-[9px] px-1.5" onClick={() => { onUpdate?.(script.id, { body: bodyDraft }); setEditingBody(false); }}>
+                  <Check size={8} /> Lưu
+                </Button>
+                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5" onClick={() => setEditingBody(false)}>
+                  Huỷ
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div
+                className="text-[10px] leading-relaxed max-h-32 overflow-y-auto bg-zinc-50 rounded p-1.5 cursor-pointer hover:bg-zinc-100"
+                dangerouslySetInnerHTML={{ __html: renderMd(script.body) }}
+                onDoubleClick={() => { setBodyDraft(script.body); setEditingBody(true); }}
+                title="Double-click để sửa nội dung"
+              />
+              <div className="flex gap-1 flex-wrap">
+                {onUpdate && (
+                  <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5"
+                    onClick={() => { setBodyDraft(script.body); setEditingBody(true); }}>
+                    <Pencil size={8} /> Sửa
+                  </Button>
+                )}
+                {script.status === "draft" && (
+                  <Button size="sm" variant="default" className="h-5 text-[9px] px-1.5 bg-emerald-600 hover:bg-emerald-700"
+                    onClick={() => approveMut.mutate()} disabled={approveMut.isPending}>
+                    {approveMut.isPending ? <Loader2 size={8} className="animate-spin" /> : <CheckCircle size={8} />}
+                    Duyệt
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1.5"
+                  onClick={() => { navigator.clipboard.writeText(script.body); pushToast({ title: "Đã copy", tone: "success" }); }}>
+                  <Copy size={8} /> Copy
+                </Button>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
@@ -252,10 +324,11 @@ function ScriptExpandPanel({ script }: { script: any }) {
 
 // ─── CalendarSlot (droppable) ─────────────────────────────────────
 function CalendarSlot({
-  slotId, script, selected, onSelect, expandedId, onExpand,
+  slotId, script, selected, onSelect, expandedId, onExpand, onUpdate,
 }: {
   slotId: string; script?: any; selected?: boolean;
   onSelect?: (id: string) => void; expandedId?: string | null; onExpand?: (id: string) => void;
+  onUpdate?: (id: string, fields: Record<string, any>) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: slotId });
 
@@ -273,6 +346,7 @@ function CalendarSlot({
           onSelect={onSelect}
           onExpand={onExpand}
           expanded={expandedId === script.id}
+          onUpdate={onUpdate}
         />
       ) : (
         <div className={`h-full flex items-center justify-center text-[9px] rounded border-dashed border
@@ -286,12 +360,14 @@ function CalendarSlot({
 
 // ─── Unassigned Pool (droppable) ──────────────────────────────────
 function UnassignedPool({
-  scripts, expandedId, onExpand, selectedIds, onSelect,
+  scripts, expandedId, onExpand, selectedIds, onSelect, onSelectAll, onUpdate,
 }: {
   scripts: any[]; expandedId: string | null; onExpand: (id: string) => void;
-  selectedIds: Set<string>; onSelect: (id: string) => void;
+  selectedIds: Set<string>; onSelect: (id: string) => void; onSelectAll?: (ids: string[]) => void;
+  onUpdate?: (id: string, fields: Record<string, any>) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: "pool" });
+  const allSelected = scripts.length > 0 && scripts.every(s => selectedIds.has(s.id));
 
   return (
     <div
@@ -300,6 +376,13 @@ function UnassignedPool({
     >
       <Card className="p-3 h-full min-h-[200px]">
         <div className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1">
+          <button
+            onClick={() => onSelectAll?.(scripts.map(s => s.id))}
+            className={`p-0.5 rounded hover:bg-muted ${allSelected ? "text-primary" : "text-muted-foreground"}`}
+            title={allSelected ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+          >
+            <CheckSquare size={12} />
+          </button>
           <span>Chưa gán</span>
           <span className="ml-auto bg-muted text-muted-foreground rounded px-1">{scripts.length}</span>
         </div>
@@ -311,7 +394,7 @@ function UnassignedPool({
           <div className="space-y-1.5 max-h-[560px] overflow-y-auto">
             {scripts.map(s => (
               <ScriptCard key={s.id} script={s} selected={selectedIds.has(s.id)}
-                onSelect={onSelect} onExpand={onExpand} expanded={expandedId === s.id} inPool />
+                onSelect={onSelect} onExpand={onExpand} expanded={expandedId === s.id} inPool onUpdate={onUpdate} />
             ))}
           </div>
         )}
@@ -508,6 +591,34 @@ export function PlannerBoard() {
     onError: (e: any) => pushToast({ title: `Lỗi approve: ${e.message}`, tone: "error" }),
   });
 
+  const deleteMut = useMutation({
+    mutationFn: async (scriptIds: string[]) => {
+      const res = await fetch("/api/ops/content-pipeline/scripts/bulk-delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script_ids: scriptIds }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Lỗi");
+      return d;
+    },
+    onSuccess: (d) => { pushToast({ title: `Đã xoá ${d.deleted} bài`, tone: "success" }); clearSelection(); invalidate(); },
+    onError: (e: any) => pushToast({ title: `Lỗi xoá: ${e.message}`, tone: "error" }),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: async ({ id, ...fields }: { id: string; title?: string; body?: string }) => {
+      const res = await fetch(`/api/ops/content-pipeline/scripts/${id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Lỗi");
+      return d;
+    },
+    onSuccess: () => { pushToast({ title: "Đã cập nhật", tone: "success" }); setEditingScript(null); invalidate(); },
+    onError: (e: any) => pushToast({ title: `Lỗi cập nhật: ${e.message}`, tone: "error" }),
+  });
+
   // Drag & Drop
   const handleDragStart = (event: DragStartEvent) => {
     setActiveScript(event.active.data.current?.script || null);
@@ -551,6 +662,14 @@ export function PlannerBoard() {
   };
 
   const clearSelection = () => setSelectedIds(new Set());
+
+  const selectAll = (ids: string[]) => {
+    setSelectedIds(prev => {
+      const allSelected = ids.every(id => prev.has(id));
+      if (allSelected) return new Set(); // deselect all
+      return new Set([...prev, ...ids]);
+    });
+  };
 
   return (
     <DndContext
@@ -643,6 +762,8 @@ export function PlannerBoard() {
           onExpand={toggleExpand}
           selectedIds={selectedIds}
           onSelect={toggleSelect}
+          onSelectAll={selectAll}
+          onUpdate={(id, fields) => updateMut.mutate({ id, ...fields })}
         />
 
         {/* ── Calendar ── */}
@@ -715,6 +836,7 @@ export function PlannerBoard() {
                                 onSelect={toggleSelect}
                                 expandedId={expandedId}
                                 onExpand={toggleExpand}
+                                onUpdate={(id, fields) => updateMut.mutate({ id, ...fields })}
                               />
                             );
                           })}
@@ -733,6 +855,11 @@ export function PlannerBoard() {
       {selectedIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-zinc-900 text-white px-4 py-2 rounded-xl shadow-xl flex items-center gap-3 z-50 text-sm">
           <span className="text-zinc-300">Đã chọn: <strong>{selectedIds.size}</strong></span>
+          <Button size="sm" className="h-6 text-[11px] px-2 bg-zinc-700 hover:bg-zinc-600"
+            onClick={() => selectAll(unassigned.map((s: any) => s.id))}
+            title="Chọn tất cả chưa gán">
+            <CheckSquare size={10} className="mr-1" /> Chọn tất cả
+          </Button>
           <Button size="sm" className="h-6 text-[11px] px-2 bg-blue-600 hover:bg-blue-700"
             onClick={() => { generateMut.mutate([...selectedIds]); clearSelection(); }}>
             <FileText size={10} className="mr-1" /> Generate
@@ -740,6 +867,14 @@ export function PlannerBoard() {
           <Button size="sm" className="h-6 text-[11px] px-2 bg-emerald-600 hover:bg-emerald-700"
             onClick={() => { approveMut.mutate([...selectedIds]); clearSelection(); }}>
             <CheckCircle size={10} className="mr-1" /> Duyệt
+          </Button>
+          <Button size="sm" className="h-6 text-[11px] px-2 bg-red-600 hover:bg-red-700"
+            onClick={() => {
+              if (confirm(`Xoá ${selectedIds.size} bài? Không thể hoàn tác!`)) {
+                deleteMut.mutate([...selectedIds]);
+              }
+            }}>
+            <Trash2 size={10} className="mr-1" /> Xoá
           </Button>
           <button onClick={clearSelection} className="text-zinc-400 hover:text-white ml-1">
             <X size={14} />

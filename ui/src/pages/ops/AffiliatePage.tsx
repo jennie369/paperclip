@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { opsApi } from "@/api/ops";
 import { SimpleModal } from "../crm/components/SimpleModal";
+import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 
 function formatVND(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'TR';
@@ -46,6 +47,17 @@ export function AffiliatePage() {
   });
   const { data: unpaid } = useQuery({ queryKey: ['ops', 'affiliate', 'unpaid'], queryFn: () => opsApi.getAffiliateList({ unpaid: 'true' }), staleTime: 30_000 });
 
+  // Live: auto-refresh on partnership_applications + affiliate_commissions changes
+  useLiveInvalidate({
+    tables: ['partnership_applications', 'affiliate_commissions', 'profiles'],
+    queryKeys: [
+      ['ops', 'affiliate', 'stats'],
+      ['ops', 'affiliate', 'pending'],
+      ['ops', 'affiliate', 'list'],
+      ['ops', 'affiliate', 'unpaid'],
+    ],
+  });
+
   const approveMut = useMutation({ mutationFn: (id: string) => opsApi.approveAffiliate(id), onSettled: inv });
   const rejectMut = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => opsApi.rejectAffiliate(id, reason),
@@ -67,7 +79,7 @@ export function AffiliatePage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Card className="p-3 text-center"><div className="text-xl font-bold">{stats.ctv || 0}</div><div className="text-[10px] text-muted-foreground">CTV</div></Card>
           <Card className="p-3 text-center"><div className="text-xl font-bold">{stats.kol || 0}</div><div className="text-[10px] text-muted-foreground">KOL</div></Card>
           <Card className="p-3 text-center"><div className="text-xl font-bold">{stats.pending || 0}</div><div className="text-[10px] text-muted-foreground">Chờ duyệt</div></Card>
