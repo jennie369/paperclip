@@ -776,11 +776,19 @@ export function IssueDetail() {
 
   useEffect(() => {
     const titleLabel = issue?.title ?? issueId ?? "Issue";
-    setBreadcrumbs([
-      sourceBreadcrumb,
-      { label: hasLiveRuns ? `🔵 ${titleLabel}` : titleLabel },
-    ]);
-  }, [setBreadcrumbs, sourceBreadcrumb, issue, issueId, hasLiveRuns]);
+    const crumbs = [sourceBreadcrumb];
+    if (issue?.assigneeAgentId) {
+      const agent = agents?.find((a) => a.id === issue.assigneeAgentId);
+      if (agent) {
+        crumbs.push({ label: agent.name, href: `/agents/${agent.id}` });
+      } else {
+        crumbs.push({ label: issue.assigneeAgentId.slice(0, 8), href: `/agents/${issue.assigneeAgentId}` });
+      }
+    }
+    crumbs.push({ label: hasLiveRuns ? `🔵 ${titleLabel}` : titleLabel });
+
+    setBreadcrumbs(crumbs);
+  }, [setBreadcrumbs, sourceBreadcrumb, issue, issueId, hasLiveRuns, agents]);
 
   // Redirect to identifier-based URL if navigated via UUID
   useEffect(() => {

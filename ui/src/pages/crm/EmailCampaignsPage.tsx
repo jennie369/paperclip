@@ -94,7 +94,7 @@ export function EmailCampaignsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card className="p-4 text-center"><div className="text-2xl font-bold">{totalSent}</div><div className="text-xs text-muted-foreground">Tổng gửi</div></Card>
         <Card className="p-4 text-center"><div className="text-2xl font-bold">{openRate}%</div><div className="text-xs text-muted-foreground">Tỉ lệ mở</div></Card>
         <Card className="p-4 text-center"><div className="text-2xl font-bold">{clickRate}%</div><div className="text-xs text-muted-foreground">Tỉ lệ click</div></Card>

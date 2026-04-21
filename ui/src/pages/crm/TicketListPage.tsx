@@ -1,14 +1,17 @@
 // Ticket List Page — CRUD + Agent Assignment (gộp assign/escalate)
+// v2: + cột Người tạo, + click row mở detail, + notification khi tạo, + customer picker
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, Ticket, Trash2, Pencil, CheckCircle, AlertTriangle, List, Kanban } from "lucide-react";
+import { Search, Plus, Ticket, Trash2, Pencil, CheckCircle, AlertTriangle, List, Kanban, ExternalLink, Bell } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimpleModal } from "./components/SimpleModal";
 import { crmApi } from "@/api/crm";
+import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
+import { useNavigate } from "react-router-dom";
 
 function timeAgo(d?: string): string {
   if (!d) return '—';
@@ -34,10 +37,129 @@ const statusColors: Record<string, string> = {
   resolved: 'bg-green-500/10 text-green-600', closed: 'bg-gray-500/10 text-gray-600',
 };
 
-const defaultForm = { title: '', description: '', category: 'general', priority: 'medium', status: 'open', assigned_to_agent: '' };
+const defaultForm = {
+  title: '', description: '', category: 'general', priority: 'medium',
+  status: 'open', assigned_to_agent: '',
+  customer_id: '', created_by_agent: 'board',
+};
+
+// ═══ Toast ═══
+function Toast({ msg, onDone }: { msg: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 4000);
+    return () => clearTimeout(t);
+  }, [onDone]);
+  return (
+    <div className="fixed top-5 right-5 z-50 flex items-center gap-3 rounded-lg bg-primary px-4 py-3 text-primary-foreground shadow-xl animate-in slide-in-from-top-2 duration-300">
+      <Bell className="h-4 w-4 shrink-0" />
+      <span className="text-sm font-medium">{msg}</span>
+    </div>
+  );
+}
+
+// ═══ Detail side panel (read-only) ═══
+function TicketDetailPanel({ ticket, onClose, onEdit }: { ticket: any; onClose: () => void; onEdit: () => void }) {
+  const nav = useNavigate();
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end" onClick={onClose}>
+      <div
+        className="w-full max-w-md bg-background border-l shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-200 p-6 space-y-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-xs text-muted-foreground font-mono">{ticket.ticket_number}</p>
+            <h2 className="text-base font-semibold mt-0.5 leading-tight">{ticket.title}</h2>
+          </div>
+          <div className="flex gap-1.5 shrink-0">
+            <Button size="sm" variant="outline" onClick={onEdit}>
+              <Pencil className="h-3.5 w-3.5 mr-1" /> Sửa
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onClose}>✕</Button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${priorityColors[ticket.priority] || ''}`}>
+            {ticket.priority}
+          </span>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[ticket.status] || ''}`}>
+            {statusLabels[ticket.status] || ticket.status}
+          </span>
+          {ticket.category && (
+            <span className="rounded-full px-2 py-0.5 text-xs bg-muted text-muted-foreground">{ticket.category}</span>
+          )}
+        </div>
+
+        {ticket.description && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Mô tả</p>
+            <p className="text-sm whitespace-pre-wrap">{ticket.description}</p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <p className="text-xs text-muted-foreground">Agent phụ trách</p>
+            <p className="font-medium">{ticket.assigned_to_agent || '—'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Người tạo</p>
+            {ticket.created_by_agent ? (
+              <button
+                className="font-medium text-blue-600 hover:underline flex items-center gap-1"
+                onClick={() => nav(`/GEM/agents/${ticket.created_by_agent}/configuration`)}
+              >
+                {ticket.created_by_agent} <ExternalLink className="h-3 w-3" />
+              </button>
+            ) : <p className="font-medium">—</p>}
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Khách hàng</p>
+            {ticket.customer ? (
+              <button
+                className="font-medium text-blue-600 hover:underline"
+                onClick={() => nav(`/GEM/crm/customers/${ticket.customer.id}`)}
+              >
+                {ticket.customer.display_name}
+              </button>
+            ) : <p className="font-medium">—</p>}
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">SLA</p>
+            {ticket.sla_deadline ? (
+              <span className={`text-xs font-medium ${new Date(ticket.sla_deadline) < new Date() ? 'text-red-600' : 'text-green-600'}`}>
+                {new Date(ticket.sla_deadline) < new Date() ? 'Quá hạn' : timeAgo(ticket.sla_deadline).replace('trước', 'còn')}
+              </span>
+            ) : <p className="font-medium">—</p>}
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Tạo lúc</p>
+            <p className="font-medium">{timeAgo(ticket.created_at)}</p>
+          </div>
+        </div>
+
+        {Array.isArray(ticket.timeline) && ticket.timeline.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Lịch sử</p>
+            <div className="space-y-1.5">
+              {ticket.timeline.slice().reverse().map((e: any, i: number) => (
+                <div key={i} className="flex gap-2 text-xs text-muted-foreground">
+                  <span className="shrink-0 text-[10px]">{e.ts ? new Date(e.ts).toLocaleString('vi-VN') : ''}</span>
+                  <span>{e.note}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function TicketListPage() {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const [view, setView] = useState<'list' | 'kanban'>('list');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -47,6 +169,32 @@ export function TicketListPage() {
   const [form, setForm] = useState(defaultForm);
   const [activeTicket, setActiveTicket] = useState<any>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [detailTicket, setDetailTicket] = useState<any>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Preload sound + request browser notification permission
+  useEffect(() => {
+    audioRef.current = new Audio('/sounds/notification.mp3');
+    audioRef.current.volume = 0.6;
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const fireNotification = (title: string, body: string) => {
+    // In-page toast
+    setToast(`${title}: ${body}`);
+    // Sound
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {});
+    }
+    // Browser push
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/favicon.ico' });
+    }
+  };
 
   // Agents list for dropdown
   const { data: agents } = useQuery({
@@ -56,6 +204,13 @@ export function TicketListPage() {
       if (!res.ok) return [];
       return (await res.json()).map((a: any) => ({ slug: a.slug, name: a.display_name || a.slug }));
     },
+    staleTime: 60_000,
+  });
+
+  // Customers list for picker
+  const { data: customersData } = useQuery({
+    queryKey: ['crm', 'customers-picker'],
+    queryFn: () => crmApi.getCustomers({ limit: '200' }),
     staleTime: 60_000,
   });
 
@@ -76,10 +231,25 @@ export function TicketListPage() {
 
   const inv = () => qc.invalidateQueries({ queryKey: ['crm'] });
 
-  // Create → if agent assigned, backend sets status=assigned + War Room if urgent
+  // Live subscription — auto-refresh when tickets table changes
+  useLiveInvalidate({
+    table: 'crm_tickets',
+    queryKeys: [['crm', 'tickets'], ['crm', 'ticket-stats'], ['crm', 'stats']],
+  });
+
   const createMut = useMutation({
     mutationFn: (d: any) => crmApi.createTicket(d),
-    onSettled: () => { inv(); setModal(null); setForm(defaultForm); },
+    onSuccess: (ticket) => {
+      inv();
+      setModal(null);
+      setForm(defaultForm);
+      fireNotification('✅ Phiếu mới đã tạo', `${ticket.ticket_number} — ${ticket.title}`);
+    },
+    onError: () => {
+      inv();
+      setModal(null);
+      setForm(defaultForm);
+    }
   });
   const updateMut = useMutation({
     mutationFn: ({ id, d }: { id: string; d: any }) => crmApi.updateTicket(id, d),
@@ -95,18 +265,37 @@ export function TicketListPage() {
   });
 
   const agentList = (agents || []) as Array<{ slug: string; name: string }>;
+  const customerList = customersData?.data || [];
   const tickets = data?.data || [];
+
+  const openEdit = (t: any) => {
+    setActiveTicket(t);
+    setForm({
+      title: t.title,
+      description: t.description || '',
+      category: t.category,
+      priority: t.priority,
+      status: t.status,
+      assigned_to_agent: t.assigned_to_agent || '',
+      customer_id: t.customer_id || '',
+      created_by_agent: t.created_by_agent || 'board',
+    });
+    setDetailTicket(null);
+    setModal('edit');
+  };
 
   return (
     <div className="space-y-4 p-6">
+      {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Phiếu hỗ trợ</h1>
         <div className="flex gap-2">
           <div className="flex rounded-md border border-input">
-            <button onClick={() => setView('list')} className={`px-2.5 py-1.5 text-sm ${view === 'list' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`} title="Danh sách">
+            <button onClick={() => setView('list')} className={`px-2.5 py-1.5 text-sm ${view === 'list' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`} aria-label="Danh sách">
               <List className="h-4 w-4" />
             </button>
-            <button onClick={() => setView('kanban')} className={`px-2.5 py-1.5 text-sm border-l border-input ${view === 'kanban' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`} title="Kanban">
+            <button onClick={() => setView('kanban')} className={`px-2.5 py-1.5 text-sm border-l border-input ${view === 'kanban' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`} aria-label="Kanban">
               <Kanban className="h-4 w-4" />
             </button>
           </div>
@@ -196,12 +385,17 @@ export function TicketListPage() {
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Trạng thái</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">SLA</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Agent</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Người tạo</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Tạo lúc</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Thao tác</th>
               </tr></thead>
               <tbody>{data.data.map((t: any) => (
-                <tr key={t.id} className={`border-b hover:bg-muted/30 ${selected.has(t.id) ? 'bg-primary/5' : ''}`}>
-                  <td className="px-2 py-3 w-8">
+                <tr
+                  key={t.id}
+                  className={`border-b hover:bg-muted/30 cursor-pointer ${selected.has(t.id) ? 'bg-primary/5' : ''}`}
+                  onClick={() => setDetailTicket(t)}
+                >
+                  <td className="px-2 py-3 w-8" onClick={e => e.stopPropagation()}>
                     <input type="checkbox" className="rounded border-input" checked={selected.has(t.id)} onChange={e => {
                       const next = new Set(selected);
                       if (e.target.checked) next.add(t.id); else next.delete(t.id);
@@ -209,7 +403,7 @@ export function TicketListPage() {
                     }} />
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">{t.ticket_number}</td>
-                  <td className="px-4 py-3 max-w-[250px] truncate">{t.title}</td>
+                  <td className="px-4 py-3 max-w-[220px] truncate">{t.title}</td>
                   <td className="px-4 py-3"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${priorityColors[t.priority] || ''}`}>{t.priority}</span></td>
                   <td className="px-4 py-3"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[t.status] || ''}`}>{statusLabels[t.status] || t.status}</span></td>
                   <td className="px-4 py-3">
@@ -220,15 +414,27 @@ export function TicketListPage() {
                     ) : <span className="text-[10px] text-muted-foreground">—</span>}
                   </td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">{t.assigned_to_agent || '—'}</td>
+                  <td className="px-4 py-3 text-xs" onClick={e => e.stopPropagation()}>
+                    {t.created_by_agent && t.created_by_agent !== 'board' ? (
+                      <button
+                        className="text-blue-600 hover:underline flex items-center gap-0.5"
+                        onClick={() => nav(`/GEM/agents/${t.created_by_agent}/configuration`)}
+                      >
+                        {t.created_by_agent} <ExternalLink className="h-2.5 w-2.5" />
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground">{t.created_by_agent || '—'}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-right text-xs text-muted-foreground">{timeAgo(t.created_at)}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-end gap-1">
                       {!['resolved', 'closed'].includes(t.status) && (
                         <button onClick={() => resolveMut.mutate(t.id)} className="p-1 rounded hover:bg-green-500/10 text-green-600" title="Giải quyết">
                           <CheckCircle className="h-4 w-4" />
                         </button>
                       )}
-                      <button onClick={() => { setActiveTicket(t); setForm({ title: t.title, description: t.description || '', category: t.category, priority: t.priority, status: t.status, assigned_to_agent: t.assigned_to_agent || '' }); setModal('edit'); }} className="p-1 rounded hover:bg-blue-500/10 text-blue-600" title="Sửa / Gán agent">
+                      <button onClick={() => openEdit(t)} className="p-1 rounded hover:bg-blue-500/10 text-blue-600" title="Sửa / Gán agent">
                         <Pencil className="h-4 w-4" />
                       </button>
                       <button onClick={() => { setActiveTicket(t); setModal('delete'); }} className="p-1 rounded hover:bg-red-500/10 text-red-600" title="Xóa">
@@ -246,6 +452,15 @@ export function TicketListPage() {
       {/* KANBAN VIEW */}
       {view === 'kanban' && <KanbanView tickets={tickets} onStatusChange={(id, status) => updateMut.mutate({ id, d: { status } })} />}
 
+      {/* Detail side panel */}
+      {detailTicket && (
+        <TicketDetailPanel
+          ticket={detailTicket}
+          onClose={() => setDetailTicket(null)}
+          onEdit={() => openEdit(detailTicket)}
+        />
+      )}
+
       {/* ═══ CREATE ═══ */}
       <SimpleModal open={modal === 'create'} onClose={() => setModal(null)} title="Tạo phiếu hỗ trợ mới" footer={<>
         <Button variant="outline" onClick={() => setModal(null)}>Hủy</Button>
@@ -253,17 +468,17 @@ export function TicketListPage() {
           {createMut.isPending ? 'Đang tạo...' : 'Tạo phiếu'}
         </Button>
       </>}>
-        <TicketForm form={form} setForm={setForm} agents={agentList} />
+        <TicketForm form={form} setForm={setForm} agents={agentList} customers={customerList} />
       </SimpleModal>
 
-      {/* ═══ EDIT (gộp assign/escalate) ═══ */}
+      {/* ═══ EDIT ═══ */}
       <SimpleModal open={modal === 'edit'} onClose={() => setModal(null)} title={`Sửa phiếu ${activeTicket?.ticket_number || ''}`} footer={<>
         <Button variant="outline" onClick={() => setModal(null)}>Hủy</Button>
         <Button disabled={updateMut.isPending} onClick={() => activeTicket && updateMut.mutate({ id: activeTicket.id, d: form })}>
           {updateMut.isPending ? 'Đang lưu...' : 'Lưu thay đổi'}
         </Button>
       </>}>
-        <TicketForm form={form} setForm={setForm} agents={agentList} showStatus />
+        <TicketForm form={form} setForm={setForm} agents={agentList} customers={customerList} showStatus />
       </SimpleModal>
 
       {/* ═══ DELETE ═══ */}
@@ -285,12 +500,26 @@ export function TicketListPage() {
 }
 
 // ═══ Shared form component ═══
-function TicketForm({ form, setForm, agents, showStatus }: {
+function TicketForm({ form, setForm, agents, customers, showStatus }: {
   form: typeof defaultForm;
   setForm: React.Dispatch<React.SetStateAction<typeof defaultForm>>;
   agents: Array<{ slug: string; name: string }>;
+  customers: Array<{ id: string; display_name: string; phone?: string; channels?: any[]; gemral_user_id?: string }>;
   showStatus?: boolean;
 }) {
+  const [customerSearch, setCustomerSearch] = useState('');
+
+  const filteredCustomers = customers.filter(c => {
+    const q = customerSearch.toLowerCase();
+    return (
+      c.display_name.toLowerCase().includes(q) ||
+      (c.phone || '').includes(q) ||
+      (c.gemral_user_id || '').toLowerCase().includes(q)
+    );
+  });
+
+  const selectedCustomer = customers.find(c => c.id === form.customer_id);
+
   return (
     <div className="space-y-4">
       <div>
@@ -301,6 +530,55 @@ function TicketForm({ form, setForm, agents, showStatus }: {
         <label className="text-sm font-medium">Mô tả</label>
         <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[80px]" placeholder="Mô tả chi tiết..." />
       </div>
+
+      {/* Customer picker */}
+      <div>
+        <label className="text-sm font-medium">Khách hàng</label>
+        {selectedCustomer ? (
+          <div className="flex items-center justify-between rounded-md border border-input bg-muted/30 px-3 py-2 mt-1">
+            <div>
+              <p className="text-sm font-medium">{selectedCustomer.display_name}</p>
+              <p className="text-xs text-muted-foreground">
+                {selectedCustomer.phone || ''}
+                {selectedCustomer.gemral_user_id ? ` · ID: ${selectedCustomer.gemral_user_id.slice(0, 8)}…` : ''}
+              </p>
+            </div>
+            <button className="text-xs text-red-500 hover:text-red-700" onClick={() => setForm(f => ({ ...f, customer_id: '' }))}>✕ Bỏ chọn</button>
+          </div>
+        ) : (
+          <div className="mt-1 border border-input rounded-md overflow-hidden">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                className="w-full pl-8 pr-3 py-2 text-sm bg-background outline-none border-b border-input"
+                placeholder="Tìm tên, số điện thoại, ID..."
+                value={customerSearch}
+                onChange={e => setCustomerSearch(e.target.value)}
+              />
+            </div>
+            <div className="max-h-40 overflow-y-auto">
+              <button
+                className="w-full text-left px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/50 italic"
+                onClick={() => setForm(f => ({ ...f, customer_id: '' }))}
+              >— Không liên kết khách hàng —</button>
+              {filteredCustomers.slice(0, 30).map(c => (
+                <button
+                  key={c.id}
+                  className="w-full text-left px-3 py-1.5 hover:bg-muted/50 flex items-center justify-between"
+                  onClick={() => { setForm(f => ({ ...f, customer_id: c.id })); setCustomerSearch(''); }}
+                >
+                  <span className="text-sm font-medium">{c.display_name}</span>
+                  <span className="text-[10px] text-muted-foreground">{c.phone || c.gemral_user_id?.slice(0, 8) || ''}</span>
+                </button>
+              ))}
+              {filteredCustomers.length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-3">Không tìm thấy khách hàng</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="text-sm font-medium">Loại</label>
@@ -398,6 +676,9 @@ function KanbanView({ tickets, onStatusChange }: { tickets: any[]; onStatusChang
                     </span>
                   )}
                   {t.assigned_to_agent && <p className="text-muted-foreground mt-1">{t.assigned_to_agent}</p>}
+                  {t.created_by_agent && t.created_by_agent !== 'board' && (
+                    <p className="text-[10px] text-muted-foreground/60 mt-0.5">Tạo bởi: {t.created_by_agent}</p>
+                  )}
                 </div>
               ))}
               {colTickets.length === 0 && <div className="text-center text-muted-foreground py-4">Trống</div>}
