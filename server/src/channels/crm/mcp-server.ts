@@ -167,6 +167,67 @@ const TOOLS = [
       required: ['query'],
     },
   },
+  // ── 5 NEW shared tools (also available via marker pattern in agent-tools.ts) ──
+  {
+    name: 'verify_customer_identity',
+    description: 'BẮT BUỘC GỌI TRƯỚC khi tra/cập nhật dữ liệu riêng tư của khách. Match ≥ 2/3 fields với DB → unlock các tool gated trong 30 phút. Phải có 2/3: phone, email, order_number (hoặc address).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        phone: { type: 'string', description: 'Số điện thoại khách (vd: 0901234567)' },
+        email: { type: 'string', description: 'Email khách' },
+        order_number: { type: 'string', description: 'Mã đơn hàng (không cần dấu #)' },
+        address: { type: 'string', description: 'Địa chỉ giao hàng (optional, dùng nếu thiếu order#)' },
+      },
+    },
+  },
+  {
+    name: 'lookup_order_shopify',
+    description: 'Tra trạng thái đơn hàng Shopify: fulfillment, tracking, items, shipping address. PRECONDITION: phải verify_customer_identity trước.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        order_number: { type: 'string', description: 'Mã đơn hàng (không cần dấu #)' },
+      },
+      required: ['order_number'],
+    },
+  },
+  {
+    name: 'recall_memory',
+    description: 'Tìm trong ReMe memory hội thoại trước đó của khách (semantic search). PRECONDITION: verify_customer_identity.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customer_id: { type: 'string', description: 'CRM customer_id (auto-inject từ verified state nếu thiếu)' },
+        query: { type: 'string', description: 'Câu hỏi semantic search' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'kg_lookup_entity',
+    description: 'Tra Knowledge Graph entity (sản phẩm, khóa học, khái niệm) theo name hoặc id. PUBLIC tool — không cần verify.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Tên entity (ilike search)' },
+        id: { type: 'string', description: 'UUID entity (chính xác)' },
+        type: { type: 'string', description: 'Filter: product | course | concept ...' },
+      },
+    },
+  },
+  {
+    name: 'kg_traverse',
+    description: 'Lấy tất cả relations xung quanh 1 entity (sản phẩm liên quan, prerequisite, etc). PUBLIC tool.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entity_id: { type: 'string', description: 'UUID entity gốc' },
+        depth: { type: 'number', description: 'Số bậc traverse (mặc định 1, max 3)' },
+      },
+      required: ['entity_id'],
+    },
+  },
   // ── Delegation tools (feature-flagged server-side via PAPERCLIP_DELEGATION_ENABLED) ──
   // Caller context is derived by the server from x-paperclip-run-id header,
   // which the handler reads from PAPERCLIP_RUN_ID env var inherited from the
@@ -202,7 +263,7 @@ const TOOLS = [
 
 // ─── Tool handlers ───
 
-async function handleCreateOrder(args: any): Promise<string> {
+export async function handleCreateOrder(args: any): Promise<string> {
   const items = args.items || [];
   if (items.length === 0) {
     return JSON.stringify({ success: false, error: 'Cần ít nhất 1 sản phẩm' });
@@ -259,7 +320,7 @@ async function handleCreateOrder(args: any): Promise<string> {
   });
 }
 
-async function handleCreateTicket(args: any): Promise<string> {
+export async function handleCreateTicket(args: any): Promise<string> {
   const { data, error } = await supabase
     .from('crm_tickets')
     .insert({
@@ -311,7 +372,7 @@ async function handleCreateTicket(args: any): Promise<string> {
   });
 }
 
-async function handleSearchProduct(args: any): Promise<string> {
+export async function handleSearchProduct(args: any): Promise<string> {
   if (!shopifyStore || !shopifyToken) {
     return JSON.stringify({ success: false, error: 'Shopify chưa cấu hình' });
   }
@@ -345,7 +406,7 @@ async function handleSearchProduct(args: any): Promise<string> {
   }
 }
 
-async function handleCRMUpdate(args: any): Promise<string> {
+export async function handleCRMUpdate(args: any): Promise<string> {
   const updates: Record<string, any> = {};
   if (args.phone) updates.phone = args.phone;
   if (args.email) updates.email = args.email;
@@ -389,7 +450,7 @@ async function handleCRMUpdate(args: any): Promise<string> {
   });
 }
 
-async function handleSendEmail(args: any): Promise<string> {
+export async function handleSendEmail(args: any): Promise<string> {
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) {
     return JSON.stringify({ success: false, error: 'Resend API key chưa cấu hình' });
@@ -440,7 +501,7 @@ async function handleSendEmail(args: any): Promise<string> {
   }
 }
 
-async function handleGetCustomerInfo(args: any): Promise<string> {
+export async function handleGetCustomerInfo(args: any): Promise<string> {
   let query = supabase.from('crm_customers').select('*');
 
   if (args.customer_id) {
@@ -481,7 +542,7 @@ async function handleGetCustomerInfo(args: any): Promise<string> {
   });
 }
 
-async function handleCheckCourseAccess(args: any): Promise<string> {
+export async function handleCheckCourseAccess(args: any): Promise<string> {
   // Get gemral_user_id from CRM customer
   const { data: customer } = await supabase
     .from('crm_customers')
@@ -521,7 +582,7 @@ async function handleCheckCourseAccess(args: any): Promise<string> {
   });
 }
 
-async function handleLinkGemral(args: any): Promise<string> {
+export async function handleLinkGemral(args: any): Promise<string> {
   const { customer_id, email, phone } = args;
 
   if (!email && !phone) {
@@ -581,7 +642,7 @@ async function handleLinkGemral(args: any): Promise<string> {
   });
 }
 
-async function handleSearchKnowledge(args: any): Promise<string> {
+export async function handleSearchKnowledge(args: any): Promise<string> {
   // Placeholder — full implementation in Phase 5 (RAG + pgvector)
   // For now, search Shopify products as basic knowledge source
   const { query, limit = 3 } = args;
@@ -610,17 +671,14 @@ async function handleSearchKnowledge(args: any): Promise<string> {
 
 // ─── Delegation handlers (HTTP callback to Paperclip server) ───
 //
-// These run inside the MCP subprocess spawned by Claude CLI. They do NOT
-// have in-process access to the service or Drizzle DB — they HTTP-call
-// back to the parent Paperclip server, which enforces auth/flag/company
-// isolation via the route.
+// Unlike the 9 CRM handlers + 5 shared tools above (which hit Supabase
+// directly), delegation tools HTTP-call back to the parent Paperclip server
+// so routes/delegations.ts can enforce the feature flag, auth, cycle
+// detection, rate limit, and company isolation in one place.
 //
 // Required env (set by claude-local adapter, inherited through Claude CLI):
 //   PAPERCLIP_API_URL    http://localhost:3100 (or configured host)
 //   PAPERCLIP_RUN_ID     heartbeat run UUID → becomes x-paperclip-run-id
-//
-// If PAPERCLIP_RUN_ID is missing, the server can't resolve the caller
-// identity and returns 401. That's the correct behavior.
 
 function paperclipApiUrl(): string {
   return process.env.PAPERCLIP_API_URL || 'http://127.0.0.1:3100';
@@ -731,48 +789,109 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS,
 }));
 
+// ── 5 NEW shared tools — single source of truth in crm/agent-tool-handlers.ts ──
+import {
+  resolveToolContextFromEnv,
+  checkIdentityGate,
+  handleVerifyCustomerIdentity,
+  handleLookupOrderShopify,
+  handleRecallMemory,
+  handleKgLookupEntity,
+  handleKgTraverse,
+  type SharedToolResult,
+} from './agent-tool-handlers.js';
+
+/** Format a SharedToolResult as a JSON string compatible with MCP `content[].text` */
+function formatSharedResult(r: SharedToolResult): string {
+  return JSON.stringify({
+    success: r.ok,
+    summary: r.summary,
+    data: r.data || null,
+    error: r.error || null,
+  });
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
     let result: string;
 
-    switch (name) {
-      case 'create_order':
-        result = await handleCreateOrder(args);
-        break;
-      case 'create_ticket':
-        result = await handleCreateTicket(args);
-        break;
-      case 'search_product':
-        result = await handleSearchProduct(args);
-        break;
-      case 'crm_update':
-        result = await handleCRMUpdate(args);
-        break;
-      case 'send_email':
-        result = await handleSendEmail(args);
-        break;
-      case 'get_customer_info':
-        result = await handleGetCustomerInfo(args);
-        break;
-      case 'check_course_access':
-        result = await handleCheckCourseAccess(args);
-        break;
-      case 'link_gemral_account':
-        result = await handleLinkGemral(args);
-        break;
-      case 'search_knowledge':
-        result = await handleSearchKnowledge(args);
-        break;
-      case 'delegate_to_agent':
-        result = await handleDelegateToAgent(args);
-        break;
-      case 'await_delegation':
-        result = await handleAwaitDelegation(args);
-        break;
-      default:
-        result = JSON.stringify({ error: `Tool không tồn tại: ${name}` });
+    // For the 5 NEW shared tools, resolve the per-call ToolHandlerContext from
+    // env vars (PAPERCLIP_SESSION_KEY etc) so identity gate state is honored
+    // even though Claude/Gemini CLI re-spawn this process per request.
+    const SHARED_TOOL_NAMES = new Set([
+      'verify_customer_identity', 'lookup_order_shopify', 'recall_memory',
+      'kg_lookup_entity', 'kg_traverse',
+    ]);
+
+    if (SHARED_TOOL_NAMES.has(name)) {
+      const ctx = await resolveToolContextFromEnv(supabase);
+      const gateError = checkIdentityGate(name, ctx);
+      if (gateError) {
+        result = formatSharedResult(gateError);
+      } else {
+        let shared: SharedToolResult;
+        switch (name) {
+          case 'verify_customer_identity':
+            shared = await handleVerifyCustomerIdentity(args || {}, ctx);
+            break;
+          case 'lookup_order_shopify':
+            shared = await handleLookupOrderShopify(args || {}, ctx);
+            break;
+          case 'recall_memory':
+            shared = await handleRecallMemory(args || {}, ctx);
+            break;
+          case 'kg_lookup_entity':
+            shared = await handleKgLookupEntity(args || {}, ctx);
+            break;
+          case 'kg_traverse':
+            shared = await handleKgTraverse(args || {}, ctx);
+            break;
+          default:
+            shared = { ok: false, summary: `unreachable`, error: 'unreachable' };
+        }
+        result = formatSharedResult(shared);
+      }
+    } else {
+      // Original 9 MCP handlers
+      switch (name) {
+        case 'create_order':
+          result = await handleCreateOrder(args);
+          break;
+        case 'create_ticket':
+          result = await handleCreateTicket(args);
+          break;
+        case 'search_product':
+          result = await handleSearchProduct(args);
+          break;
+        case 'crm_update':
+          result = await handleCRMUpdate(args);
+          break;
+        case 'send_email':
+          result = await handleSendEmail(args);
+          break;
+        case 'get_customer_info':
+          result = await handleGetCustomerInfo(args);
+          break;
+        case 'check_course_access':
+          result = await handleCheckCourseAccess(args);
+          break;
+        case 'link_gemral_account':
+          result = await handleLinkGemral(args);
+          break;
+        case 'search_knowledge':
+          result = await handleSearchKnowledge(args);
+          break;
+        case 'delegate_to_agent':
+          result = await handleDelegateToAgent(args);
+          break;
+        case 'await_delegation':
+          result = await handleAwaitDelegation(args);
+          break;
+        default:
+          result = JSON.stringify({ error: `Tool không tồn tại: ${name}` });
+      }
     }
 
     return { content: [{ type: 'text', text: result }] };

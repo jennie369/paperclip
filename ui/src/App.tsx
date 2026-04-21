@@ -25,7 +25,6 @@ import { OnboardingWizard } from "./components/OnboardingWizard";
 import { authApi } from "./api/auth";
 import { healthApi } from "./api/health";
 import { Dashboard } from "./pages/Dashboard";
-import { OperationsCenter } from "./pages/OperationsCenter";
 import { ContentPipelinePage } from "./pages/ops/ContentPipelinePage";
 import { AffiliatePage } from "./pages/ops/AffiliatePage";
 import { ScannerPage } from "./pages/ops/ScannerPage";
@@ -79,13 +78,18 @@ import { OrderListPage } from "./pages/crm/OrderListPage";
 import { ImportPage } from "./pages/crm/ImportPage";
 import { EmailCampaignsPage } from "./pages/crm/EmailCampaignsPage";
 import { KnowledgeBasePage } from "./pages/crm/KnowledgeBasePage";
+import { TrainingRoomPage } from "./pages/training/TrainingRoomPage";
+import { ToolAuditLogPage } from "./pages/training/ToolAuditLogPage";
+import { TrainingHistoryPage } from "./pages/training/TrainingHistoryPage";
 import { CommandConsolePage } from "./pages/ops/CommandConsolePage";
 import { SopEnginePage } from "./pages/ops/SopEnginePage";
+import { SocialAnalyticsPage } from "./pages/analytics/SocialAnalyticsPage";
 
 // Knowledge Graph — lazy load (heavy Three.js dependency)
 const KnowledgeGraphPage = lazy(() => import("./pages/ops/KnowledgeGraphPage"));
 
 import { ConfigHubPage } from "./pages/config/ConfigHubPage";
+import { AgentsConfigRedirect, ConfigHubRedirect } from "./pages/config/ConfigRedirect";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
 import { AuthPage } from "./pages/Auth";
@@ -182,7 +186,11 @@ function boardRoutes() {
         </Suspense>
       } />
       <Route path="ops/roster" element={<Navigate to="/config" replace />} />
-      <Route path="config" element={<ConfigHubPage />} />
+      {/* Phase 3.7: /config deprecated — merged into Registry Marketplace.
+          Show banner + auto-redirect. Original ConfigHubPage kept importable
+          for emergency direct access via ?legacy=1 query (not wired in UI). */}
+      <Route path="config" element={<ConfigHubRedirect />} />
+      <Route path="config/legacy" element={<ConfigHubPage />} />
       <Route path="workflows" element={<WorkflowListPage />} />
       <Route path="workflows/new" element={<WorkflowBuilderPage />} />
       <Route path="workflows/:id" element={<WorkflowBuilderPage />} />
@@ -244,6 +252,13 @@ function boardRoutes() {
       <Route path="crm/import" element={<ImportPage />} />
       <Route path="crm/campaigns" element={<EmailCampaignsPage />} />
       <Route path="crm/knowledge-base" element={<KnowledgeBasePage />} />
+      <Route path="training" element={<TrainingRoomPage />} />
+      <Route path="training/history" element={<TrainingHistoryPage />} />
+      <Route path="training/audit-log" element={<ToolAuditLogPage />} />
+      {/* Catch-all for any other /training/* path (e.g. /training/dashboard
+          from auto-redirect logic). Renders TrainingRoomPage as the default. */}
+      <Route path="training/*" element={<TrainingRoomPage />} />
+      <Route path="analytics" element={<SocialAnalyticsPage />} />
       <Route path="channels/inbox" element={<UnifiedInbox />} />
       <Route path="channels" element={<ChannelsOverview />} />
       <Route path="channels/zalo-personal" element={<ZaloPersonalPage />} />
@@ -253,7 +268,12 @@ function boardRoutes() {
       <Route path="channels/conversations/:sessionKey" element={<ConversationChat />} />
       <Route path="channels/settings" element={<ChannelSettingsPage />} />
       <Route path="channels/settings/:channelName" element={<ChannelSettingsPage />} />
-      <Route path="agents-config" element={<AgentListPage />} />
+      {/* Phase 3.7: agents-config deprecated — merged into Registry Marketplace.
+          Top-level list page shows banner + redirect. Sub-routes for editing
+          individual agents (edit/test/sessions) are KEPT functional for
+          deep links — they're still the canonical detail pages. */}
+      <Route path="agents-config" element={<AgentsConfigRedirect />} />
+      <Route path="agents-config/legacy" element={<AgentListPage />} />
       <Route path="agents-config/new" element={<AgentEditPage />} />
       <Route path="agents-config/:slug/edit" element={<AgentEditPage />} />
       <Route path="agents-config/:slug/test" element={<AgentTestPage />} />
@@ -459,6 +479,9 @@ export function App() {
           <Route path="war-room" element={<UnprefixedBoardRedirect />} />
           <Route path="crm" element={<UnprefixedBoardRedirect />} />
           <Route path="crm/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="training" element={<UnprefixedBoardRedirect />} />
+          <Route path="training/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="analytics" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}
           </Route>

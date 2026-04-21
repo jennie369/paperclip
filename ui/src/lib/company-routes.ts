@@ -26,6 +26,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "qa",
   "workflows",
   "cc",
+  "training",
+  "analytics",
   "delegations",
 ]);
 
