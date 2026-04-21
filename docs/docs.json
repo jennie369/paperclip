@@ -114,6 +114,7 @@
               "api/companies",
               "api/agents",
               "api/issues",
+              "api/delegations",
               "api/approvals",
               "api/goals-and-projects",
               "api/costs",
