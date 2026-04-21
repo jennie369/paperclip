@@ -14,6 +14,7 @@ import { channelsApi, type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { SimpleModal } from "../../crm/components/SimpleModal";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
+import { ChannelBadge, AgentBadge } from "@/components/ChannelBadge";
 
 interface Props {
   conversation: ChannelSession;
@@ -66,76 +67,44 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
 
   return (
     <>
-      <div className="border-b px-4 py-2.5 space-y-1.5">
-        {/* Row 1: Name + Toggle customer */}
+      <div className="border-b px-3 py-1.5">
+        {/* Compact single row: Avatar + Name + Badges + Actions */}
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
             <div
-              className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold text-white shrink-0"
+              className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
               style={{ backgroundColor: channelColor }}
             >
               {displayName.charAt(0).toUpperCase()}
             </div>
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold truncate">{displayName}</h3>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span
-                  className="px-2 py-0.5 rounded font-medium"
-                  style={{ color: channelColor, backgroundColor: `${channelColor}15` }}
-                >
-                  {channelLabel}
-                </span>
-                {conv.agent_slug && (
-                  <span className="text-violet-500">{conv.agent_slug}</span>
-                )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold truncate max-w-[200px]">{displayName}</h3>
+                <ChannelBadge name={channelLabel} size="sm" />
+                {conv.agent_slug && <AgentBadge slug={conv.agent_slug} size="sm" />}
                 {conv.label && (
-                  <span className="uppercase font-bold text-red-500">{conv.label}</span>
+                  <span className="text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold uppercase bg-red-500/10 text-red-500">
+                    {conv.label}
+                  </span>
                 )}
                 {leadScore != null && (
-                  <span>Lead: {leadScore}/100</span>
+                  <span className="text-[10px] text-muted-foreground tabular-nums">Lead: {leadScore}</span>
                 )}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
-            <button onClick={onToggleCustomer} className="p-1.5 rounded hover:bg-muted" title="Xem CRM">
-              <ClipboardList className="h-4 w-4 text-muted-foreground" />
-            </button>
+          {/* Quick actions inline */}
+          <div className="flex items-center gap-1 shrink-0">
+            <IconBtn icon={<Package className="h-3.5 w-3.5" />} title="Tạo đơn" onClick={() => onShowOrderPanel?.()} />
+            <IconBtn icon={<Ticket className="h-3.5 w-3.5" />} title="Phiếu HT" onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }} />
+            {conv.customer?.id && (
+              <IconBtn icon={<User className="h-3.5 w-3.5" />} title="Xem CRM" onClick={() => navigate(`/crm/customers/${conv.customer!.id}`)} />
+            )}
+            <IconBtn icon={<Pin className="h-3.5 w-3.5" />} title={conv.is_pinned ? "Bỏ ghim" : "Ghim"} onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))} active={conv.is_pinned} />
+            <IconBtn icon={<BellOff className="h-3.5 w-3.5" />} title={conv.is_muted ? "Bật TB" : "Tắt TB"} onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))} active={conv.is_muted} />
+            <IconBtn icon={<ClipboardList className="h-3.5 w-3.5" />} title="Xem CRM" onClick={onToggleCustomer} />
           </div>
-        </div>
-
-        {/* Row 2: Quick actions */}
-        <div className="flex items-center gap-1 flex-wrap">
-          <QuickBtn
-            icon={<Package className="h-4 w-4" />}
-            label="Tạo đơn"
-            onClick={() => onShowOrderPanel?.()}
-          />
-          <QuickBtn
-            icon={<Ticket className="h-4 w-4" />}
-            label="Phiếu HT"
-            onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }}
-          />
-          {conv.customer?.id && (
-            <QuickBtn
-              icon={<User className="h-4 w-4" />}
-              label="Xem CRM"
-              onClick={() => navigate(`/crm/customers/${conv.customer!.id}`)}
-            />
-          )}
-          <QuickBtn
-            icon={<Pin className="h-4 w-4" />}
-            label={conv.is_pinned ? "Bỏ ghim" : "Ghim"}
-            onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))}
-            active={conv.is_pinned}
-          />
-          <QuickBtn
-            icon={<BellOff className="h-4 w-4" />}
-            label={conv.is_muted ? "Bật TB" : "Tắt TB"}
-            onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))}
-            active={conv.is_muted}
-          />
         </div>
       </div>
 
@@ -199,28 +168,29 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
   );
 }
 
-function QuickBtn({
+// Compact icon-only button for header actions
+function IconBtn({
   icon,
-  label,
+  title,
   onClick,
   active,
 }: {
   icon: React.ReactNode;
-  label: string;
+  title: string;
   onClick: () => void;
   active?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium rounded-md border transition-colors ${
+      title={title}
+      className={`p-1.5 rounded-md transition-colors ${
         active
-          ? "bg-primary/10 border-primary/30 text-primary"
-          : "bg-muted/30 border-transparent text-muted-foreground hover:bg-muted/50"
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground"
       }`}
     >
       {icon}
-      {label}
     </button>
   );
 }

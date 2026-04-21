@@ -1,7 +1,7 @@
 // Chat Panel — center panel showing messages + input
 // With emoji reactions, reply-to (D3), in-chat search (D6), timestamp grouping (D8)
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, X, ChevronDown } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
@@ -58,6 +58,7 @@ function highlightText(text: string, query: string): React.ReactNode {
 
 export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPanel, onAction, channelMap }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
 
@@ -79,13 +80,40 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
     refetchInterval: 2_000,
   });
 
-  // Auto-scroll to bottom on new messages (only if not searching and already near bottom)
-  useEffect(() => {
+  // Auto-scroll to bottom — CRITICAL LOGIC:
+  // 1. When user opens a new conversation, we MUST scroll to bottom AFTER messages have loaded
+  // 2. We track `scrolledSessionRef` = the session key we've already scrolled for
+  // 3. Only mark as "scrolled" when messages.length > 0 (messages actually loaded)
+  // 4. For the same conversation, only auto-scroll if user is already near bottom (preserve scroll)
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || showSearch) return;
+
+    const hasScrolledThisSession = scrolledSessionRef.current === conv.session_key;
+    const messagesLoaded = !isLoading && messages.length > 0;
+
+    // NEW CONVERSATION: force scroll to bottom once messages are loaded
+    if (!hasScrolledThisSession) {
+      // Don't mark as scrolled until messages actually rendered
+      if (!messagesLoaded) return;
+
+      const forceScroll = () => { if (el) el.scrollTop = el.scrollHeight; };
+      // Immediate scroll + multiple delayed scrolls to handle async images/stickers
+      forceScroll();
+      requestAnimationFrame(forceScroll);
+      const t1 = setTimeout(forceScroll, 50);
+      const t2 = setTimeout(forceScroll, 200);
+      const t3 = setTimeout(forceScroll, 500);
+      const t4 = setTimeout(forceScroll, 1000);
+      // NOW mark this session as scrolled (only after messages loaded)
+      scrolledSessionRef.current = conv.session_key;
+      return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
+    }
+
+    // SAME CONVERSATION: only auto-scroll on new messages if user was already near bottom
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
     if (isNearBottom) el.scrollTop = el.scrollHeight;
-  }, [messages.length, showSearch]);
+  }, [messages.length, showSearch, conv.session_key, isLoading]);
 
   // D7: Track scroll position to show/hide scroll-to-bottom button
   useEffect(() => {
