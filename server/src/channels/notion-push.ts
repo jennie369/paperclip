@@ -203,6 +203,15 @@ function buildBlocks(row: CcScriptRow): any[] {
   return blocks;
 }
 
+// Valid Notion select values for email schema (must match DB dropdown options).
+const VALID_AUDIENCE = new Set(['all','waitlist','free','tier1','tier2','tier3','paid','students','ctv','affiliate','manual']);
+const VALID_TEMPLATES = new Set([
+  'daily_newsletter_general','daily_newsletter_jennie','weekly_roundup',
+  'onboarding_trading_starter','onboarding_trading_tier1','onboarding_trading_tier2',
+  'onboarding_trading_tier3','onboarding_love','onboarding_wealth','onboarding_roots',
+  'affiliate_kit','ctv_kit','promo_flash','promo_launch','transactional_receipt','custom',
+]);
+
 function buildProperties(row: CcScriptRow): Record<string, any> {
   const ct = String(row.content_type ?? '');
   // DOC-* → single "Doc-Tài Liệu Nội Dung" Notion select; regular types use direct map.
@@ -242,8 +251,27 @@ function buildProperties(row: CcScriptRow): Record<string, any> {
   if (row.word_count !== undefined && row.word_count !== null) {
     props['Word Count'] = { number: Number(row.word_count) };
   }
-  if (row.created_at) props['Created At (CC)'] = { date: { start: String(row.created_at).slice(0, 10) } };
-  if (row.updated_at) props['Updated At (CC)'] = { date: { start: String(row.updated_at).slice(0, 10) } };
+  // 2026-04-19 Phase D.3 — Email schema fields pulled from cc_generation_jobs.input_params
+  // (merged into row as __email_schema by pushScript). Written to Notion properties
+  // so Audience Segment / Email Template / Preview Text / From Email auto-populate.
+  const es = (row as any).__email_schema as Record<string, any> | undefined;
+  if (es) {
+    if (es.audience_type && VALID_AUDIENCE.has(String(es.audience_type))) {
+      props['Audience Segment'] = { select: { name: String(es.audience_type) } };
+    }
+    if (es.email_template && VALID_TEMPLATES.has(String(es.email_template))) {
+      props['Email Template'] = { select: { name: String(es.email_template) } };
+    }
+    if (es.from_email) props['From Email'] = { select: { name: String(es.from_email) } };
+    if (es.preview_text) props['Preview Text'] = { rich_text: richText(String(es.preview_text)) };
+    if (es.email_day !== undefined && es.email_day !== null && es.email_day !== '') {
+      const n = Number(es.email_day);
+      if (!Number.isNaN(n)) props['Email Day'] = { number: n };
+    }
+  }
+  // "Created At (CC)" / "Updated At (CC)" removed 2026-04-19 — properties không
+  // tồn tại trong Notion DB → gây Notion 400 validation_error → createPage fail
+  // silent → notion_page_id không save được (BUG observed on script 720bd1a5).
   // Publish Mode — NEW 2026-04-15: keep Notion property in sync with DB
   const pm = row.publish_mode;
   if (pm === 'scheduled' || pm === 'immediate' || pm === 'threshold_5') {
@@ -354,6 +382,30 @@ export async function pushScript(scriptId: string): Promise<{ ok: boolean; actio
     if (error || !row) {
       log(`pushScript(${scriptId}) — row not found`, error);
       return { ok: false, note: 'no-row' };
+    }
+    // 2026-04-19 Phase D.3 — Hydrate email schema from cc_generation_jobs.input_params
+    // (field bị vứt ở job stage, chưa copy sang cc_scripts). Join bằng metadata.job_id.
+    const jobId = (row?.metadata as any)?.job_id;
+    if (jobId) {
+      try {
+        const { data: job } = await supabase
+          .from('cc_generation_jobs')
+          .select('input_params')
+          .eq('id', jobId)
+          .maybeSingle();
+        const p: any = job?.input_params && typeof job.input_params === 'string'
+          ? JSON.parse(job.input_params)
+          : (job?.input_params ?? {});
+        (row as any).__email_schema = {
+          from_email: p.from_email,
+          email_template: p.email_template,
+          audience_type: p.audience_type,
+          preview_text: p.preview_text,
+          email_day: p.email_day,
+        };
+      } catch (e) {
+        log(`pushScript(${scriptId}) job hydrate failed`, e instanceof Error ? e.message : e);
+      }
     }
     const existingPageId = (row.notion_page_id as string | null) ?? (await findPageByScriptId(scriptId));
 

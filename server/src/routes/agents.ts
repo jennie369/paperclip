@@ -356,9 +356,11 @@ export function agentRoutes(db: Db) {
 
   function parseSchedulerHeartbeatPolicy(runtimeConfig: unknown) {
     const heartbeat = asRecord(asRecord(runtimeConfig)?.heartbeat) ?? {};
+    const rawCron = typeof heartbeat.cronExpression === "string" ? heartbeat.cronExpression.trim() : "";
     return {
       enabled: parseBooleanLike(heartbeat.enabled) ?? true,
       intervalSec: Math.max(0, parseNumberLike(heartbeat.intervalSec) ?? 0),
+      cronExpression: rawCron,
     };
   }
 
@@ -906,7 +908,8 @@ export function agentRoutes(db: Db) {
           adapterType: row.adapterType,
           intervalSec: policy.intervalSec,
           heartbeatEnabled: policy.enabled,
-          schedulerActive: statusEligible && policy.enabled && policy.intervalSec > 0,
+          // GEMRAL FIX 2026-04-06 P2: scheduler active if cron OR intervalSec set
+          schedulerActive: statusEligible && policy.enabled && (policy.intervalSec > 0 || policy.cronExpression !== ""),
           lastHeartbeatAt: row.lastHeartbeatAt,
         };
       })

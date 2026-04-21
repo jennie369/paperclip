@@ -229,6 +229,41 @@ export function parseGeminiStdoutLine(line: string, ts: string): TranscriptEntry
     return [{ kind: "system", ts, text: `system: ${subtype || "event"}` }];
   }
 
+  if (type === "message") {
+    const role = asString(parsed.role);
+    const text = asString(parsed.content) || asString(parsed.text);
+    const isThinking = parsed.thinking === true;
+    if (role === "assistant" && text) {
+      return [{ kind: isThinking ? "thinking" : "assistant", ts, text, delta: parsed.delta === true }];
+    }
+    if (role === "user" && text) {
+      return [{ kind: "user", ts, text }];
+    }
+  }
+
+  if (type === "tool_use") {
+    return [{
+      kind: "tool_call",
+      ts,
+      name: asString(parsed.tool_name, "tool"),
+      toolUseId: asString(parsed.tool_id),
+      input: parsed.parameters ?? parsed.input ?? {},
+    }];
+  }
+
+  if (type === "tool_result") {
+    const isError = asString(parsed.status).toLowerCase() === "error" || parsed.is_error === true;
+    const content = typeof parsed.output === "string" ? parsed.output : stringifyUnknown(parsed.output ?? parsed.result ?? parsed.content);
+    return [{
+      kind: "tool_result",
+      ts,
+      toolUseId: asString(parsed.tool_id),
+      content,
+      isError,
+    }];
+  }
+
+  // Fallback to legacy gemini cli format parsing
   if (type === "assistant") {
     return parseAssistantMessage(parsed.message, ts);
   }

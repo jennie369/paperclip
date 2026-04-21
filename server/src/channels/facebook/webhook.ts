@@ -1,10 +1,12 @@
-// Facebook Messenger Webhook — receive and send page messages
+// Facebook Webhook — Messenger DMs + Comment auto-reply
+// Handles: inbound DMs (entry.messaging), inbound comments (entry.changes feed),
+// outbound dispatch (DM via Messenger API, comment reply via Graph API)
 // Integrates with the Channel-Agent Auto-Reply consumer pipeline via bus.publishInbound()
 
 import { Router, type Request, type Response } from 'express';
 import { bus } from '../bus.js';
 import { supabase } from '../zalo-personal/supabase.js';
-import type { InboundMessage } from '../types.js';
+import type { InboundMessage, OutboundMessage } from '../types.js';
 
 const router = Router();
 
@@ -72,7 +74,18 @@ router.post('/webhook', async (req: Request, res: Response) => {
       try {
         await handleMessagingEvent(pageId, channelName, event);
       } catch (err: any) {
-        console.error(`[FB] Error handling event:`, err.message);
+        console.error(`[FB] Error handling messaging event:`, err.message);
+      }
+    }
+
+    // Handle feed changes (comments on posts)
+    for (const change of entry.changes || []) {
+      if (change.field === 'feed' && change.value?.item === 'comment') {
+        try {
+          await handleCommentEvent(pageId, channelName, change.value);
+        } catch (err: any) {
+          console.error(`[FB] Error handling comment event:`, err.message);
+        }
       }
     }
   }
@@ -138,6 +151,60 @@ async function handleMessagingEvent(pageId: string, channelName: string, event: 
     },
     timestamp,
     dedupeKey: `fb:${channelName}:${senderId}:${messageId}`,
+  };
+
+  await bus.publishInbound(inbound);
+}
+
+/**
+ * Process a comment event from Facebook feed webhook.
+ * Builds InboundMessage with peerKind='comment' and publishes to the bus.
+ */
+async function handleCommentEvent(pageId: string, channelName: string, value: any): Promise<void> {
+  const commentId: string = value.comment_id;
+  const senderId: string = value.from?.id;
+  const senderName: string = value.from?.name || senderId;
+  const message: string = value.message || '';
+  const postId: string = value.post_id;
+  const parentId: string | undefined = value.parent_id;
+  const createdTime: string | undefined = value.created_time;
+
+  // Skip if the comment is from the page itself (page's own reply)
+  if (senderId === pageId) {
+    console.log(`[FB] Skipping own comment on ${channelName}: ${commentId}`);
+    return;
+  }
+
+  // Skip if no message content
+  if (!message.trim()) {
+    console.log(`[FB] Skipping empty comment on ${channelName}: ${commentId}`);
+    return;
+  }
+
+  const timestamp = createdTime ? new Date(parseInt(createdTime) * 1000) : new Date();
+
+  console.log(`[FB] Comment from ${senderName} on ${channelName} (post=${postId}): ${message.slice(0, 100)}`);
+
+  // Build InboundMessage — chatId is post_id so all comments on same post share one conversation
+  const inbound: InboundMessage = {
+    id: commentId,
+    channel: channelName,
+    channelType: 'facebook',
+    chatId: postId, // Group conversation by post
+    senderId,
+    senderName,
+    content: message,
+    contentType: 'text',
+    peerKind: 'comment',
+    metadata: {
+      platform: 'facebook',
+      page_id: pageId,
+      comment_id: commentId,
+      post_id: postId,
+      parent_id: parentId,
+    },
+    timestamp,
+    dedupeKey: `fb:${channelName}:comment:${commentId}`,
   };
 
   await bus.publishInbound(inbound);
@@ -228,6 +295,56 @@ router.post('/send', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/channels/facebook/comment-reply — reply to a Facebook comment
+ * Body: { page_id, comment_id, message }
+ */
+router.post('/comment-reply', async (req: Request, res: Response) => {
+  const { page_id, comment_id, message } = req.body;
+
+  if (!page_id || !comment_id || !message) {
+    res.status(400).json({ error: 'Missing page_id, comment_id, or message' });
+    return;
+  }
+
+  const token = PAGE_TOKENS[page_id];
+  if (!token) {
+    res.status(400).json({ error: `No token configured for page ${page_id}` });
+    return;
+  }
+
+  try {
+    const fbRes = await fetch(`${GRAPH_API}/${comment_id}/comments?access_token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+
+    const result = await fbRes.json();
+    if (result.error) {
+      console.error(`[FB] Comment reply error:`, result.error);
+      res.status(400).json({ error: result.error.message });
+      return;
+    }
+
+    // Log to channel_sent_messages for audit trail (non-blocking)
+    void supabase.from('channel_sent_messages').insert({
+      channel_name: PAGE_CHANNEL[page_id] || `fb-${page_id}`,
+      thread_id: comment_id,
+      thread_type: 'comment',
+      to_uid: comment_id,
+      body: message,
+      content_type: 'text',
+      status: 'sent',
+      sent_by: 'api',
+    }).then(() => {}, () => {});
+
+    res.json({ success: true, comment_id: result.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/channels/facebook/pages — list configured pages and their status
  */
 router.get('/pages', (_req: Request, res: Response) => {
@@ -237,6 +354,82 @@ router.get('/pages', (_req: Request, res: Response) => {
     has_token: !!PAGE_TOKENS[pageId],
   }));
   res.json(pages);
+});
+
+// ─── Reverse lookup: channel name → page ID ───
+const CHANNEL_PAGE: Record<string, string> = {};
+for (const [pageId, channelName] of Object.entries(PAGE_CHANNEL)) {
+  CHANNEL_PAGE[channelName] = pageId;
+}
+
+/**
+ * Outbound message handler: subscribe to bus outbound events for fb-* channels.
+ * Routes to Messenger send (DMs) or comment reply (comments) based on peerKind.
+ */
+bus.on('outbound', async (msg: OutboundMessage) => {
+  const pageId = CHANNEL_PAGE[msg.channel];
+  if (!pageId) return; // Not a Facebook channel — skip
+
+  const token = PAGE_TOKENS[pageId];
+  if (!token) {
+    console.warn(`[FB] No token for outbound on ${msg.channel}`);
+    return;
+  }
+
+  const peerKind = msg.metadata?.peerKind as string | undefined;
+  const commentId = msg.metadata?.comment_id as string | undefined;
+
+  try {
+    if (peerKind === 'comment' && commentId) {
+      // ── Comment reply: POST /{comment_id}/comments ──
+      const fbRes = await fetch(`${GRAPH_API}/${commentId}/comments?access_token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg.content }),
+      });
+
+      const result = await fbRes.json();
+      if (result.error) {
+        console.error(`[FB] Outbound comment reply error on ${msg.channel}:`, result.error);
+        return;
+      }
+
+      console.log(`[FB] Comment reply sent on ${msg.channel} → ${commentId}: "${msg.content.slice(0, 60)}"`);
+    } else {
+      // ── Messenger DM: POST /{page_id}/messages ──
+      const fbRes = await fetch(`${GRAPH_API}/${pageId}/messages?access_token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient: { id: msg.chatId },
+          message: { text: msg.content },
+          messaging_type: 'RESPONSE',
+        }),
+      });
+
+      const result = await fbRes.json();
+      if (result.error) {
+        console.error(`[FB] Outbound DM error on ${msg.channel}:`, result.error);
+        return;
+      }
+
+      console.log(`[FB] DM sent on ${msg.channel} → ${msg.chatId}: "${msg.content.slice(0, 60)}"`);
+    }
+
+    // Log to channel_sent_messages (non-blocking)
+    void supabase.from('channel_sent_messages').insert({
+      channel_name: msg.channel,
+      thread_id: peerKind === 'comment' ? commentId : msg.chatId,
+      thread_type: peerKind === 'comment' ? 'comment' : 'dm',
+      to_uid: msg.chatId,
+      body: msg.content,
+      content_type: 'text',
+      status: 'sent',
+      sent_by: msg.metadata?.agentSlug || 'system',
+    }).then(() => {}, () => {});
+  } catch (err: any) {
+    console.error(`[FB] Outbound send failed on ${msg.channel}:`, err.message);
+  }
 });
 
 export default router;

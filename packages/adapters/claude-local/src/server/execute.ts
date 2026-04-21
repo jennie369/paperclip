@@ -30,6 +30,7 @@ import {
   detectClaudeLoginRequired,
   isClaudeMaxTurnsResult,
   isClaudeUnknownSessionError,
+  isClaudePromptTooLong,
 } from "./parse.js";
 import { resolveClaudeDesiredSkillNames } from "./skills.js";
 
@@ -405,7 +406,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const raw = asString((config as Record<string, unknown>).instructionsFilePath, "").trim();
     if (raw) return raw;
     // Fallback: derive from agent slug + agents/ dir if available
-    const slug = asString((agent as Record<string, unknown>).slug, "").trim();
+    const slug = asString((agent as unknown as Record<string, unknown>).slug, "").trim();
     if (slug) {
       const guess = path.join(cwd, "agents", slug, "AGENTS.md");
       if (existsSync(guess)) return guess;
@@ -777,6 +778,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       await onLog(
         "stdout",
         `[paperclip] Claude resume session "${sessionId}" is unavailable; retrying with a fresh session.\n`,
+      );
+      const retry = await runAttempt(null);
+      return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true });
+    }
+
+    // When a resumed session has grown too large (conversation history overflow),
+    // drop the session and retry with a fresh context window so the agent is not
+    // permanently stuck.
+    if (
+      sessionId &&
+      !initial.proc.timedOut &&
+      (initial.proc.exitCode ?? 0) !== 0 &&
+      initial.parsed &&
+      isClaudePromptTooLong(initial.parsed)
+    ) {
+      await onLog(
+        "stdout",
+        `[paperclip] Claude session "${sessionId}" context is too long; retrying with a fresh session.\n`,
       );
       const retry = await runAttempt(null);
       return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true });

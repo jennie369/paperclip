@@ -1507,7 +1507,15 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     scrubbed = scrubbed.replace(shortTimeRe, 'trong vòng 24-48 tiếng');
   }
 
-  // Rule 3: Strip tool/MCP/function-call markers (machine-readable brackets)
+  // Rule 3a: Strip thinking/reasoning token leaks (Gemini extended thinking, Claude thinking)
+  // Catches: [Thought: true], [Thinking: ...], "Changing Focus...", "<thinking>...</thinking>"
+  const thinkingRe = /\[Thought:\s*\w+\]|\[Thinking:\s*[^\]]*\]|Changing\s+Focus\.{2,3}\s*|<thinking>[\s\S]*?<\/thinking>/gi;
+  if (thinkingRe.test(scrubbed)) {
+    violations.push('thinking_token_leak');
+    scrubbed = scrubbed.replace(thinkingRe, '');
+  }
+
+  // Rule 3b: Strip tool/MCP/function-call markers (machine-readable brackets)
   // Catches: [MCP_xxx], [CALL: ...], [TOOL: ...], [FUNCTION: ...], [DEBUG: ...]
   // EXCLUDED: SEND_MEDIA, MSG_BREAK, STAGE, ESCALATE — those are real markers
   // parsed downstream by parseMediaMarkers / parseStageMarker / parseEscalationMarker.

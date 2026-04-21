@@ -2,13 +2,27 @@
 
 import { ZaloAuth } from './protocol/auth.js';
 import { ZaloListener } from './protocol/listener.js';
-import { sendDMText, sendGroupText, sendTyping, sendDMImage, sendGroupImage } from './protocol/send.js';
+import { sendDMText, sendGroupText, sendTyping, sendDMImage, sendGroupImage, sendDMFile, sendGroupFile } from './protocol/send.js';
 import { encryptCredentials, decryptCredentials } from './protocol/crypto.js';
 import { ZaloSession, ZaloCredentials } from './protocol/message.js';
 import { supabase } from './supabase.js';
 import { bus } from '../bus.js';
-import type { OutboundMessage } from '../types.js';
+import type { OutboundMessage, MediaFile } from '../types.js';
 import https from 'https';
+import http from 'http';
+import { writeFileSync, mkdtempSync, rmSync, existsSync, statSync } from 'fs';
+import { join as pathJoin, basename as pathBasename, extname as pathExtname, isAbsolute as pathIsAbsolute, resolve as pathResolve } from 'path';
+import { tmpdir } from 'os';
+
+// Project root used to resolve relative media paths from agents/*/media-library.json.
+// Matches router.ts PROJECT_ROOT so relative paths like "memory/agents/shared/..."
+// resolve to the crypto-pattern-scanner tree where real assets live.
+const MEDIA_PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
+
+// Zalo hard limit on file/image uploads (enforced by tt-chatN-wpa.chat.zalo.me).
+// We check client-side so we can log a clear warning instead of the opaque
+// "File too large: N > 26214400" error bubbling up from the protocol layer.
+const ZALO_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 
 const MASTER_KEY = process.env.ZALO_ENCRYPTION_KEY || 'gemral-zalo-default-key-change-me';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8782931741:AAF6v6ju5N5qF2EWFIKZg_5HTNr9yOnsiQ0';
@@ -45,6 +59,78 @@ function sendTelegramAlert(text: string): void {
   req.on('error', (e) => console.error('[TelegramAlert] Error:', e.message));
   req.write(body);
   req.end();
+}
+
+/**
+ * Download a URL to a temp file and return the local path.
+ * Provider-agnostic: used by the outbound handler to materialize media items
+ * that only have a remote `url` (no local `path`) before calling sendImage/sendFile.
+ *
+ * Returns `null` on any failure (network, 4xx/5xx, etc.) so the caller can
+ * fall back to URL-append-in-text without crashing.
+ */
+async function downloadMediaToTemp(
+  url: string,
+  suggestedFilename?: string,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      const tmpDir = mkdtempSync(pathJoin(tmpdir(), 'paperclip-media-'));
+      const urlPath = (() => { try { return new URL(url).pathname; } catch { return url; } })();
+      const filename = suggestedFilename || pathBasename(urlPath) || `media${pathExtname(urlPath) || '.bin'}`;
+      const destPath = pathJoin(tmpDir, filename);
+
+      const client = url.startsWith('https:') ? https : http;
+      const req = client.get(url, (res) => {
+        // Follow single redirect
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          downloadMediaToTemp(res.headers.location, suggestedFilename).then(resolve);
+          res.resume();
+          return;
+        }
+        if (res.statusCode !== 200) {
+          console.warn(`[ZaloMedia] Download ${url} failed: HTTP ${res.statusCode}`);
+          res.resume();
+          resolve(null);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            writeFileSync(destPath, Buffer.concat(chunks));
+            resolve(destPath);
+          } catch (err: any) {
+            console.warn(`[ZaloMedia] Write ${destPath} failed: ${err.message}`);
+            resolve(null);
+          }
+        });
+        res.on('error', (err) => {
+          console.warn(`[ZaloMedia] Stream ${url} error: ${err.message}`);
+          resolve(null);
+        });
+      });
+      req.on('error', (err) => {
+        console.warn(`[ZaloMedia] Request ${url} error: ${err.message}`);
+        resolve(null);
+      });
+      req.setTimeout(30_000, () => {
+        req.destroy(new Error('timeout'));
+      });
+    } catch (err: any) {
+      console.warn(`[ZaloMedia] downloadMediaToTemp threw: ${err.message}`);
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * Classify a media item as image vs file by mimeType.
+ * Zalo sendImage uses a different endpoint than sendFile so we need to pick
+ * the right one — only `image/*` mime types go through sendImage.
+ */
+function isImageMedia(media: MediaFile): boolean {
+  return (media.mimeType || '').toLowerCase().startsWith('image/');
 }
 
 export class ZaloPersonalChannel {
@@ -103,6 +189,73 @@ export class ZaloPersonalChannel {
     // Connect WS — cipher key will arrive via handshake
     await this.startListening();
     return true;
+  }
+
+  /**
+   * Refresh zpw_enk by calling getLoginInfo with existing cookies.
+   * Fixes "bad decrypt" when Zalo rotates encryption keys.
+   * Returns true if key was refreshed successfully.
+   */
+  async refreshEncryptionKey(): Promise<{ success: boolean; message: string }> {
+    // Load current credentials
+    const { data: instance } = await supabase
+      .from('channel_instances')
+      .select('*')
+      .eq('name', this.channelName)
+      .single();
+
+    if (!instance?.credentials_encrypted) {
+      return { success: false, message: 'Không tìm thấy credentials' };
+    }
+
+    try {
+      const credJson = decryptCredentials(
+        instance.credentials_encrypted,
+        instance.credentials_iv,
+        instance.credentials_tag,
+        MASTER_KEY
+      );
+      const credentials: ZaloCredentials = JSON.parse(credJson);
+
+      // Create auth with saved cookies
+      const auth = new ZaloAuth();
+      for (const c of credentials.cookie) {
+        auth['cm'].set(c.name, c.value, c.domain);
+      }
+
+      // Call getLoginInfo to get fresh zpw_enk
+      console.log(`${this.tag} Refreshing zpw_enk via getLoginInfo...`);
+      const loginInfo = await auth.fetchLoginInfo(credentials.imei);
+
+      if (!loginInfo?.zpw_enk) {
+        return { success: false, message: 'getLoginInfo thất bại — cookies có thể hết hạn, cần login QR lại' };
+      }
+
+      // Update credentials with new zpw_enk
+      credentials.loginInfo = loginInfo;
+      const newCredJson = JSON.stringify(credentials);
+      const { encrypted, iv, tag } = encryptCredentials(newCredJson, MASTER_KEY);
+
+      await supabase.from('channel_instances').update({
+        credentials_encrypted: encrypted,
+        credentials_iv: iv,
+        credentials_tag: tag,
+        zalo_uid: loginInfo.uid || instance.zalo_uid,
+        updated_at: new Date().toISOString(),
+      }).eq('name', this.channelName);
+
+      // Update live session if running
+      if (this.session) {
+        this.session.secretKey = loginInfo.zpw_enk;
+        this.session.loginInfo = loginInfo;
+      }
+
+      console.log(`${this.tag} ✅ zpw_enk refreshed successfully!`);
+      return { success: true, message: `zpw_enk mới: ${loginInfo.zpw_enk.substring(0, 15)}...` };
+    } catch (err: any) {
+      console.error(`${this.tag} refreshEncryptionKey error:`, err.message);
+      return { success: false, message: err.message };
+    }
   }
 
   /**
@@ -230,12 +383,19 @@ export class ZaloPersonalChannel {
       }
     };
 
-    // Cipher key received from WS handshake → update session + status
+    // Cipher key received from WS handshake → update session + status + persist to DB
+    // NOTE: WS cipher key is for WS message decryption, NOT for HTTP API encryption!
+    // loginInfo.zpw_enk (from getLoginInfo) is for HTTP API - do NOT overwrite it.
     this.listener.on('cipher_key', async (key: string) => {
       if (key && this.session) {
-        this.session.secretKey = key;
+        this.session.secretKey = key;  // Only update secretKey, NOT loginInfo.zpw_enk
         console.log(`${this.tag} Cipher key received from WS handshake`);
         await markConnected();
+
+        // NOTE: DO NOT persist WS cipher key as zpw_enk!
+        // zpw_enk from getLoginInfo is the correct key for HTTP API encryption.
+        // WS cipher key is ONLY for WS message decryption (secretKey).
+        // Persisting WS key as zpw_enk breaks send functionality!
       }
     });
 
@@ -289,14 +449,117 @@ export class ZaloPersonalChannel {
     // Start health check (idempotent — only starts once per channel instance)
     this._startHealthCheck();
 
-    // Subscribe to bus outbound events for auto-reply dispatch
-    bus.on('outbound', (outMsg: OutboundMessage) => {
+    // Subscribe to bus outbound events for auto-reply dispatch.
+    // Handles BOTH text content AND media attachments (images / files) that
+    // the router extracted from [[SEND_MEDIA: id]] markers.
+    bus.on('outbound', async (outMsg: OutboundMessage) => {
       if (outMsg.channel !== this.channelName) return;
-      const threadType = outMsg.metadata?.threadType === 'group' ? 'group' : 'dm';
+      const threadType = (outMsg.metadata?.threadType === 'group' ? 'group' : 'dm') as 'dm' | 'group';
       const agentSlug = outMsg.metadata?.agentSlug as string | undefined;
-      this.send(outMsg.chatId, outMsg.content, threadType as 'dm' | 'group', agentSlug).catch(err => {
+
+      try {
+        // Step 1: send the text reply first so the customer sees the message
+        // body before any attachments (matches natural human send order).
+        if (outMsg.content && outMsg.content.trim()) {
+          await this.send(outMsg.chatId, outMsg.content, threadType, agentSlug);
+        }
+
+        // Step 2: dispatch attachments, if any.
+        const media = outMsg.media;
+        if (!media || media.length === 0) return;
+
+        console.log(`${this.tag} Outbound dispatch: sending ${media.length} media item(s) to ${outMsg.chatId}`);
+
+        for (const item of media) {
+          // Resolve to a local file path. Prefer existing local path, else
+          // download URL to a temp file.
+          //
+          // Relative paths in media-library.json (e.g. "memory/agents/shared/...")
+          // are resolved against PROJECT_ROOT so they point to the actual assets
+          // in the crypto-pattern-scanner tree, NOT the server CWD.
+          let localPath: string | null = null;
+          let cleanupTemp = false;
+          if (item.path) {
+            const resolved = pathIsAbsolute(item.path)
+              ? item.path
+              : pathResolve(MEDIA_PROJECT_ROOT, item.path);
+            if (existsSync(resolved)) {
+              localPath = resolved;
+            } else {
+              console.warn(`${this.tag} Media path not found on disk: ${resolved}`);
+            }
+          }
+          if (!localPath && item.url) {
+            localPath = await downloadMediaToTemp(item.url, item.filename);
+            cleanupTemp = localPath !== null;
+          }
+
+          if (!localPath) {
+            // Fallback: append the URL into a follow-up text message so the
+            // customer at least sees a clickable link instead of losing the
+            // reference entirely.
+            if (item.url) {
+              const fallbackText = `${item.filename || 'Tệp đính kèm'}: ${item.url}`;
+              await this.send(outMsg.chatId, fallbackText, threadType, agentSlug);
+              console.warn(`${this.tag} Media fallback (URL as text): ${item.url}`);
+            } else {
+              console.warn(`${this.tag} Media skipped (no path/url): ${item.filename || '(unknown)'}`);
+            }
+            continue;
+          }
+
+          // Pre-check file size against Zalo's hard limit. Fail fast with a
+          // clear warning instead of waiting for the opaque protocol error.
+          try {
+            const fileSize = statSync(localPath).size;
+            if (fileSize > ZALO_MAX_FILE_BYTES) {
+              const sizeMB = (fileSize / 1024 / 1024).toFixed(1);
+              console.error(
+                `${this.tag} ❌ Media too large: ${pathBasename(localPath)} = ${sizeMB}MB ` +
+                `(Zalo limit ${ZALO_MAX_FILE_BYTES / 1024 / 1024}MB). Skipping send.`,
+              );
+              // Best-effort fallback: tell the customer a smaller version is coming
+              await this.send(
+                outMsg.chatId,
+                `(File "${item.filename || pathBasename(localPath)}" quá lớn để gửi qua Zalo, em sẽ gửi cho chị qua kênh khác nhé)`,
+                threadType,
+                agentSlug,
+              );
+              if (cleanupTemp) {
+                try { rmSync(pathJoin(localPath, '..'), { recursive: true, force: true }); } catch {}
+              }
+              continue;
+            }
+          } catch (err: any) {
+            console.warn(`${this.tag} statSync failed for ${localPath}: ${err.message}`);
+          }
+
+          // Pick sendImage vs sendFile based on mime type
+          const sendFn = isImageMedia(item) ? this.sendImage.bind(this) : this.sendFile.bind(this);
+          const kind = isImageMedia(item) ? 'image' : 'file';
+
+          try {
+            const result = await sendFn(outMsg.chatId, localPath, threadType, item.caption, agentSlug);
+            if (result.success) {
+              console.log(`${this.tag} ✅ Sent ${kind}: ${pathBasename(localPath)}`);
+            } else {
+              console.error(`${this.tag} ❌ Failed to send ${kind} ${pathBasename(localPath)}: ${result.error}`);
+            }
+          } catch (err: any) {
+            console.error(`${this.tag} ❌ Exception sending ${kind} ${pathBasename(localPath)}: ${err.message}`);
+          } finally {
+            // Cleanup downloaded temp file (NOT caller-provided paths)
+            if (cleanupTemp && localPath) {
+              try {
+                const tmpParent = pathJoin(localPath, '..');
+                rmSync(tmpParent, { recursive: true, force: true });
+              } catch { /* best effort */ }
+            }
+          }
+        }
+      } catch (err: any) {
         console.error(`${this.tag} Bus outbound dispatch error:`, err);
-      });
+      }
     });
 
     await this.listener.start();
@@ -433,6 +696,40 @@ export class ZaloPersonalChannel {
       to_uid: threadId,
       body: caption || '[Hình ảnh]',
       content_type: 'image',
+      status: result.success ? 'sent' : 'failed',
+      error_message: result.error,
+      platform_message_id: result.messageId,
+      sent_by: agentSlug || 'manual',
+    });
+
+    return result;
+  }
+
+  /**
+   * Send a non-image file (PDF / doc / video / audio) via the asyncfile/upload
+   * endpoint. EXPERIMENTAL — Zalo's chunked file protocol changes occasionally.
+   * On failure the manager wrapper falls back to URL-append in the text reply.
+   */
+  async sendFile(
+    threadId: string,
+    filePath: string,
+    threadType: 'dm' | 'group' = 'dm',
+    caption?: string,
+    agentSlug?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.session) return { success: false, error: 'Not connected' };
+
+    const result = threadType === 'group'
+      ? await sendGroupFile(this.session, threadId, filePath, caption)
+      : await sendDMFile(this.session, threadId, filePath, caption);
+
+    await supabase.from('channel_sent_messages').insert({
+      channel_name: this.channelName,
+      thread_id: threadId,
+      thread_type: threadType,
+      to_uid: threadId,
+      body: caption || '[Tệp đính kèm]',
+      content_type: 'file',
       status: result.success ? 'sent' : 'failed',
       error_message: result.error,
       platform_message_id: result.messageId,

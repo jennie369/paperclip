@@ -154,6 +154,32 @@ router.post('/:name/stop', async (req, res) => {
 });
 
 /**
+ * POST /api/channels/zalo-personal/:name/refresh-key
+ * Refresh zpw_enk by calling getLoginInfo with existing cookies.
+ * Fixes "bad decrypt" when Zalo rotates encryption keys.
+ */
+router.post('/:name/refresh-key', async (req, res) => {
+  const { name } = req.params;
+  let channel = activeChannels.get(name);
+
+  if (!channel) {
+    // Create temporary channel instance to refresh key
+    const { data: inst } = await supabase.from('channel_instances').select('display_name').eq('name', name).single();
+    channel = new ZaloPersonalChannel(name, inst?.display_name);
+  }
+
+  const result = await channel.refreshEncryptionKey();
+
+  if (result.success && !activeChannels.has(name)) {
+    // If channel wasn't running, start it with fresh key
+    const started = await channel.startFromDB();
+    if (started) activeChannels.set(name, channel);
+  }
+
+  res.json(result);
+});
+
+/**
  * DELETE /api/channels/zalo-personal/:name
  * Soft delete: Xóa channel instance + credentials nhưng GIỮ LẠI toàn bộ
  * session history, pending messages, và sent messages.
@@ -168,8 +194,7 @@ router.delete('/:name', async (req, res) => {
     activeChannels.delete(name);
   }
 
-  // XÓA: Chỉ xóa dữ liệu technical (quota, pairing codes)
-  // GIỮ: channel_sessions, channel_pending_messages, channel_sent_messages
+  // Delete technical data only — messages/sessions preserved via ON DELETE SET NULL FK
   await supabase.from('channel_quota_usage').delete().eq('channel_name', name);
   await supabase.from('channel_group_history').delete().eq('channel_name', name);
   await supabase.from('channel_pairing_codes').delete().eq('channel_name', name);

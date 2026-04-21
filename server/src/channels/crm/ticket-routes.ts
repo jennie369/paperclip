@@ -188,7 +188,8 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { title, description, category, priority, customer_id,
-      source_channel, source_session_key, assigned_to_agent, related_order_id, tags } = req.body;
+      source_channel, source_session_key, assigned_to_agent, related_order_id, tags,
+      created_by_agent } = req.body;
 
     if (!title?.trim()) return res.status(400).json({ error: 'Tiêu đề phiếu không được để trống' });
 
@@ -203,7 +204,7 @@ router.post('/', async (req, res) => {
         description: description?.trim(),
         category: category || 'general',
         priority: priority || 'medium',
-        customer_id,
+        customer_id: customer_id || null,
         status: assigned_to_agent ? 'assigned' : 'open',
         assigned_to_agent,
         source_channel,
@@ -211,7 +212,8 @@ router.post('/', async (req, res) => {
         related_order_id,
         sla_deadline: slaDeadline,
         tags: tags || [],
-        timeline: [{ ts: new Date().toISOString(), action: 'created', agent: 'board', note: `Phiếu tạo mới: ${title}` }],
+        created_by_agent: created_by_agent || 'board',
+        timeline: [{ ts: new Date().toISOString(), action: 'created', agent: created_by_agent || 'board', note: `Phiếu tạo mới: ${title}` }],
       })
       .select('*')
       .single();
@@ -258,7 +260,7 @@ router.post('/', async (req, res) => {
 // PUT /tickets/:id — update status/priority/assigned
 router.put('/:id', async (req, res) => {
   try {
-    const { status, priority, assigned_to_agent, title, description, tags } = req.body;
+    const { status, priority, assigned_to_agent, title, description, tags, category, customer_id } = req.body;
     const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
     if (status) updates.status = status;
@@ -267,6 +269,8 @@ router.put('/:id', async (req, res) => {
     if (title) updates.title = title;
     if (description !== undefined) updates.description = description;
     if (tags) updates.tags = tags;
+    if (category) updates.category = category;
+    if (customer_id !== undefined) updates.customer_id = customer_id || null;
 
     // First response tracking
     if (status && ['assigned', 'in_progress'].includes(status)) {
