@@ -144,11 +144,27 @@ describe("delegation routes — flag OFF gate", () => {
     expect(res.status).toBe(503);
   });
 
-  it("returns 503 on GET /delegations/:traceId", async () => {
-    const res = await request(createApp(agentActor)).get(
+  it("GET /delegations/:traceId is NOT flag-gated (read-only observability)", async () => {
+    // Flag OFF; detail must still work so UI can display existing rows.
+    mockSvc.get.mockResolvedValueOnce({
+      id: "issue-readonly",
+      traceId: TRACE_ID,
+      companyId: COMPANY_ID,
+      callerAgentId: AGENT_ID,
+      targetAgentId: TARGET_ID,
+      parentIssueId: null,
+      status: "done",
+      requestedAt: new Date(),
+      completedAt: new Date(),
+      depth: 1,
+      meta: { timeoutMs: 300_000, turnMode: "do" },
+      task: "read-only smoke",
+    });
+    const res = await request(createApp(boardActor)).get(
       `/api/delegations/${TRACE_ID}`,
     );
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    expect(res.body.traceId).toBe(TRACE_ID);
   });
 
   it("returns 503 on POST /delegations/:traceId/cancel", async () => {

@@ -71,9 +71,19 @@ export function delegationRoutes(db: Db) {
     },
   );
 
-  // Read-only list for the UI — NOT gated by the feature flag. This lets
-  // P3 ship a visible observability page even while the feature is off
-  // (empty state instead of 503 error). Company isolation still applies.
+  function parseTraceIdParam(raw: unknown): string {
+    const value = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : "";
+    const parsed = traceIdParamSchema.safeParse(value);
+    if (!parsed.success) {
+      throw new HttpError(400, "traceId must be a UUID");
+    }
+    return parsed.data;
+  }
+
+  // Read-only endpoints for the UI — NOT gated by the feature flag. Both
+  // list + detail ship for observability even while the feature is off
+  // (empty state / detail load instead of 503 error). Board users can read
+  // these; only mutating routes below require agent auth.
   router.get("/companies/:companyId/delegations", async (req, res) => {
     const { companyId } = req.params;
     assertCompanyAccess(req, companyId);
@@ -81,6 +91,14 @@ export function delegationRoutes(db: Db) {
     const limit = Number.isFinite(limitParam) ? limitParam : undefined;
     const rows = await svc.listByCompany(companyId, { limit });
     res.json(rows);
+  });
+
+  router.get("/delegations/:traceId", async (req, res) => {
+    const traceId = parseTraceIdParam(req.params.traceId);
+    const row = await svc.get(traceId);
+    if (!row) throw notFound(`Delegation not found: ${traceId}`);
+    assertCompanyAccess(req, row.companyId);
+    res.json(row);
   });
 
   // Router-level gate for MUTATING / action endpoints below. Runs before
@@ -109,15 +127,6 @@ export function delegationRoutes(db: Db) {
     if (!caller) throw unauthorized("Caller agent not found");
     assertCompanyAccess(req, caller.companyId);
     return caller;
-  }
-
-  function parseTraceIdParam(raw: unknown): string {
-    const value = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : "";
-    const parsed = traceIdParamSchema.safeParse(value);
-    if (!parsed.success) {
-      throw new HttpError(400, "traceId must be a UUID");
-    }
-    return parsed.data;
   }
 
   router.post(
@@ -180,15 +189,6 @@ export function delegationRoutes(db: Db) {
       res.json({ ok: true });
     },
   );
-
-  router.get("/delegations/:traceId", async (req, res) => {
-    await assertCallerAgent(req);
-    const traceId = parseTraceIdParam(req.params.traceId);
-    const row = await svc.get(traceId);
-    if (!row) throw notFound(`Delegation not found: ${traceId}`);
-    assertCompanyAccess(req, row.companyId);
-    res.json(row);
-  });
 
   return router;
 }
