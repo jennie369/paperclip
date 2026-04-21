@@ -238,6 +238,17 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string }): Rec
   const vars: Record<string, string> = {
     PAPERCLIP_AGENT_ID: agent.id,
     PAPERCLIP_COMPANY_ID: agent.companyId,
+    // UTF-8 locale (BUG-051 fix 2026-04-21). Without these, on Windows the
+    // console codepage defaults to cp1252 — any shell subprocess Claude CLI
+    // spawns (curl, git-bash, cmd /c) strips emoji and mangles accented
+    // Vietnamese chars in stdin/stdout. Comments containing "✅ hoàn thành"
+    // land in the DB as "? ho�n th�nh". These env vars tell libc /
+    // Python / Node child processes to stay in UTF-8 regardless of console
+    // codepage. Inherited by the MCP stdio subprocess too.
+    LANG: "en_US.UTF-8",
+    LC_ALL: "en_US.UTF-8",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
   };
   const runtimeHost = resolveHostForUrl(
     process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost",
