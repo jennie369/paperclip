@@ -73,6 +73,13 @@ export interface Config {
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
+  // Delegation feature (inline CEO→subagent handoff). See
+  // memory/reports/2026-04-21-delegate-to-agent-plan.md for context.
+  delegationEnabled: boolean;
+  delegationDefaultTimeoutMs: number;
+  delegationMaxTimeoutMs: number;
+  delegationMaxConcurrentPerCaller: number;
+  delegationMaxDepth: number;
 }
 
 export function loadConfig(): Config {
@@ -255,5 +262,24 @@ export function loadConfig(): Config {
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
+    // Delegation feature flag — OFF by default. Flip via PAPERCLIP_DELEGATION_ENABLED=true
+    // once the tool implementation, whitelist, and UI are verified (plan phases P1–P3).
+    delegationEnabled: process.env.PAPERCLIP_DELEGATION_ENABLED === "true",
+    delegationDefaultTimeoutMs: Math.max(
+      30_000,
+      Number(process.env.PAPERCLIP_DELEGATION_DEFAULT_TIMEOUT_MS) || 300_000,
+    ),
+    delegationMaxTimeoutMs: Math.max(
+      60_000,
+      Number(process.env.PAPERCLIP_DELEGATION_MAX_TIMEOUT_MS) || 1_800_000,
+    ),
+    delegationMaxConcurrentPerCaller: Math.max(
+      1,
+      Number(process.env.PAPERCLIP_DELEGATION_MAX_CONCURRENT) || 10,
+    ),
+    delegationMaxDepth: Math.max(
+      1,
+      Number(process.env.PAPERCLIP_DELEGATION_MAX_DEPTH) || 3,
+    ),
   };
 }
