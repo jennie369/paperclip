@@ -1,0 +1,423 @@
+// Auto Follow-Up Cron
+//
+// Bám đuổi khách stuck trong purchase funnel: nếu khách ở stage
+// "interest" / "consideration" / "intent" mà X giờ chưa reply,
+// auto-insert follow-up message vào follow_up_queue.
+//
+// Chạy mỗi 10 phút (interval). Worker riêng quét follow_up_queue và gửi
+// message qua channel khi scheduled_at <= NOW().
+//
+// Tránh spam: max 2 follow-ups per session, skip nếu khách reply sau,
+// skip nếu session bot_paused (escalated).
+
+import { supabase } from '../zalo-personal/supabase.js';
+import { bus } from '../bus.js';
+import { recordCronRun } from '../../services/cron-registry.js';
+import type { OutboundMessage } from '../types.js';
+
+const CRON_INTERVAL_MS = 10 * 60 * 1000; // 10 phút
+
+// Stage → (stuck threshold, follow-up message template)
+interface FollowUpRule {
+  stage: string;
+  stuckHours: number;
+  message: string;
+}
+
+const FOLLOWUP_RULES: FollowUpRule[] = [
+  {
+    stage: 'interest',
+    stuckHours: 6,
+    message: 'Dạ chị ơi, em vẫn đang đây nha 🌸 Có thông tin nào em chưa giải đáp rõ thì chị cứ hỏi em thêm nhé ạ — em luôn sẵn sàng tư vấn 💛',
+  },
+  {
+    stage: 'consideration',
+    stuckHours: 12,
+    message: 'Dạ chị suy nghĩ thêm rồi cho em biết phần nào còn phân vân nha ạ ✨ Em có thể gửi thêm feedback của khách đã học hoặc demo cho chị tham khảo nếu cần 🙏',
+  },
+  {
+    stage: 'intent',
+    stuckHours: 2,
+    message: 'Dạ chị ơi, em đã chuẩn bị thông tin thanh toán cho chị rồi nha 💛 Chị cần em gửi lại link/STK không ạ? Em hỗ trợ chốt nhanh giúp chị 🌟',
+  },
+];
+
+const CATCHALL_RULE = {
+  stuckHours: 24,
+  maxFollowups: 1,
+  message: 'Dạ chị ơi, em vẫn đang đây nha 🌸 Chị có câu hỏi gì thêm cứ nhắn em nhé — em luôn sẵn sàng hỗ trợ ạ 💛',
+};
+
+const MAX_FOLLOWUPS_PER_SESSION = 2;
+
+let cronTimer: NodeJS.Timeout | null = null;
+
+function log(msg: string): void { console.log(`[FollowUp] ${msg}`); }
+function logWarn(msg: string): void { console.warn(`[FollowUp] ⚠ ${msg}`); }
+function logErr(msg: string): void { console.error(`[FollowUp] ❌ ${msg}`); }
+
+function stuckLabel(hours: number): string {
+  if (hours < 24) return `${hours} giờ`;
+  const days = Math.floor(hours / 24);
+  const h = hours % 24;
+  return h > 0 ? `${days} ngày ${h}h` : `${days} ngày`;
+}
+
+function channelLabel(name: string): string {
+  if (name.startsWith('zalo-personal')) return 'Zalo';
+  if (name.startsWith('fb-')) return `FB ${name.replace('fb-', '')}`;
+  return name;
+}
+
+const FB_MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1000; // Facebook 24h policy
+
+function isFbChannelOutsideWindow(channelName: string, lastMessageAt: string): boolean {
+  if (!channelName.startsWith('fb-')) return false;
+  return Date.now() - new Date(lastMessageAt).getTime() > FB_MESSAGING_WINDOW_MS;
+}
+
+async function runAndRecord(cronId: string, fn: () => Promise<string>): Promise<void> {
+  const start = Date.now();
+  try {
+    const output = await fn();
+    await recordCronRun(cronId, { status: 'success', durationMs: Date.now() - start, output });
+  } catch (err: any) {
+    logErr(`Lỗi ${cronId}: ${err.message}`);
+    await recordCronRun(cronId, { status: 'failed', durationMs: Date.now() - start, output: err.message });
+  }
+}
+
+/**
+ * Start the cron loop. Call once on app startup.
+ */
+export function startFollowUpCron(): void {
+  if (cronTimer) {
+    logWarn('Đã chạy rồi, bỏ qua');
+    return;
+  }
+  log(`Khởi động — quét mỗi ${CRON_INTERVAL_MS / 60000} phút`);
+
+  // Run once immediately on startup, then on interval
+  void runAndRecord('followup-scan', runScanCycle);
+
+  cronTimer = setInterval(() => {
+    void runAndRecord('followup-scan', runScanCycle);
+    void runAndRecord('followup-queue', processQueueCycle);
+  }, CRON_INTERVAL_MS);
+}
+
+export function stopFollowUpCron(): void {
+  if (cronTimer) {
+    clearInterval(cronTimer);
+    cronTimer = null;
+    log('Đã dừng');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scan cycle: tìm sessions bị stuck, thêm follow-up vào queue
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function runScanCycle(): Promise<string> {
+  const startMs = Date.now();
+  log('━━━ Bắt đầu quét ━━━');
+  let totalInserted = 0;
+  let totalScanned = 0;
+  const skips = { wrongStage: 0, botPaused: 0, noCustomer: 0, maxReached: 0, tooSoon: 0 };
+
+  // ── Quét theo từng stage (interest → consideration → intent) ──
+  for (const rule of FOLLOWUP_RULES) {
+    const cutoffIso = new Date(Date.now() - rule.stuckHours * 60 * 60 * 1000).toISOString();
+
+    const { data: sessions, error } = await supabase
+      .from('channel_sessions')
+      .select('session_key, channel_name, chat_id, agent_slug, customer_id, last_message_at, metadata')
+      .lte('last_message_at', cutoffIso)
+      .not('agent_slug', 'is', null)
+      .limit(200);
+
+    if (error) {
+      logErr(`Lỗi query stage "${rule.stage}": ${error.message}`);
+      continue;
+    }
+
+    const count = sessions?.length ?? 0;
+    log(`📊 Stage "${rule.stage}" (im lặng >${rule.stuckHours}h): ${count} sessions`);
+    if (!sessions || count === 0) continue;
+    totalScanned += count;
+
+    for (const sess of sessions) {
+      const meta = (sess.metadata as Record<string, unknown>) || {};
+
+      if (meta.purchase_stage !== rule.stage) { skips.wrongStage++; continue; }
+      if (meta.bot_paused === true) { skips.botPaused++; continue; }
+      if (!sess.customer_id) { skips.noCustomer++; continue; }
+
+      const followupCount = Number(meta.followup_count || 0);
+      if (followupCount >= MAX_FOLLOWUPS_PER_SESSION) { skips.maxReached++; continue; }
+
+      const lastFollowupAt = meta.last_followup_at as string | undefined;
+      if (lastFollowupAt && Date.now() - new Date(lastFollowupAt).getTime() < 4 * 60 * 60 * 1000) {
+        skips.tooSoon++;
+        continue;
+      }
+
+      const inserted = await insertFollowup(sess, rule.message, rule.stage, followupCount);
+      if (inserted) totalInserted++;
+    }
+  }
+
+  // ── Catch-all: khách không có stage, im lặng >24h ──
+  const catchallCutoff = new Date(Date.now() - CATCHALL_RULE.stuckHours * 60 * 60 * 1000).toISOString();
+  const { data: catchallSessions, error: catchallErr } = await supabase
+    .from('channel_sessions')
+    .select('session_key, channel_name, chat_id, agent_slug, customer_id, last_message_at, metadata')
+    .lte('last_message_at', catchallCutoff)
+    .not('agent_slug', 'is', null)
+    .limit(200);
+
+  let catchallQueued = 0;
+  if (catchallErr) {
+    logErr(`Lỗi query catch-all: ${catchallErr.message}`);
+  } else {
+    const eligible = (catchallSessions || []).filter((sess) => {
+      const meta = (sess.metadata as Record<string, unknown>) || {};
+      if (meta.purchase_stage) return false;
+      if (meta.bot_paused === true) return false;
+      if (!sess.customer_id) return false;
+      if (!sess.channel_name) return false;
+      const fc = Number(meta.followup_count || 0);
+      if (fc >= CATCHALL_RULE.maxFollowups) return false;
+      const lastFU = meta.last_followup_at as string | undefined;
+      if (lastFU && Date.now() - new Date(lastFU).getTime() < 24 * 60 * 60 * 1000) return false;
+      return true;
+    });
+
+    const total = catchallSessions?.length ?? 0;
+    const skipped = total - eligible.length;
+    log(`📊 Catch-all (im lặng >${CATCHALL_RULE.stuckHours}h, chưa phân loại): ${eligible.length} đủ điều kiện / ${total} tổng (bỏ qua ${skipped})`);
+
+    for (const sess of eligible) {
+      const meta = (sess.metadata as Record<string, unknown>) || {};
+      const followupCount = Number(meta.followup_count || 0);
+      const inserted = await insertFollowup(sess, CATCHALL_RULE.message, 'catch-all', followupCount);
+      if (inserted) { totalInserted++; catchallQueued++; }
+    }
+  }
+
+  // ── Tổng kết + Quyết định ──
+  const durationMs = Date.now() - startMs;
+  const skipTotal = skips.wrongStage + skips.botPaused + skips.noCustomer + skips.maxReached + skips.tooSoon;
+
+  log('───── KẾT QUẢ ─────');
+  log(`⏱ Hoàn thành trong ${durationMs}ms`);
+  log(`📬 Đã thêm vào queue: ${totalInserted} tin follow-up`);
+  if (totalInserted > 0) {
+    log(`   → Staged: ${totalInserted - catchallQueued} | Catch-all: ${catchallQueued}`);
+  }
+  log(`🔍 Đã quét: ${totalScanned} sessions (staged) + ${catchallSessions?.length ?? 0} (catch-all)`);
+  if (skipTotal > 0) {
+    log(`⏭ Bỏ qua ${skipTotal}: sai stage=${skips.wrongStage} | bot tạm dừng=${skips.botPaused} | chưa có KH=${skips.noCustomer} | đã gửi đủ=${skips.maxReached} | gửi gần đây=${skips.tooSoon}`);
+  }
+
+  // Quyết định tiếp theo
+  if (totalInserted === 0 && skipTotal > 0 && skips.wrongStage === skipTotal) {
+    log('💡 NHẬN XÉT: Tất cả sessions đều sai stage — sales-closer có thể chưa set purchase_stage. Catch-all đang bù đắp.');
+  }
+  if (totalInserted > 5) {
+    logWarn('💡 NHẬN XÉT: >5 follow-ups cùng lúc — kiểm tra xem có khách nào bị gửi trùng không.');
+  }
+  if (totalInserted === 0) {
+    log('✅ Không có khách nào cần follow-up lúc này.');
+  } else {
+    log(`✅ ${totalInserted} tin sẽ được gửi trong 1 phút tới (queue worker xử lý).`);
+  }
+  log('━━━━━━━━━━━━━━━━━━━');
+
+  const summary = `${totalInserted} queued, ${skipTotal} skipped, ${durationMs}ms`;
+  return summary;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: thêm 1 follow-up vào queue
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function getCustomerName(customerId: string): Promise<string> {
+  const { data } = await supabase
+    .from('crm_customers')
+    .select('display_name')
+    .eq('id', customerId)
+    .maybeSingle();
+  return data?.display_name || customerId.substring(0, 8);
+}
+
+async function insertFollowup(
+  sess: { session_key: string; channel_name: string; customer_id: string; agent_slug: string; last_message_at: string; metadata: unknown },
+  message: string,
+  stage: string,
+  prevCount: number,
+): Promise<boolean> {
+  // Facebook 24h messaging window — skip nếu khách im lặng >24h
+  if (isFbChannelOutsideWindow(sess.channel_name, sess.last_message_at)) {
+    const stuckH = Math.round((Date.now() - new Date(sess.last_message_at).getTime()) / 3600000);
+    log(`⏭ Bỏ qua FB (vượt 24h window) → ${channelLabel(sess.channel_name)} | im lặng ${stuckLabel(stuckH)}`);
+    return false;
+  }
+
+  const { data: channelInstance } = await supabase
+    .from('channel_instances')
+    .select('id')
+    .eq('name', sess.channel_name)
+    .single();
+
+  if (!channelInstance) {
+    logWarn(`Không tìm thấy channel "${sess.channel_name}" — bỏ qua`);
+    return false;
+  }
+
+  const scheduledAt = new Date(Date.now() + 60 * 1000).toISOString();
+  const { error: insErr } = await supabase
+    .from('follow_up_queue')
+    .insert({
+      customer_id: sess.customer_id,
+      channel_instance_id: channelInstance.id,
+      agent_slug: sess.agent_slug,
+      message,
+      scheduled_at: scheduledAt,
+      status: 'pending',
+    });
+
+  if (insErr) {
+    logErr(`Không thể thêm queue cho "${sess.session_key.substring(0, 25)}": ${insErr.message}`);
+    return false;
+  }
+
+  const meta = (sess.metadata as Record<string, unknown>) || {};
+  await supabase
+    .from('channel_sessions')
+    .update({
+      metadata: {
+        ...meta,
+        followup_count: prevCount + 1,
+        last_followup_at: new Date().toISOString(),
+        last_followup_stage: stage,
+      },
+    })
+    .eq('session_key', sess.session_key);
+
+  const stuckH = Math.round((Date.now() - new Date(sess.last_message_at).getTime()) / 3600000);
+  const customerName = await getCustomerName(sess.customer_id);
+  log(`📩 Đặt lịch gửi #${prevCount + 1} → "${customerName}" qua ${channelLabel(sess.channel_name)} | im lặng ${stuckLabel(stuckH)} | loại: ${stage} | agent: ${sess.agent_slug}`);
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Queue process cycle: gửi follow-ups đã đến giờ
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function processQueueCycle(): Promise<string> {
+  const nowIso = new Date().toISOString();
+  log('📤 Kiểm tra queue gửi tin...');
+
+  const { data: pending, error } = await supabase
+    .from('follow_up_queue')
+    .select('id, customer_id, channel_instance_id, agent_slug, message, scheduled_at')
+    .eq('status', 'pending')
+    .lte('scheduled_at', nowIso)
+    .limit(50);
+
+  if (error) {
+    logErr(`Lỗi đọc queue: ${error.message}`);
+    return `Lỗi: ${error.message}`;
+  }
+
+  if (!pending || pending.length === 0) {
+    log('📤 Queue trống — không có tin nào cần gửi.');
+    return 'Queue trống';
+  }
+
+  log(`📤 Đang gửi ${pending.length} tin follow-up...`);
+  let sent = 0;
+  let failed = 0;
+
+  for (const fu of pending) {
+    try {
+      const { data: channelInstance } = await supabase
+        .from('channel_instances')
+        .select('name')
+        .eq('id', fu.channel_instance_id)
+        .single();
+
+      if (!channelInstance) {
+        await markFollowupFailed(fu.id, 'Không tìm thấy channel');
+        failed++;
+        continue;
+      }
+
+      const { data: session } = await supabase
+        .from('channel_sessions')
+        .select('chat_id, metadata')
+        .eq('customer_id', fu.customer_id)
+        .eq('channel_name', channelInstance.name)
+        .order('last_message_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!session) {
+        await markFollowupFailed(fu.id, 'Không tìm thấy session');
+        failed++;
+        continue;
+      }
+
+      const meta = (session.metadata as Record<string, unknown>) || {};
+      if (meta.bot_paused === true) {
+        await markFollowupFailed(fu.id, 'Bot đã tạm dừng (escalated)');
+        failed++;
+        continue;
+      }
+
+      const outbound: OutboundMessage = {
+        channel: channelInstance.name,
+        chatId: session.chat_id,
+        content: fu.message,
+        contentType: 'text',
+        replyToMessageId: undefined,
+        metadata: {
+          agentSlug: fu.agent_slug,
+          isFollowUp: true,
+          followUpId: fu.id,
+        },
+      };
+      bus.publishOutbound(outbound);
+
+      await supabase
+        .from('follow_up_queue')
+        .update({ status: 'sent' })
+        .eq('id', fu.id);
+
+      const customerName = await getCustomerName(fu.customer_id);
+      log(`✅ Đã gửi → "${customerName}" qua ${channelLabel(channelInstance.name)} | chat: ${session.chat_id} | agent: ${fu.agent_slug}`);
+      sent++;
+    } catch (err: any) {
+      logErr(`Gửi thất bại ${fu.id.substring(0, 8)}: ${err.message}`);
+      await markFollowupFailed(fu.id, err.message);
+      failed++;
+    }
+  }
+
+  const summary = `Gửi xong: ${sent} thành công, ${failed} thất bại`;
+  log(`📤 ${summary}`);
+  return summary;
+}
+
+async function markFollowupFailed(id: string, reason: string): Promise<void> {
+  try {
+    await supabase
+      .from('follow_up_queue')
+      .update({ status: 'failed' })
+      .eq('id', id);
+    logWarn(`Đánh dấu thất bại ${id.substring(0, 8)}: ${reason}`);
+  } catch {
+    /* swallow */
+  }
+}
