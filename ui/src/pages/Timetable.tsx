@@ -22,6 +22,7 @@ import { useTimetable } from "../hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "../components/timetable/TimetableTable";
 import { TimetableAuditTab } from "../components/timetable/TimetableAuditTab";
 import { TimetableUpcomingTab } from "../components/timetable/TimetableUpcomingTab";
+import { AddManualRowModal } from "../components/timetable/AddManualRowModal";
 import { EmptyState } from "../components/EmptyState";
 import type { TimetableKpis } from "../types/timetable";
 
@@ -146,6 +147,7 @@ export function Timetable() {
   const [date, setDate] = useState<string>(todayHCM());
   const [tab, setTab] = useState<TabKey>("today");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [addOpen, setAddOpen] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Lịch hôm nay" }]);
@@ -269,7 +271,15 @@ export function Timetable() {
             <ToolbarButton icon={<ArrowUpDown size={12} />} label="Sắp xếp" tip="Sắp xếp — Phase 8" />
             <ToolbarButton icon={<Layers size={12} />} label="Nhóm" tip="Nhóm — Phase 8" />
             <ToolbarButton icon={<Columns3 size={12} />} label="Cột" tip="Ẩn/hiện cột — Phase 8" />
-            <ToolbarButton icon={<Plus size={12} />} label="Thêm dòng" tip="Thêm dòng thủ công — Phase 7" />
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Thêm dòng thủ công cho ngày đang xem"
+            >
+              <Plus size={12} />
+              <span>Thêm dòng</span>
+            </button>
             <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Lọc nâng cao — Phase 8" />
           </div>
           <span className="text-xs text-muted-foreground">
@@ -327,6 +337,13 @@ export function Timetable() {
 
         {tab === "upcoming" && <TimetableUpcomingTab companyId={companyId} />}
       </div>
+
+      <AddManualRowModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        companyId={companyId}
+        defaultDate={date}
+      />
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>

@@ -20,6 +20,7 @@ import {
 import { useCompany } from "@/context/CompanyContext";
 import { useTimetable } from "@/hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "./TimetableTable";
+import { AddManualRowModal } from "./AddManualRowModal";
 
 const DEFAULT_VISIBLE = 6;
 
@@ -46,6 +47,7 @@ export default function TimetableWidget() {
 
   const [visibleCount, setVisibleCount] = useState<number>(DEFAULT_VISIBLE);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [addOpen, setAddOpen] = useState(false);
 
   const visibleRows = useMemo(() => rows.slice(0, visibleCount), [rows, visibleCount]);
 
@@ -89,7 +91,15 @@ export default function TimetableWidget() {
           <ToolbarButton icon={<ArrowUpDown size={12} />} label="Sắp xếp" tip="Sắp xếp dòng theo cột — sắp ra mắt (Phase 8)" />
           <ToolbarButton icon={<Layers size={12} />} label="Nhóm" tip="Nhóm dòng theo cột — sắp ra mắt (Phase 8)" />
           <ToolbarButton icon={<Columns3 size={12} />} label="Cột" tip="Ẩn/hiện cột — sắp ra mắt (Phase 8)" />
-          <ToolbarButton icon={<Plus size={12} />} label="Thêm" tip="Thêm dòng thủ công — sắp ra mắt (Phase 7)" />
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent"
+            title="Thêm dòng thủ công — meeting, reminder, giao việc agent"
+          >
+            <Plus size={12} />
+            <span>Thêm</span>
+          </button>
           <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Bộ lọc nâng cao — sắp ra mắt (Phase 8)" />
           <Link
             to="/timetable"
@@ -144,6 +154,12 @@ export default function TimetableWidget() {
           />
         )}
       </div>
+
+      <AddManualRowModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        companyId={companyId}
+      />
 
       {/* Footer */}
       {totalRows > 0 && (
