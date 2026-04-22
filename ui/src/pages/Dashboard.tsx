@@ -9,6 +9,7 @@ import { projectsApi } from "../api/projects";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import KGMiniWidget from "@/components/knowledge-graph/KGMiniWidget";
+import TimetableWidget from "@/components/timetable/TimetableWidget";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -56,6 +57,7 @@ const DEFAULT_CARD_ORDER = [
   "capabilities",
   "crm-activity",
   "active-agents",
+  "timetable",
   "metrics",
   "charts",
   "kg-widget",
@@ -327,6 +329,9 @@ export function Dashboard() {
 
       case "active-agents":
         return <ActiveAgentsPanel companyId={selectedCompanyId!} />;
+
+      case "timetable":
+        return <TimetableWidget />;
 
       case "metrics":
         return (
