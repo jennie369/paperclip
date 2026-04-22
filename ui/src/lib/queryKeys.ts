@@ -156,4 +156,30 @@ export const queryKeys = {
     dashboard: (pluginId: string) => ["plugins", pluginId, "dashboard"] as const,
     logs: (pluginId: string) => ["plugins", pluginId, "logs"] as const,
   },
+  timetable: {
+    allForCompany: (companyId: string) => ["timetable", companyId] as const,
+    byDate: (
+      companyId: string,
+      date: string,
+      filters?: {
+        q?: string;
+        agentId?: string;
+        types?: string[];
+        status?: string[];
+        sort?: string;
+        group?: string;
+      },
+    ) =>
+      [
+        "timetable",
+        companyId,
+        date,
+        filters?.q ?? "",
+        filters?.agentId ?? "",
+        filters?.types?.join(",") ?? "",
+        filters?.status?.join(",") ?? "",
+        filters?.sort ?? "",
+        filters?.group ?? "",
+      ] as const,
+  },
 };
