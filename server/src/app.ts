@@ -17,6 +17,7 @@ import { projectRoutes } from "./routes/projects.js";
 import { issueRoutes } from "./routes/issues.js";
 import { delegationRoutes } from "./routes/delegations.js";
 import { routineRoutes } from "./routes/routines.js";
+import { timetableRoutes } from "./routes/timetable.js";
 import { executionWorkspaceRoutes } from "./routes/execution-workspaces.js";
 import { goalRoutes } from "./routes/goals.js";
 import { approvalRoutes } from "./routes/approvals.js";
@@ -168,6 +169,7 @@ export async function createApp(
   api.use(issueRoutes(db, opts.storageService));
   api.use(delegationRoutes(db));
   api.use(routineRoutes(db));
+  api.use(timetableRoutes(db));
   api.use(executionWorkspaceRoutes(db));
   api.use(goalRoutes(db));
   api.use(approvalRoutes(db));
