@@ -20,6 +20,8 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useTimetable } from "../hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "../components/timetable/TimetableTable";
+import { TimetableAuditTab } from "../components/timetable/TimetableAuditTab";
+import { TimetableUpcomingTab } from "../components/timetable/TimetableUpcomingTab";
 import { EmptyState } from "../components/EmptyState";
 import type { TimetableKpis } from "../types/timetable";
 
@@ -321,19 +323,9 @@ export function Timetable() {
           </div>
         )}
 
-        {tab === "audit" && (
-          <div className="px-4 py-16 text-center text-sm text-muted-foreground">
-            Audit log cho timetable (entityType=timetable_note) — <strong>Phase 6</strong> sẽ wire vào{" "}
-            <code>activityApi.list(scope=timetable)</code>.
-          </div>
-        )}
+        {tab === "audit" && <TimetableAuditTab companyId={companyId} />}
 
-        {tab === "upcoming" && (
-          <div className="px-4 py-16 text-center text-sm text-muted-foreground">
-            Lịch 3 ngày kế tiếp — <strong>Phase 6</strong> sẽ gộp 3 lần fetch{" "}
-            <code>useTimetable</code> hoặc endpoint mới <code>/timetable/range</code>.
-          </div>
-        )}
+        {tab === "upcoming" && <TimetableUpcomingTab companyId={companyId} />}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">

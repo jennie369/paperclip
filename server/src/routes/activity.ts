@@ -33,12 +33,15 @@ export function activityRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
+    const rawScope = req.query.scope as string | undefined;
+    const scope = rawScope === "timetable" ? "timetable" : undefined;
     const filters = {
       companyId,
       agentId: req.query.agentId as string | undefined,
       entityType: req.query.entityType as string | undefined,
       entityId: req.query.entityId as string | undefined,
-    };
+      scope,
+    } as const;
     const result = await svc.list(filters);
     res.json(result);
   });

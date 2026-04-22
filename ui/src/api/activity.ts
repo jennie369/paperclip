@@ -22,9 +22,18 @@ export interface IssueForRun {
 }
 
 export const activityApi = {
-  list: (companyId: string, filters?: { entityType?: string; entityId?: string; agentId?: string }) => {
+  list: (
+    companyId: string,
+    filters?: {
+      entityType?: string;
+      entityId?: string;
+      agentId?: string;
+      scope?: "timetable";
+    },
+  ) => {
     const params = new URLSearchParams();
-    if (filters?.entityType) params.set("entityType", filters.entityType);
+    if (filters?.scope) params.set("scope", filters.scope);
+    else if (filters?.entityType) params.set("entityType", filters.entityType);
     if (filters?.entityId) params.set("entityId", filters.entityId);
     if (filters?.agentId) params.set("agentId", filters.agentId);
     const qs = params.toString();

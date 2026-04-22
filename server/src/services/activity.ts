@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 
@@ -7,7 +7,17 @@ export interface ActivityFilters {
   agentId?: string;
   entityType?: string;
   entityId?: string;
+  /**
+   * Named scope that expands to a predefined entityType set.
+   * - "timetable" → timetable_note + timetable_manual_row
+   * Scope and entityType are mutually exclusive; scope wins when both are set.
+   */
+  scope?: "timetable";
 }
+
+const SCOPE_ENTITY_TYPES: Record<NonNullable<ActivityFilters["scope"]>, string[]> = {
+  timetable: ["timetable_note", "timetable_manual_row"],
+};
 
 export function activityService(db: Db) {
   const issueIdAsText = sql<string>`${issues.id}::text`;
@@ -18,7 +28,10 @@ export function activityService(db: Db) {
       if (filters.agentId) {
         conditions.push(eq(activityLog.agentId, filters.agentId));
       }
-      if (filters.entityType) {
+      if (filters.scope) {
+        const types = SCOPE_ENTITY_TYPES[filters.scope];
+        conditions.push(inArray(activityLog.entityType, types));
+      } else if (filters.entityType) {
         conditions.push(eq(activityLog.entityType, filters.entityType));
       }
       if (filters.entityId) {
