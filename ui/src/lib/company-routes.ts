@@ -29,6 +29,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "training",
   "analytics",
   "delegations",
+  "timetable",
+  "lich-hom-nay",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance"]);

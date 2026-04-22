@@ -25,6 +25,7 @@ import { OnboardingWizard } from "./components/OnboardingWizard";
 import { authApi } from "./api/auth";
 import { healthApi } from "./api/health";
 import { Dashboard } from "./pages/Dashboard";
+import { Timetable } from "./pages/Timetable";
 import { ContentPipelinePage } from "./pages/ops/ContentPipelinePage";
 import { AffiliatePage } from "./pages/ops/AffiliatePage";
 import { ScannerPage } from "./pages/ops/ScannerPage";
@@ -174,6 +175,8 @@ function boardRoutes() {
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
+      <Route path="timetable" element={<Timetable />} />
+      <Route path="lich-hom-nay" element={<Navigate to="/timetable" replace />} />
       <Route path="ops" element={<Navigate to="/dashboard" replace />} />
       <Route path="ops/content-pipeline" element={<ContentPipelinePage />} />
       <Route path="ops/affiliate" element={<AffiliatePage />} />
