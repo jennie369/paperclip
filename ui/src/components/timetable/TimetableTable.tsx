@@ -11,6 +11,18 @@ import type {
   TimetableStatus,
   TimetableKind,
 } from "@/types/timetable";
+import {
+  COLUMN_KEYS,
+  COLUMN_LABELS,
+  DEFAULT_VISIBLE_COLUMNS,
+  type ColumnKey,
+} from "@/lib/timetableFilters";
+
+type VisibleColumns = ReadonlySet<ColumnKey>;
+
+function defaultVisibleSet(): VisibleColumns {
+  return new Set(DEFAULT_VISIBLE_COLUMNS);
+}
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -276,15 +288,22 @@ export function TimetableTableRow({
   companyId,
   expanded,
   onToggle,
+  visibleColumns,
 }: {
   row: TimetableRow;
   companyId: string;
   expanded: boolean;
   onToggle: () => void;
+  visibleColumns?: VisibleColumns;
 }) {
+  const vis = visibleColumns ?? defaultVisibleSet();
   const time = formatTimeHCM(row.startsAt);
   const result = row.resultOverride ?? row.resultAuto;
   const note = row.note;
+
+  // colSpan for the expanded detail row — count of visible data columns + 1
+  // (actions column which is always present).
+  const visibleColSpan = vis.size + 1;
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -300,42 +319,58 @@ export function TimetableTableRow({
         onClick={onToggle}
         aria-expanded={expanded}
       >
-        <td className="px-3 py-2 font-mono text-muted-foreground w-16">{time}</td>
-        <td className="px-3 py-2 w-44">
-          <AgentCell row={row} />
-        </td>
-        <td className="px-3 py-2 w-24">
-          <KindPill kind={row.kind} />
-        </td>
-        <td className="px-3 py-2 w-52 truncate" title={row.title}>
-          {row.title}
-        </td>
-        <td className="px-3 py-2 text-muted-foreground max-w-0">
-          <span className="block truncate" title={row.description}>
-            {row.description || "—"}
-          </span>
-        </td>
-        <td className="px-3 py-2 w-32">
-          <StatusPill status={row.status} extra={row.statusExtra} />
-        </td>
-        <td className="px-3 py-2 w-44 text-muted-foreground">
-          {result ? (
-            <span className="block truncate" title={result}>
-              {result}
+        {vis.has("time") && (
+          <td className="px-3 py-2 font-mono text-muted-foreground w-16">{time}</td>
+        )}
+        {vis.has("agent") && (
+          <td className="px-3 py-2 w-44">
+            <AgentCell row={row} />
+          </td>
+        )}
+        {vis.has("kind") && (
+          <td className="px-3 py-2 w-24">
+            <KindPill kind={row.kind} />
+          </td>
+        )}
+        {vis.has("title") && (
+          <td className="px-3 py-2 w-52 truncate" title={row.title}>
+            {row.title}
+          </td>
+        )}
+        {vis.has("description") && (
+          <td className="px-3 py-2 text-muted-foreground max-w-0">
+            <span className="block truncate" title={row.description}>
+              {row.description || "—"}
             </span>
-          ) : (
-            <span className="italic">— chưa có —</span>
-          )}
-        </td>
-        <td className="px-3 py-2 w-44 text-muted-foreground">
-          {note ? (
-            <span className="block truncate" title={note}>
-              {note}
-            </span>
-          ) : (
-            <span className="italic">— chưa ghi —</span>
-          )}
-        </td>
+          </td>
+        )}
+        {vis.has("status") && (
+          <td className="px-3 py-2 w-32">
+            <StatusPill status={row.status} extra={row.statusExtra} />
+          </td>
+        )}
+        {vis.has("result") && (
+          <td className="px-3 py-2 w-44 text-muted-foreground">
+            {result ? (
+              <span className="block truncate" title={result}>
+                {result}
+              </span>
+            ) : (
+              <span className="italic">— chưa có —</span>
+            )}
+          </td>
+        )}
+        {vis.has("note") && (
+          <td className="px-3 py-2 w-44 text-muted-foreground">
+            {note ? (
+              <span className="block truncate" title={note}>
+                {note}
+              </span>
+            ) : (
+              <span className="italic">— chưa ghi —</span>
+            )}
+          </td>
+        )}
         <td className="px-3 py-2 w-14 text-right">
           <span className="inline-flex items-center gap-1">
             <button
@@ -357,7 +392,7 @@ export function TimetableTableRow({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={9} className="p-0">
+          <td colSpan={visibleColSpan} className="p-0">
             <RowDetail row={row} companyId={companyId} onClose={onToggle} />
           </td>
         </tr>
@@ -368,31 +403,44 @@ export function TimetableTableRow({
 
 // ─── Table ─────────────────────────────────────────────────────────────────
 
+const COLUMN_CLASS: Record<ColumnKey, string> = {
+  time: "w-16",
+  agent: "w-44",
+  kind: "w-24",
+  title: "w-52",
+  description: "",
+  status: "w-32",
+  result: "w-44",
+  note: "w-44",
+};
+
 export function TimetableTable({
   rows,
   companyId,
   expanded,
   onToggleRow,
+  visibleColumns,
   minWidth = 1100,
 }: {
   rows: TimetableRow[];
   companyId: string;
   expanded: Record<string, boolean>;
   onToggleRow: (id: string) => void;
+  visibleColumns?: VisibleColumns;
   minWidth?: number;
 }) {
+  const vis = visibleColumns ?? defaultVisibleSet();
   return (
     <table className="w-full text-sm" style={{ minWidth: `${minWidth}px` }}>
       <thead className="bg-muted/40 text-[11px] uppercase tracking-wider text-muted-foreground">
         <tr className="text-left">
-          <th className="px-3 py-2 w-16 font-semibold">Giờ</th>
-          <th className="px-3 py-2 w-44 font-semibold">Agent · Model</th>
-          <th className="px-3 py-2 w-24 font-semibold">Loại</th>
-          <th className="px-3 py-2 w-52 font-semibold">Công việc</th>
-          <th className="px-3 py-2 font-semibold">Mô tả</th>
-          <th className="px-3 py-2 w-32 font-semibold">Trạng thái</th>
-          <th className="px-3 py-2 w-44 font-semibold">Kết quả</th>
-          <th className="px-3 py-2 w-44 font-semibold">Ghi chú</th>
+          {COLUMN_KEYS.map((key) =>
+            vis.has(key) ? (
+              <th key={key} className={`px-3 py-2 font-semibold ${COLUMN_CLASS[key]}`}>
+                {COLUMN_LABELS[key]}
+              </th>
+            ) : null,
+          )}
           <th className="px-3 py-2 w-14 font-semibold" aria-label="Hành động" />
         </tr>
       </thead>
@@ -404,6 +452,7 @@ export function TimetableTable({
             companyId={companyId}
             expanded={!!expanded[row.id]}
             onToggle={() => onToggleRow(row.id)}
+            visibleColumns={vis}
           />
         ))}
       </tbody>

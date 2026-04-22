@@ -3,16 +3,13 @@
 // Table + row primitives live in ./TimetableTable so the full page reuses
 // identical rendering + save mutation.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "@/lib/router";
 import {
   ArrowRight,
-  ArrowUpDown,
   CalendarDays,
   ChevronDown,
-  Columns3,
   Filter,
-  Layers,
   Plus,
   RotateCw,
   Search,
@@ -21,6 +18,15 @@ import { useCompany } from "@/context/CompanyContext";
 import { useTimetable } from "@/hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "./TimetableTable";
 import { AddManualRowModal } from "./AddManualRowModal";
+import { SortMenu, GroupMenu, ColumnMenu } from "./TimetableMenus";
+import type { TimetableSort, TimetableGroup } from "@/types/timetable";
+import {
+  sortRows,
+  groupRows,
+  loadVisibleColumns,
+  saveVisibleColumns,
+  type ColumnKey,
+} from "@/lib/timetableFilters";
 
 const DEFAULT_VISIBLE = 6;
 
@@ -48,8 +54,24 @@ export default function TimetableWidget() {
   const [visibleCount, setVisibleCount] = useState<number>(DEFAULT_VISIBLE);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addOpen, setAddOpen] = useState(false);
+  const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
+  const [group, setGroup] = useState<TimetableGroup>("time_of_day");
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
 
-  const visibleRows = useMemo(() => rows.slice(0, visibleCount), [rows, visibleCount]);
+  useEffect(() => {
+    saveVisibleColumns(visibleColumns);
+  }, [visibleColumns]);
+
+  const visibleSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
+
+  const processedSections = useMemo(() => {
+    const sorted = sortRows(rows, sort);
+    // Cap before grouping so "Hiện thêm" still targets the overall count.
+    const capped = sorted.slice(0, visibleCount);
+    return groupRows(capped, group);
+  }, [rows, sort, group, visibleCount]);
+
+  const visibleRowsCount = Math.min(visibleCount, totalRows);
 
   const toggleRow = (id: string) =>
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -88,9 +110,9 @@ export default function TimetableWidget() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1">
-          <ToolbarButton icon={<ArrowUpDown size={12} />} label="Sắp xếp" tip="Sắp xếp dòng theo cột — sắp ra mắt (Phase 8)" />
-          <ToolbarButton icon={<Layers size={12} />} label="Nhóm" tip="Nhóm dòng theo cột — sắp ra mắt (Phase 8)" />
-          <ToolbarButton icon={<Columns3 size={12} />} label="Cột" tip="Ẩn/hiện cột — sắp ra mắt (Phase 8)" />
+          <SortMenu sort={sort} onChange={setSort} />
+          <GroupMenu group={group} onChange={setGroup} />
+          <ColumnMenu visibleColumns={visibleColumns} onChange={setVisibleColumns} />
           <button
             type="button"
             onClick={() => setAddOpen(true)}
@@ -100,7 +122,7 @@ export default function TimetableWidget() {
             <Plus size={12} />
             <span>Thêm</span>
           </button>
-          <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Bộ lọc nâng cao — sắp ra mắt (Phase 8)" />
+          <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Bộ lọc nâng cao — sắp ra mắt (Phase 10)" />
           <Link
             to="/timetable"
             className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-primary hover:underline"
@@ -143,15 +165,28 @@ export default function TimetableWidget() {
           </div>
         ) : totalRows === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            Chưa có lịch nào hôm nay. Bấm <strong>+ Thêm</strong> khi Phase 7 sẵn sàng để tạo dòng thủ công.
+            Chưa có lịch nào hôm nay. Bấm <strong>+ Thêm</strong> để tạo dòng thủ công.
           </div>
         ) : (
-          <TimetableTable
-            rows={visibleRows}
-            companyId={companyId}
-            expanded={expanded}
-            onToggleRow={toggleRow}
-          />
+          <div>
+            {processedSections.map((section) => (
+              <div key={section.key}>
+                {section.label && (
+                  <div className="flex items-center justify-between bg-muted/40 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <span>{section.label}</span>
+                    <span>{section.rows.length} dòng</span>
+                  </div>
+                )}
+                <TimetableTable
+                  rows={section.rows}
+                  companyId={companyId}
+                  expanded={expanded}
+                  onToggleRow={toggleRow}
+                  visibleColumns={visibleSet}
+                />
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
@@ -165,8 +200,8 @@ export default function TimetableWidget() {
       {totalRows > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-muted-foreground">
           <span>
-            Hiển thị <strong>{visibleRows.length}</strong> / {totalRows} dòng
-            {totalRows > visibleRows.length ? ` · còn ${totalRows - visibleRows.length} dòng` : ""}
+            Hiển thị <strong>{visibleRowsCount}</strong> / {totalRows} dòng
+            {totalRows > visibleRowsCount ? ` · còn ${totalRows - visibleRowsCount} dòng` : ""}
           </span>
           <div className="flex items-center gap-1">
             <span className="mr-1">Hiện thêm:</span>

@@ -9,9 +9,6 @@ import {
   ChevronRight,
   RotateCw,
   Search,
-  ArrowUpDown,
-  Layers,
-  Columns3,
   Plus,
   Filter,
   ChevronDown,
@@ -23,8 +20,16 @@ import { HCM_TZ, TimetableTable } from "../components/timetable/TimetableTable";
 import { TimetableAuditTab } from "../components/timetable/TimetableAuditTab";
 import { TimetableUpcomingTab } from "../components/timetable/TimetableUpcomingTab";
 import { AddManualRowModal } from "../components/timetable/AddManualRowModal";
+import { SortMenu, GroupMenu, ColumnMenu } from "../components/timetable/TimetableMenus";
 import { EmptyState } from "../components/EmptyState";
-import type { TimetableKpis } from "../types/timetable";
+import type { TimetableKpis, TimetableSort, TimetableGroup } from "../types/timetable";
+import {
+  sortRows,
+  groupRows,
+  loadVisibleColumns,
+  saveVisibleColumns,
+  type ColumnKey,
+} from "../lib/timetableFilters";
 
 // ─── Date helpers (HCM) ───────────────────────────────────────────────────
 
@@ -148,6 +153,15 @@ export function Timetable() {
   const [tab, setTab] = useState<TabKey>("today");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addOpen, setAddOpen] = useState(false);
+  const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
+  const [group, setGroup] = useState<TimetableGroup>("none");
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
+
+  useEffect(() => {
+    saveVisibleColumns(visibleColumns);
+  }, [visibleColumns]);
+
+  const visibleSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Lịch hôm nay" }]);
@@ -158,6 +172,11 @@ export function Timetable() {
     { date },
   );
   const rows = data?.rows ?? [];
+
+  const processedSections = useMemo(() => {
+    const sorted = sortRows(rows, sort);
+    return groupRows(sorted, group);
+  }, [rows, sort, group]);
 
   // Reset expanded when date switches so rows from prior day don't linger
   useEffect(() => {
@@ -265,12 +284,12 @@ export function Timetable() {
       <div className="rounded-lg border border-border bg-card">
         <TabBar current={tab} onChange={setTab} todayCount={rows.length} />
 
-        {/* Toolbar (stub for P7–P9) */}
+        {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
           <div className="flex flex-wrap items-center gap-1">
-            <ToolbarButton icon={<ArrowUpDown size={12} />} label="Sắp xếp" tip="Sắp xếp — Phase 8" />
-            <ToolbarButton icon={<Layers size={12} />} label="Nhóm" tip="Nhóm — Phase 8" />
-            <ToolbarButton icon={<Columns3 size={12} />} label="Cột" tip="Ẩn/hiện cột — Phase 8" />
+            <SortMenu sort={sort} onChange={setSort} />
+            <GroupMenu group={group} onChange={setGroup} />
+            <ColumnMenu visibleColumns={visibleColumns} onChange={setVisibleColumns} />
             <button
               type="button"
               onClick={() => setAddOpen(true)}
@@ -280,7 +299,7 @@ export function Timetable() {
               <Plus size={12} />
               <span>Thêm dòng</span>
             </button>
-            <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Lọc nâng cao — Phase 8" />
+            <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Lọc nâng cao — Phase 10" />
           </div>
           <span className="text-xs text-muted-foreground">
             Cập nhật: <span className="font-mono">{lastUpdated}</span>
@@ -323,12 +342,25 @@ export function Timetable() {
                 Không có lịch cho {dateLabel}.
               </div>
             ) : (
-              <TimetableTable
-                rows={rows}
-                companyId={companyId}
-                expanded={expanded}
-                onToggleRow={toggleRow}
-              />
+              <div>
+                {processedSections.map((section) => (
+                  <div key={section.key}>
+                    {section.label && (
+                      <div className="flex items-center justify-between bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        <span>{section.label}</span>
+                        <span>{section.rows.length} dòng</span>
+                      </div>
+                    )}
+                    <TimetableTable
+                      rows={section.rows}
+                      companyId={companyId}
+                      expanded={expanded}
+                      onToggleRow={toggleRow}
+                      visibleColumns={visibleSet}
+                    />
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
