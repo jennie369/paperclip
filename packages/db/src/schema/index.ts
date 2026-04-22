@@ -56,3 +56,7 @@ export { pluginEntities } from "./plugin_entities.js";
 export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
+export { timetableManualRows } from "./timetable_manual_rows.js";
+export type { TimetableManualRow, NewTimetableManualRow } from "./timetable_manual_rows.js";
+export { timetableRowNotes, TIMETABLE_SOURCE_TABLES } from "./timetable_row_notes.js";
+export type { TimetableRowNote, NewTimetableRowNote, TimetableSourceTable } from "./timetable_row_notes.js";
