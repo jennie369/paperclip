@@ -301,6 +301,23 @@ export function TimetableTableRow({
   const result = row.resultOverride ?? row.resultAuto;
   const note = row.note;
 
+  // Per-cell expand state: clicking a truncated cell toggles inline wrap.
+  // e.stopPropagation in toggleCell prevents the row's expand from firing.
+  const [expandedCells, setExpandedCells] = useState<Set<ColumnKey>>(new Set());
+  const toggleCell = (col: ColumnKey, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedCells((prev) => {
+      const next = new Set(prev);
+      if (next.has(col)) next.delete(col);
+      else next.add(col);
+      return next;
+    });
+  };
+  const cellClass = (col: ColumnKey, baseMaxWidth: string) =>
+    expandedCells.has(col)
+      ? "whitespace-normal break-words cursor-pointer"
+      : `${baseMaxWidth} truncate cursor-pointer`;
+
   // colSpan for the expanded detail row — count of visible data columns + 1
   // (actions column which is always present).
   const visibleColSpan = vis.size + 1;
@@ -333,13 +350,23 @@ export function TimetableTableRow({
           </td>
         )}
         {vis.has("title") && (
-          <td className="px-3 py-2 w-52 truncate" title={row.title}>
-            {row.title}
+          <td className="px-3 py-2 w-40 align-top">
+            <div
+              className={cellClass("title", "max-w-[160px]")}
+              title={expandedCells.has("title") ? "Click để thu gọn" : row.title}
+              onClick={(e) => toggleCell("title", e)}
+            >
+              {row.title}
+            </div>
           </td>
         )}
         {vis.has("description") && (
-          <td className="px-3 py-2 text-muted-foreground min-w-[220px]">
-            <div className="max-w-[360px] truncate" title={row.description}>
+          <td className="px-3 py-2 text-muted-foreground align-top min-w-[140px] max-w-[200px]">
+            <div
+              className={cellClass("description", "max-w-[200px]")}
+              title={expandedCells.has("description") ? "Click để thu gọn" : row.description}
+              onClick={(e) => toggleCell("description", e)}
+            >
               {row.description || "—"}
             </div>
           </td>
@@ -350,9 +377,13 @@ export function TimetableTableRow({
           </td>
         )}
         {vis.has("result") && (
-          <td className="px-3 py-2 w-40 text-muted-foreground">
+          <td className="px-3 py-2 text-muted-foreground align-top min-w-[120px] max-w-[180px]">
             {result ? (
-              <div className="max-w-[180px] truncate" title={result}>
+              <div
+                className={cellClass("result", "max-w-[180px]")}
+                title={expandedCells.has("result") ? "Click để thu gọn" : result}
+                onClick={(e) => toggleCell("result", e)}
+              >
                 {result}
               </div>
             ) : (
@@ -361,9 +392,13 @@ export function TimetableTableRow({
           </td>
         )}
         {vis.has("note") && (
-          <td className="px-3 py-2 w-40 text-muted-foreground">
+          <td className="px-3 py-2 text-muted-foreground align-top min-w-[120px] max-w-[180px]">
             {note ? (
-              <div className="max-w-[180px] truncate" title={note}>
+              <div
+                className={cellClass("note", "max-w-[180px]")}
+                title={expandedCells.has("note") ? "Click để thu gọn" : note}
+                onClick={(e) => toggleCell("note", e)}
+              >
                 {note}
               </div>
             ) : (
@@ -403,17 +438,19 @@ export function TimetableTableRow({
 
 // ─── Table ─────────────────────────────────────────────────────────────────
 
+// Column widths tuned so all 9 columns fit a 960-1200px table without
+// horizontal scroll on Dashboard widget and /timetable page. Each text
+// cell below wraps content in a truncate div — clicking the cell toggles
+// inline wrap (stopPropagation prevents row expansion).
 const COLUMN_CLASS: Record<ColumnKey, string> = {
-  time: "w-16",
-  agent: "w-44",
+  time: "w-14",
+  agent: "w-40",
   kind: "w-24",
-  title: "w-52",
-  // description uses min-width so it always has room to render; the <td>
-  // below wraps the text in a truncate div so long content clips cleanly.
-  description: "min-w-[220px]",
-  status: "w-32",
-  result: "w-40",
-  note: "w-40",
+  title: "w-40",
+  description: "min-w-[140px] max-w-[200px]",
+  status: "w-28",
+  result: "min-w-[120px] max-w-[180px]",
+  note: "min-w-[120px] max-w-[180px]",
 };
 
 export function TimetableTable({
@@ -422,7 +459,7 @@ export function TimetableTable({
   expanded,
   onToggleRow,
   visibleColumns,
-  minWidth = 1100,
+  minWidth = 960,
 }: {
   rows: TimetableRow[];
   companyId: string;
