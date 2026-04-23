@@ -482,6 +482,10 @@ export function App() {
           <Route path="war-room" element={<UnprefixedBoardRedirect />} />
           <Route path="crm" element={<UnprefixedBoardRedirect />} />
           <Route path="crm/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="timetable" element={<UnprefixedBoardRedirect />} />
+          <Route path="timetable/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="lich-hom-nay" element={<UnprefixedBoardRedirect />} />
+          <Route path="lich-hom-nay/*" element={<UnprefixedBoardRedirect />} />
           <Route path="training" element={<UnprefixedBoardRedirect />} />
           <Route path="training/*" element={<UnprefixedBoardRedirect />} />
           <Route path="analytics" element={<UnprefixedBoardRedirect />} />
