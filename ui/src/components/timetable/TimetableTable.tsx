@@ -338,10 +338,10 @@ export function TimetableTableRow({
           </td>
         )}
         {vis.has("description") && (
-          <td className="px-3 py-2 text-muted-foreground max-w-0">
-            <span className="block truncate" title={row.description}>
+          <td className="px-3 py-2 text-muted-foreground min-w-[220px]">
+            <div className="max-w-[360px] truncate" title={row.description}>
               {row.description || "—"}
-            </span>
+            </div>
           </td>
         )}
         {vis.has("status") && (
@@ -350,22 +350,22 @@ export function TimetableTableRow({
           </td>
         )}
         {vis.has("result") && (
-          <td className="px-3 py-2 w-44 text-muted-foreground">
+          <td className="px-3 py-2 w-40 text-muted-foreground">
             {result ? (
-              <span className="block truncate" title={result}>
+              <div className="max-w-[180px] truncate" title={result}>
                 {result}
-              </span>
+              </div>
             ) : (
               <span className="italic">— chưa có —</span>
             )}
           </td>
         )}
         {vis.has("note") && (
-          <td className="px-3 py-2 w-44 text-muted-foreground">
+          <td className="px-3 py-2 w-40 text-muted-foreground">
             {note ? (
-              <span className="block truncate" title={note}>
+              <div className="max-w-[180px] truncate" title={note}>
                 {note}
-              </span>
+              </div>
             ) : (
               <span className="italic">— chưa ghi —</span>
             )}
@@ -408,10 +408,12 @@ const COLUMN_CLASS: Record<ColumnKey, string> = {
   agent: "w-44",
   kind: "w-24",
   title: "w-52",
-  description: "",
+  // description uses min-width so it always has room to render; the <td>
+  // below wraps the text in a truncate div so long content clips cleanly.
+  description: "min-w-[220px]",
   status: "w-32",
-  result: "w-44",
-  note: "w-44",
+  result: "w-40",
+  note: "w-40",
 };
 
 export function TimetableTable({

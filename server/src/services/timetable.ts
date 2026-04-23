@@ -588,14 +588,25 @@ async function fetchRowNotes(db: Db, companyId: string) {
 
 function mapHeartbeatStatus(s: string): TimetableRow["status"] {
   switch (s) {
-    case "success": return "done";
-    case "running": return "running";
-    case "queued": return "scheduled";
+    // heartbeat writer emits "succeeded" (past tense) — keep "success" and
+    // "completed" variants tolerated in case other writers diverge.
+    case "succeeded":
+    case "success":
+    case "completed":
+    case "finished":
+    case "done": return "done";
+    case "running":
+    case "in_progress":
+    case "active": return "running";
+    case "queued":
+    case "pending":
+    case "scheduled": return "scheduled";
     case "failure":
     case "failed":
     case "error": return "failed";
     case "cancelled":
-    case "paused": return "paused";
+    case "paused":
+    case "skipped": return "paused";
     default: return "scheduled";
   }
 }

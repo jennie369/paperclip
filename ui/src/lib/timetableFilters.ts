@@ -81,6 +81,37 @@ export interface TimetableGroupSection {
   rows: TimetableRow[];
 }
 
+export type TimeBucket = "morning" | "afternoon" | "evening";
+
+/** Hour (HCM) → bucket. morning <12, afternoon 12–17, evening ≥18. */
+export function hourToBucket(hour: number): TimeBucket {
+  if (hour < 12) return "morning";
+  if (hour < 18) return "afternoon";
+  return "evening";
+}
+
+function hourInHCM(iso: string | Date): number {
+  return Number(
+    new Date(iso).toLocaleTimeString("en-GB", {
+      timeZone: "Asia/Ho_Chi_Minh",
+      hour: "2-digit",
+      hour12: false,
+    }),
+  );
+}
+
+export function rowBucket(iso: string): TimeBucket {
+  return hourToBucket(hourInHCM(iso));
+}
+
+export function currentTimeBucket(now: Date = new Date()): TimeBucket {
+  return hourToBucket(hourInHCM(now));
+}
+
+export function filterByBucket(rows: TimetableRow[], bucket: TimeBucket): TimetableRow[] {
+  return rows.filter((r) => rowBucket(r.startsAt) === bucket);
+}
+
 function timeOfDayBucket(iso: string): { key: string; label: string } {
   // Hour in Asia/Ho_Chi_Minh.
   const hour = Number(

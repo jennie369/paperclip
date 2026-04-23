@@ -26,10 +26,23 @@ import {
   pushRecentSearch,
   loadVisibleColumns,
   saveVisibleColumns,
+  currentTimeBucket,
+  filterByBucket,
   type ColumnKey,
+  type TimeBucket,
 } from "@/lib/timetableFilters";
 
 const DEFAULT_VISIBLE = 6;
+
+type BucketFilter = "now" | "morning" | "afternoon" | "evening" | "all";
+
+const BUCKET_TABS: Array<{ key: BucketFilter; label: string; hint: string }> = [
+  { key: "now", label: "Hiện tại", hint: "Buổi chứa giờ hiện tại (Asia/Ho_Chi_Minh)" },
+  { key: "morning", label: "Sáng", hint: "00:00 → 11:59" },
+  { key: "afternoon", label: "Chiều", hint: "12:00 → 17:59" },
+  { key: "evening", label: "Tối", hint: "18:00 → 23:59" },
+  { key: "all", label: "Tất cả", hint: "Cả ngày · có thể group/sort tuỳ chọn" },
+];
 
 function todayLabelHCM(): string {
   const now = new Date();
@@ -56,9 +69,13 @@ export default function TimetableWidget() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
-  const [group, setGroup] = useState<TimetableGroup>("time_of_day");
+  const [group, setGroup] = useState<TimetableGroup>("none");
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
   const [query, setQuery] = useState("");
+  // View tabs: morning · afternoon · evening · now · all.
+  // Default 'now' = bucket containing current HCM hour — so at 18:35 the
+  // widget opens on evening, not on morning rows.
+  const [bucketFilter, setBucketFilter] = useState<BucketFilter>("now");
 
   useEffect(() => {
     saveVisibleColumns(visibleColumns);
@@ -74,15 +91,27 @@ export default function TimetableWidget() {
   const visibleSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
 
   const parsed = useMemo(() => parseQuery(query), [query]);
-  const filteredRows = useMemo(() => applyQuery(rows, parsed), [rows, parsed]);
+  const queryFiltered = useMemo(() => applyQuery(rows, parsed), [rows, parsed]);
+
+  const resolvedBucket: TimeBucket | null =
+    bucketFilter === "all" ? null : bucketFilter === "now" ? currentTimeBucket() : bucketFilter;
+
+  const filteredRows = useMemo(
+    () => (resolvedBucket ? filterByBucket(queryFiltered, resolvedBucket) : queryFiltered),
+    [queryFiltered, resolvedBucket],
+  );
   const filteredCount = filteredRows.length;
+
+  // When a bucket filter is active, skip grouping (rows already scoped to
+  // one bucket). Only honor the Group menu when the user picks "Tất cả".
+  const effectiveGroup: TimetableGroup = bucketFilter === "all" ? group : "none";
 
   const processedSections = useMemo(() => {
     const sorted = sortRows(filteredRows, sort);
     // Cap before grouping so "Hiện thêm" still targets the overall count.
     const capped = sorted.slice(0, visibleCount);
-    return groupRows(capped, group);
-  }, [filteredRows, sort, group, visibleCount]);
+    return groupRows(capped, effectiveGroup);
+  }, [filteredRows, sort, effectiveGroup, visibleCount]);
 
   const visibleRowsCount = Math.min(visibleCount, filteredCount);
 
@@ -150,6 +179,53 @@ export default function TimetableWidget() {
         <SmartSearch value={query} onChange={setQuery} companyId={companyId} />
       </div>
 
+      {/* Time-of-day tabs */}
+      <div
+        className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2"
+        role="tablist"
+        aria-label="Lọc theo buổi"
+      >
+        {BUCKET_TABS.map((tab) => {
+          const active = tab.key === bucketFilter;
+          // For "now", show which bucket it currently resolves to so chị
+          // can see "Hiện tại · Tối" without guessing.
+          const now = tab.key === "now";
+          const resolved = now ? currentTimeBucket() : null;
+          const resolvedLabel = resolved
+            ? resolved === "morning"
+              ? "Sáng"
+              : resolved === "afternoon"
+              ? "Chiều"
+              : "Tối"
+            : null;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => {
+                setBucketFilter(tab.key);
+                setVisibleCount(DEFAULT_VISIBLE); // reset pagination on bucket switch
+              }}
+              title={tab.hint}
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs transition-colors ${
+                active
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "bg-muted/40 text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+            >
+              <span>{tab.label}</span>
+              {resolvedLabel && (
+                <span className={`text-[10px] ${active ? "opacity-80" : "opacity-70"}`}>
+                  · {resolvedLabel}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Body */}
       <div className="overflow-x-auto">
         {isLoading ? (
@@ -171,14 +247,34 @@ export default function TimetableWidget() {
           </div>
         ) : filteredCount === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            Không có dòng nào khớp với tìm kiếm <code className="rounded bg-muted/40 px-1">{query}</code>.{" "}
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              className="underline underline-offset-2"
-            >
-              xoá filter
-            </button>
+            {query ? (
+              <>
+                Không có dòng nào khớp với{" "}
+                <code className="rounded bg-muted/40 px-1">{query}</code>
+                {bucketFilter !== "all" && <> trong buổi đã chọn</>}
+                .{" "}
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="underline underline-offset-2"
+                >
+                  xoá filter
+                </button>
+              </>
+            ) : bucketFilter !== "all" ? (
+              <>
+                Không có dòng nào trong buổi đã chọn.{" "}
+                <button
+                  type="button"
+                  onClick={() => setBucketFilter("all")}
+                  className="underline underline-offset-2"
+                >
+                  xem tất cả
+                </button>
+              </>
+            ) : (
+              <>Không có dòng nào khớp.</>
+            )}
           </div>
         ) : (
           <div>
@@ -214,7 +310,7 @@ export default function TimetableWidget() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-muted-foreground">
           <span>
             Hiển thị <strong>{visibleRowsCount}</strong> / {filteredCount} dòng
-            {query ? ` (lọc từ ${totalRows})` : ""}
+            {(query || bucketFilter !== "all") && ` (lọc từ ${totalRows} cả ngày)`}
             {filteredCount > visibleRowsCount ? ` · còn ${filteredCount - visibleRowsCount} dòng` : ""}
           </span>
           <div className="flex items-center gap-1">
