@@ -48,6 +48,32 @@ describe("activity routes", () => {
     vi.clearAllMocks();
   });
 
+  it("forwards scope=timetable to activityService.list", async () => {
+    mockActivityService.list.mockResolvedValue([]);
+
+    const res = await request(createApp()).get(
+      "/api/companies/company-1/activity?scope=timetable",
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockActivityService.list).toHaveBeenCalledTimes(1);
+    const filters = mockActivityService.list.mock.calls[0]![0];
+    expect(filters.scope).toBe("timetable");
+    expect(filters.companyId).toBe("company-1");
+  });
+
+  it("drops unrecognized scope values rather than forwarding raw input", async () => {
+    mockActivityService.list.mockResolvedValue([]);
+
+    const res = await request(createApp()).get(
+      "/api/companies/company-1/activity?scope=issues",
+    );
+
+    expect(res.status).toBe(200);
+    const filters = mockActivityService.list.mock.calls[0]![0];
+    expect(filters.scope).toBeUndefined();
+  });
+
   it("resolves issue identifiers before loading runs", async () => {
     mockIssueService.getByIdentifier.mockResolvedValue({
       id: "issue-uuid-1",
