@@ -1,4 +1,5 @@
 import { and, eq, gte, lte, sql, or, isNull } from "drizzle-orm";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Db } from "@paperclipai/db";
 import {
   heartbeatRuns,
@@ -11,6 +12,25 @@ import {
   TIMETABLE_SOURCE_TABLES,
   type TimetableSourceTable,
 } from "@paperclipai/db";
+
+// Raw Supabase client for cc_scripts (no Drizzle schema — see
+// paperclip-dashboard/architecture/FEATURE SPECS/TIMETABLE.md Deferred).
+const CC_SUPABASE_URL =
+  process.env.SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  "https://pgfkbcnzqozzkohwbgbk.supabase.co";
+let _ccSupabase: SupabaseClient | null = null;
+function getCcSupabase(): SupabaseClient {
+  if (!_ccSupabase) {
+    const key =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.GEMRAL_SUPABASE_SERVICE_KEY ||
+      "";
+    if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY is not set");
+    _ccSupabase = createClient(CC_SUPABASE_URL, key);
+  }
+  return _ccSupabase;
+}
 
 /**
  * Timetable unified row shape. Merged từ nhiều nguồn (heartbeat_runs, issues, routine_runs,
@@ -105,11 +125,12 @@ export function timetableService(db: Db) {
       const { startUtc, endUtc } = hcmDayRange(date);
 
       // Parallel fetch all sources
-      const [heartbeats, issueRows, routineRunRows, manualRows, notes] = await Promise.all([
+      const [heartbeats, issueRows, routineRunRows, manualRows, ccScriptRows, notes] = await Promise.all([
         fetchHeartbeatRuns(db, companyId, startUtc, endUtc, filters.agentId),
         fetchIssueRows(db, companyId, startUtc, endUtc, filters.agentId),
         fetchRoutineRuns(db, companyId, startUtc, endUtc),
         fetchManualRows(db, companyId, startUtc, endUtc, filters.agentId),
+        filters.agentId ? [] : fetchCcScriptsRows(startUtc, endUtc),
         fetchRowNotes(db, companyId),
       ]);
 
@@ -134,6 +155,7 @@ export function timetableService(db: Db) {
         ...heartbeats.map(attachNote),
         ...issueRows.map(attachNote),
         ...routineRunRows.map(attachNote),
+        ...ccScriptRows.map(attachNote),
         ...manualRows,  // manual rows already have note column inline
       ];
 
@@ -595,6 +617,169 @@ async function fetchRowNotes(db: Db, companyId: string) {
     })
     .from(timetableRowNotes)
     .where(eq(timetableRowNotes.companyId, companyId));
+}
+
+// ─── Content Center scripts (raw Supabase) ───────────────────────────────
+// cc_scripts is the single source of truth for social posts, emails, push
+// notifications, reels (short_clip), and Forum news per
+// memory/sops/SOP-CONTENT-PIPELINE.md + SOP_QUY_TRINH_TAO_CONTENT_NOTION.md.
+// cc_social_posts / cc_email_campaigns exist in the DB but are effectively
+// empty (0 / 3 rows as of 2026-04-23) — skip them.
+
+const CC_CONTENT_TYPES = [
+  "social_post",    // → kind=post
+  "short_clip",     // → kind=reel
+  "email",          // → kind=email
+  "push_notification", // → kind=push
+  "news",           // → kind=post (Forum Gemral per chị Jennie feedback)
+] as const;
+
+function ccContentTypeToKind(ct: string): string {
+  switch (ct) {
+    case "social_post":
+      return "post";
+    case "short_clip":
+      return "reel";
+    case "email":
+      return "email";
+    case "push_notification":
+      return "push";
+    case "news":
+      return "post";
+    default:
+      return ct;
+  }
+}
+
+function mapCcStatus(s: string | null | undefined): TimetableRow["status"] {
+  switch ((s ?? "").toLowerCase()) {
+    case "published":
+    case "sent":
+      return "done";
+    case "publishing":
+    case "queued":
+    case "publish_queued":
+    case "in_progress":
+    case "sending":
+      return "running";
+    case "draft":
+    case "approved":
+    case "pending":
+    case "ready":
+    case "scheduled":
+      return "scheduled";
+    case "failed":
+    case "error":
+    case "rejected":
+      return "failed";
+    case "paused":
+    case "cancelled":
+    case "archived":
+      return "paused";
+    default:
+      return "scheduled";
+  }
+}
+
+interface CcScriptRow {
+  id: string;
+  title: string | null;
+  content_type: string;
+  status: string | null;
+  body: string | null;
+  pillar: string | null;
+  brand_voice: string | null;
+  posted_account: string | null;
+  scheduled_at: string | null;
+  published_at: string | null;
+  publish_queued_at: string | null;
+  post_url: string | null;
+  notion_page_id: string | null;
+  image_urls: string[] | null;
+  hook: string | null;
+  cta: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+async function fetchCcScriptsRows(
+  startUtc: Date,
+  endUtc: Date,
+): Promise<TimetableRow[]> {
+  const startIso = startUtc.toISOString();
+  const endIso = endUtc.toISOString();
+
+  // Overlap test: row is in range if scheduled_at OR published_at falls in
+  // [startUtc, endUtc]. We OR both columns via 2 ranges.
+  const supabase = getCcSupabase();
+  const { data, error } = await supabase
+    .from("cc_scripts")
+    .select(
+      "id,title,content_type,status,body,pillar,brand_voice,posted_account,scheduled_at,published_at,publish_queued_at,post_url,notion_page_id,image_urls,hook,cta,created_at,updated_at",
+    )
+    .in("content_type", CC_CONTENT_TYPES as unknown as string[])
+    .or(
+      `and(scheduled_at.gte.${startIso},scheduled_at.lte.${endIso}),and(published_at.gte.${startIso},published_at.lte.${endIso})`,
+    )
+    .limit(500);
+
+  if (error) {
+    console.error("[timetable] cc_scripts query error:", error.message);
+    return [];
+  }
+
+  const rows = (data ?? []) as unknown as CcScriptRow[];
+  return rows.map((r) => {
+    const kind = ccContentTypeToKind(r.content_type);
+    const status = mapCcStatus(r.status);
+    // Prefer scheduled_at as row anchor; fall back to published_at.
+    const anchor = r.scheduled_at ?? r.published_at ?? r.created_at;
+    const resultAuto =
+      status === "done" && r.post_url
+        ? `✓ Đã đăng · ${r.post_url}`
+        : status === "done"
+        ? "✓ Đã đăng"
+        : status === "running"
+        ? "Đang gửi / đăng…"
+        : status === "failed"
+        ? "❌ Thất bại"
+        : null;
+
+    const descParts: string[] = [];
+    if (r.pillar) descParts.push(`pillar: ${r.pillar}`);
+    if (r.posted_account) descParts.push(r.posted_account);
+    if (r.brand_voice) descParts.push(`voice: ${r.brand_voice}`);
+    const description = descParts.join(" · ") || (r.hook ?? "").slice(0, 120);
+
+    return {
+      id: `cc_scripts:${r.id}`,
+      sourceTable: "cc_scripts" as TimetableSourceTable,
+      sourceId: r.id,
+      startsAt: new Date(anchor).toISOString(),
+      endsAt: r.published_at ? new Date(r.published_at).toISOString() : null,
+      agent: null, // cc_scripts không gắn với paperclip agent
+      kind,
+      title: r.title ?? `${r.content_type} · ${r.id.slice(0, 8)}`,
+      description,
+      status,
+      statusExtra: null,
+      resultAuto,
+      resultOverride: null,
+      note: null,
+      payload: {
+        contentType: r.content_type,
+        pillar: r.pillar,
+        brandVoice: r.brand_voice,
+        postedAccount: r.posted_account,
+        postUrl: r.post_url,
+        notionPageId: r.notion_page_id,
+        imageCount: r.image_urls?.length ?? 0,
+        hook: r.hook,
+        cta: r.cta,
+      },
+      issueId: null,
+    };
+  });
 }
 
 // ============================================================================

@@ -48,6 +48,7 @@ const KIND_META: Record<string, KindMeta> = {
   post: { icon: "📢", label: "Post" },
   reel: { icon: "🎬", label: "Reel" },
   email: { icon: "✉️", label: "Email" },
+  push: { icon: "🔔", label: "Push" },
   reply: { icon: "💬", label: "Reply" },
   manual_task: { icon: "📌", label: "Manual" },
   meeting: { icon: "🗓", label: "Meeting" },

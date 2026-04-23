@@ -38,6 +38,7 @@ export const TIMETABLE_SOURCE_TABLES = [
   "heartbeat_runs",
   "issues",
   "agent_task_sessions",
+  "cc_scripts",
   "cc_social_posts",
   "cc_email_campaigns",
   "routine_runs",

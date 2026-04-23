@@ -206,6 +206,7 @@ const KIND_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "post", label: "📢 Post" },
   { value: "reel", label: "🎬 Reel" },
   { value: "email", label: "✉️ Email" },
+  { value: "push", label: "🔔 Push" },
   { value: "reply", label: "💬 Reply" },
   { value: "manual_task", label: "📌 Manual" },
   { value: "meeting", label: "🗓 Meeting" },
