@@ -5,6 +5,8 @@ import type {
   TimetableRow,
   TimetableSort,
   TimetableGroup,
+  TimetableStatus,
+  TimetableKind,
 } from "@/types/timetable";
 
 export const COLUMN_KEYS = [
@@ -166,4 +168,200 @@ export function saveVisibleColumns(cols: ColumnKey[]): void {
   } catch {
     // quota / disabled — ignore.
   }
+}
+
+// ─── Smart search parser + applier ───────────────────────────────────────
+
+export type SearchTimeBucket = "morning" | "afternoon" | "evening" | "upcoming";
+
+export interface ParsedQuery {
+  text: string[];                     // free-text tokens (AND substring match)
+  agents: string[];                   // @tokens, lowercase
+  tasks: string[];                    // #tokens, lowercase
+  types: Set<string>;                 // type:post, type:email …
+  status: Set<TimetableStatus>;       // status:failed, status:running …
+  time?: SearchTimeBucket;            // time:morning, time:upcoming …
+  hasNote?: boolean;                  // has:note → true; has:no-note → false
+  raw: string;
+}
+
+const VALID_STATUS: ReadonlySet<TimetableStatus> = new Set([
+  "done",
+  "running",
+  "scheduled",
+  "failed",
+  "paused",
+]);
+
+const VALID_TIME: ReadonlySet<SearchTimeBucket> = new Set([
+  "morning",
+  "afternoon",
+  "evening",
+  "upcoming",
+]);
+
+export function parseQuery(raw: string): ParsedQuery {
+  const q: ParsedQuery = {
+    text: [],
+    agents: [],
+    tasks: [],
+    types: new Set(),
+    status: new Set(),
+    raw,
+  };
+  if (!raw) return q;
+
+  for (const token of raw.split(/\s+/).filter(Boolean)) {
+    if (token.startsWith("@") && token.length > 1) {
+      q.agents.push(token.slice(1).toLowerCase());
+      continue;
+    }
+    if (token.startsWith("#") && token.length > 1) {
+      q.tasks.push(token.slice(1).toLowerCase());
+      continue;
+    }
+    const colonIdx = token.indexOf(":");
+    if (colonIdx > 0 && colonIdx < token.length - 1) {
+      const key = token.slice(0, colonIdx).toLowerCase();
+      const value = token.slice(colonIdx + 1).toLowerCase();
+      if (key === "type") {
+        q.types.add(value);
+        continue;
+      }
+      if (key === "status" && VALID_STATUS.has(value as TimetableStatus)) {
+        q.status.add(value as TimetableStatus);
+        continue;
+      }
+      if (key === "time" && VALID_TIME.has(value as SearchTimeBucket)) {
+        q.time = value as SearchTimeBucket;
+        continue;
+      }
+      if (key === "has") {
+        if (value === "note") q.hasNote = true;
+        else if (value === "no-note" || value === "none") q.hasNote = false;
+        continue;
+      }
+      // Unknown filter key → treat whole token as free text.
+    }
+    q.text.push(token.toLowerCase());
+  }
+  return q;
+}
+
+function rowHourHCM(iso: string): number {
+  return Number(
+    new Date(iso).toLocaleTimeString("en-GB", {
+      timeZone: "Asia/Ho_Chi_Minh",
+      hour: "2-digit",
+      hour12: false,
+    }),
+  );
+}
+
+export function applyQuery(rows: TimetableRow[], q: ParsedQuery): TimetableRow[] {
+  if (
+    q.text.length === 0 &&
+    q.agents.length === 0 &&
+    q.tasks.length === 0 &&
+    q.types.size === 0 &&
+    q.status.size === 0 &&
+    !q.time &&
+    q.hasNote === undefined
+  ) {
+    return rows;
+  }
+
+  const now = Date.now();
+
+  return rows.filter((row) => {
+    // Status exact match
+    if (q.status.size > 0 && !q.status.has(row.status)) return false;
+
+    // Type (kind) exact match
+    if (q.types.size > 0) {
+      const kind = String(row.kind as TimetableKind | string).toLowerCase();
+      if (!q.types.has(kind)) return false;
+    }
+
+    // Agent @token: substring match against agent name or id prefix
+    if (q.agents.length > 0) {
+      const name = row.agent?.name?.toLowerCase() ?? "";
+      const id = row.agent?.id?.toLowerCase() ?? "";
+      if (!q.agents.some((a) => name.includes(a) || id.startsWith(a))) return false;
+    }
+
+    // Task #token: match row.issueId fragment or title/description substring
+    if (q.tasks.length > 0) {
+      const issueId = row.issueId?.toLowerCase() ?? "";
+      const title = row.title.toLowerCase();
+      const desc = row.description.toLowerCase();
+      if (!q.tasks.some((t) => issueId.includes(t) || title.includes(t) || desc.includes(t))) {
+        return false;
+      }
+    }
+
+    // Time bucket
+    if (q.time) {
+      if (q.time === "upcoming") {
+        if (new Date(row.startsAt).getTime() <= now) return false;
+      } else {
+        const h = rowHourHCM(row.startsAt);
+        if (q.time === "morning" && !(h < 12)) return false;
+        if (q.time === "afternoon" && !(h >= 12 && h < 18)) return false;
+        if (q.time === "evening" && !(h >= 18)) return false;
+      }
+    }
+
+    // has:note
+    if (q.hasNote === true && !row.note) return false;
+    if (q.hasNote === false && row.note) return false;
+
+    // Free text AND match — title + description + agent name
+    if (q.text.length > 0) {
+      const haystack = [
+        row.title,
+        row.description,
+        row.agent?.name ?? "",
+        String(row.kind),
+        row.resultOverride ?? "",
+        row.resultAuto ?? "",
+        row.note ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!q.text.every((t) => haystack.includes(t))) return false;
+    }
+
+    return true;
+  });
+}
+
+// ─── Recent search history ───────────────────────────────────────────────
+
+const RECENT_KEY = "timetable.search.recent.v1";
+const RECENT_LIMIT = 5;
+
+export function loadRecentSearches(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x): x is string => typeof x === "string").slice(0, RECENT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+export function pushRecentSearch(q: string): string[] {
+  const trimmed = q.trim();
+  if (!trimmed) return loadRecentSearches();
+  const existing = loadRecentSearches().filter((s) => s !== trimmed);
+  const next = [trimmed, ...existing].slice(0, RECENT_LIMIT);
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+  return next;
 }

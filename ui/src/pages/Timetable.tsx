@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   RotateCw,
-  Search,
   Plus,
   Filter,
   ChevronDown,
@@ -21,11 +20,15 @@ import { TimetableAuditTab } from "../components/timetable/TimetableAuditTab";
 import { TimetableUpcomingTab } from "../components/timetable/TimetableUpcomingTab";
 import { AddManualRowModal } from "../components/timetable/AddManualRowModal";
 import { SortMenu, GroupMenu, ColumnMenu } from "../components/timetable/TimetableMenus";
+import { SmartSearch } from "../components/timetable/SmartSearch";
 import { EmptyState } from "../components/EmptyState";
 import type { TimetableKpis, TimetableSort, TimetableGroup } from "../types/timetable";
 import {
   sortRows,
   groupRows,
+  parseQuery,
+  applyQuery,
+  pushRecentSearch,
   loadVisibleColumns,
   saveVisibleColumns,
   type ColumnKey,
@@ -156,10 +159,17 @@ export function Timetable() {
   const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
   const [group, setGroup] = useState<TimetableGroup>("none");
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     saveVisibleColumns(visibleColumns);
   }, [visibleColumns]);
+
+  useEffect(() => {
+    if (!query.trim()) return;
+    const t = window.setTimeout(() => pushRecentSearch(query.trim()), 700);
+    return () => window.clearTimeout(t);
+  }, [query]);
 
   const visibleSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
 
@@ -173,10 +183,13 @@ export function Timetable() {
   );
   const rows = data?.rows ?? [];
 
+  const parsed = useMemo(() => parseQuery(query), [query]);
+  const filteredRows = useMemo(() => applyQuery(rows, parsed), [rows, parsed]);
+
   const processedSections = useMemo(() => {
-    const sorted = sortRows(rows, sort);
+    const sorted = sortRows(filteredRows, sort);
     return groupRows(sorted, group);
-  }, [rows, sort, group]);
+  }, [filteredRows, sort, group]);
 
   // Reset expanded when date switches so rows from prior day don't linger
   useEffect(() => {
@@ -306,19 +319,9 @@ export function Timetable() {
           </span>
         </div>
 
-        {/* Smart search stub */}
+        {/* Smart search */}
         <div className="border-b border-border px-4 py-2">
-          <div className="flex items-center gap-2 rounded border border-border bg-background px-2 py-1.5 text-sm text-muted-foreground">
-            <Search size={14} aria-hidden />
-            <input
-              type="search"
-              className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-              placeholder="Tìm nhanh... @agent · #task · :filter — (Phase 9)"
-              disabled
-              aria-label="Smart search (sắp ra mắt)"
-            />
-            <kbd className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px]">/</kbd>
-          </div>
+          <SmartSearch value={query} onChange={setQuery} companyId={companyId} />
         </div>
 
         {/* Tab body */}
@@ -340,6 +343,17 @@ export function Timetable() {
             ) : rows.length === 0 ? (
               <div className="px-4 py-16 text-center text-sm text-muted-foreground">
                 Không có lịch cho {dateLabel}.
+              </div>
+            ) : filteredRows.length === 0 ? (
+              <div className="px-4 py-16 text-center text-sm text-muted-foreground">
+                Không có dòng nào khớp với <code className="rounded bg-muted/40 px-1">{query}</code>.{" "}
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="underline underline-offset-2"
+                >
+                  xoá filter
+                </button>
               </div>
             ) : (
               <div>

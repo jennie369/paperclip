@@ -12,17 +12,20 @@ import {
   Filter,
   Plus,
   RotateCw,
-  Search,
 } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { useTimetable } from "@/hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "./TimetableTable";
 import { AddManualRowModal } from "./AddManualRowModal";
 import { SortMenu, GroupMenu, ColumnMenu } from "./TimetableMenus";
+import { SmartSearch } from "./SmartSearch";
 import type { TimetableSort, TimetableGroup } from "@/types/timetable";
 import {
   sortRows,
   groupRows,
+  parseQuery,
+  applyQuery,
+  pushRecentSearch,
   loadVisibleColumns,
   saveVisibleColumns,
   type ColumnKey,
@@ -57,21 +60,33 @@ export default function TimetableWidget() {
   const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
   const [group, setGroup] = useState<TimetableGroup>("time_of_day");
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     saveVisibleColumns(visibleColumns);
   }, [visibleColumns]);
 
+  // Persist once user pauses typing for 700ms.
+  useEffect(() => {
+    if (!query.trim()) return;
+    const t = window.setTimeout(() => pushRecentSearch(query.trim()), 700);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
   const visibleSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
 
+  const parsed = useMemo(() => parseQuery(query), [query]);
+  const filteredRows = useMemo(() => applyQuery(rows, parsed), [rows, parsed]);
+  const filteredCount = filteredRows.length;
+
   const processedSections = useMemo(() => {
-    const sorted = sortRows(rows, sort);
+    const sorted = sortRows(filteredRows, sort);
     // Cap before grouping so "Hiện thêm" still targets the overall count.
     const capped = sorted.slice(0, visibleCount);
     return groupRows(capped, group);
-  }, [rows, sort, group, visibleCount]);
+  }, [filteredRows, sort, group, visibleCount]);
 
-  const visibleRowsCount = Math.min(visibleCount, totalRows);
+  const visibleRowsCount = Math.min(visibleCount, filteredCount);
 
   const toggleRow = (id: string) =>
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -133,19 +148,9 @@ export default function TimetableWidget() {
         </div>
       </div>
 
-      {/* Smart search (stub for P9) */}
+      {/* Smart search */}
       <div className="border-b border-border px-4 py-2">
-        <div className="flex items-center gap-2 rounded border border-border bg-background px-2 py-1.5 text-sm text-muted-foreground">
-          <Search size={14} aria-hidden />
-          <input
-            type="search"
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-            placeholder="Tìm nhanh... @agent · #task · :filter — (Phase 9)"
-            disabled
-            aria-label="Smart search (sắp ra mắt)"
-          />
-          <kbd className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px]">/</kbd>
-        </div>
+        <SmartSearch value={query} onChange={setQuery} companyId={companyId} />
       </div>
 
       {/* Body */}
@@ -166,6 +171,17 @@ export default function TimetableWidget() {
         ) : totalRows === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
             Chưa có lịch nào hôm nay. Bấm <strong>+ Thêm</strong> để tạo dòng thủ công.
+          </div>
+        ) : filteredCount === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            Không có dòng nào khớp với tìm kiếm <code className="rounded bg-muted/40 px-1">{query}</code>.{" "}
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="underline underline-offset-2"
+            >
+              xoá filter
+            </button>
           </div>
         ) : (
           <div>
@@ -197,11 +213,12 @@ export default function TimetableWidget() {
       />
 
       {/* Footer */}
-      {totalRows > 0 && (
+      {filteredCount > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-muted-foreground">
           <span>
-            Hiển thị <strong>{visibleRowsCount}</strong> / {totalRows} dòng
-            {totalRows > visibleRowsCount ? ` · còn ${totalRows - visibleRowsCount} dòng` : ""}
+            Hiển thị <strong>{visibleRowsCount}</strong> / {filteredCount} dòng
+            {query ? ` (lọc từ ${totalRows})` : ""}
+            {filteredCount > visibleRowsCount ? ` · còn ${filteredCount - visibleRowsCount} dòng` : ""}
           </span>
           <div className="flex items-center gap-1">
             <span className="mr-1">Hiện thêm:</span>
@@ -210,7 +227,7 @@ export default function TimetableWidget() {
                 key={n}
                 type="button"
                 onClick={() => handleShowMore(n)}
-                disabled={visibleCount >= totalRows}
+                disabled={visibleCount >= filteredCount}
                 className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40"
                 title={`Hiện thêm ${n} dòng`}
               >
@@ -220,7 +237,7 @@ export default function TimetableWidget() {
             <button
               type="button"
               onClick={() => handleShowMore("all")}
-              disabled={visibleCount >= totalRows}
+              disabled={visibleCount >= filteredCount}
               className="rounded px-2 py-1 hover:bg-accent disabled:opacity-40"
               title="Hiện toàn bộ dòng"
             >
