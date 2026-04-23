@@ -15,7 +15,7 @@ import { useCompany } from "@/context/CompanyContext";
 import { useTimetable } from "@/hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "./TimetableTable";
 import { AddManualRowModal } from "./AddManualRowModal";
-import { SortMenu, GroupMenu, ColumnMenu } from "./TimetableMenus";
+import { SortMenu, GroupMenu, ColumnMenu, FilterMenu } from "./TimetableMenus";
 import { SmartSearch } from "./SmartSearch";
 import type { TimetableSort, TimetableGroup } from "@/types/timetable";
 import {
@@ -155,6 +155,7 @@ export default function TimetableWidget() {
           <SortMenu sort={sort} onChange={setSort} />
           <GroupMenu group={group} onChange={setGroup} />
           <ColumnMenu visibleColumns={visibleColumns} onChange={setVisibleColumns} />
+          <FilterMenu query={query} onQueryChange={setQuery} />
           <button
             type="button"
             onClick={() => setAddOpen(true)}

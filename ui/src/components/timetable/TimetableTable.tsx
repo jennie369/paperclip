@@ -3,7 +3,7 @@
 // save mutation in one place so P6–P10 features (sort/group/column
 // reorder, smart search) only need to change one spot.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronRight, Copy } from "lucide-react";
 import { useUpsertTimetableNote } from "@/hooks/useTimetable";
 import type {
@@ -301,8 +301,11 @@ export function TimetableTableRow({
   const result = row.resultOverride ?? row.resultAuto;
   const note = row.note;
 
-  // Per-cell expand state: clicking a truncated cell toggles inline wrap.
-  // e.stopPropagation in toggleCell prevents the row's expand from firing.
+  // Per-cell expand state. Clicking a truncated cell toggles inline wrap;
+  // stopPropagation keeps the row's onToggle (expand detail) from firing.
+  // Clicking ANYWHERE else (another row, toolbar, outside the table)
+  // clears the set — the document-level listener below only fires when
+  // stopPropagation did NOT run (i.e. the click was not on a cell).
   const [expandedCells, setExpandedCells] = useState<Set<ColumnKey>>(new Set());
   const toggleCell = (col: ColumnKey, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -313,6 +316,19 @@ export function TimetableTableRow({
       return next;
     });
   };
+
+  // Auto-close cell expansions on any click that bubbles to document.
+  useEffect(() => {
+    if (expandedCells.size === 0) return;
+    const handler = () => setExpandedCells(new Set());
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [expandedCells.size]);
+
+  // Closing the row detail also collapses any inline cell expansions.
+  useEffect(() => {
+    if (!expanded && expandedCells.size > 0) setExpandedCells(new Set());
+  }, [expanded, expandedCells.size]);
   const cellClass = (col: ColumnKey, baseMaxWidth: string) =>
     expandedCells.has(col)
       ? "whitespace-normal break-words cursor-pointer"
@@ -489,7 +505,7 @@ export function TimetableTable({
         className="hidden w-full text-sm md:table"
         style={{ minWidth: `${minWidth}px` }}
       >
-        <thead className="bg-muted/40 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <thead className="bg-slate-100 dark:bg-slate-800/80 text-[11px] uppercase tracking-wider text-slate-700 dark:text-slate-200 border-b-2 border-border">
           <tr className="text-left">
             {COLUMN_KEYS.map((key) =>
               vis.has(key) ? (

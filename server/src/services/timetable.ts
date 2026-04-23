@@ -322,11 +322,23 @@ async function fetchHeartbeatRuns(
       : status === "running" && r.startedAt
       ? humanizeDuration(Date.now() - new Date(r.startedAt).getTime())
       : null;
-    const resultAuto = r.resultJson
-      ? summarizeResultJson(r.resultJson as Record<string, unknown>)
-      : r.error
-      ? r.error.slice(0, 120)
-      : null;
+    // resultJson may exist but summarizeResultJson can still return null
+    // (no known shape). Fall through to error / status-derived label so
+    // a "done" row never displays "— chưa có —".
+    let resultAuto: string | null = null;
+    if (r.resultJson) {
+      resultAuto = summarizeResultJson(r.resultJson as Record<string, unknown>);
+    }
+    if (!resultAuto && r.error) {
+      resultAuto = r.error.slice(0, 120);
+    }
+    if (!resultAuto) {
+      if (status === "done") {
+        resultAuto = statusExtra ? `✓ Hoàn tất · ${statusExtra}` : "✓ Hoàn tất";
+      } else if (status === "running") {
+        resultAuto = "Đang chạy…";
+      }
+    }
     return {
       id: `heartbeat_runs:${r.id}`,
       sourceTable: "heartbeat_runs",
@@ -342,7 +354,10 @@ async function fetchHeartbeatRuns(
         : null,
       kind: "heartbeat",
       title: `Heartbeat · ${r.invocationSource}`,
-      description: r.triggerDetail ?? "",
+      // triggerDetail sometimes equals literal "system" (auto-trigger
+      // flag, not useful to the reader). Fall through to a source-aware
+      // label so the Mô tả column is actually descriptive.
+      description: humanizeTriggerDetail(r.triggerDetail, r.invocationSource),
       status,
       statusExtra,
       resultAuto,
@@ -585,6 +600,25 @@ async function fetchRowNotes(db: Db, companyId: string) {
 // ============================================================================
 // Status mappers — map source-specific statuses to unified enum
 // ============================================================================
+
+function humanizeTriggerDetail(detail: string | null | undefined, source: string): string {
+  const trimmed = (detail ?? "").trim();
+  if (trimmed && trimmed.toLowerCase() !== "system") return trimmed;
+  switch (source) {
+    case "timer":
+      return "Chạy tự động theo lịch heartbeat";
+    case "assignment":
+      return "Nhận task assignment";
+    case "manual":
+      return "Chạy thủ công";
+    case "webhook":
+      return "Kích hoạt bởi webhook";
+    case "delegation":
+      return "Chạy từ delegation";
+    default:
+      return source ? `Nguồn: ${source}` : "—";
+  }
+}
 
 function mapHeartbeatStatus(s: string): TimetableRow["status"] {
   switch (s) {

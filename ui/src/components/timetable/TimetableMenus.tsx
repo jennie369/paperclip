@@ -3,12 +3,13 @@
 // touch target on mobile (py-2 on sm+).
 
 import { useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Columns3, Eye, EyeOff, Layers } from "lucide-react";
-import type { TimetableSort, TimetableGroup } from "@/types/timetable";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Columns3, Eye, EyeOff, Filter, Layers } from "lucide-react";
+import type { TimetableSort, TimetableGroup, TimetableStatus } from "@/types/timetable";
 import { useOnClickOutside } from "@/hooks/useOnClickOutside";
 import {
   COLUMN_KEYS,
   COLUMN_LABELS,
+  parseQuery,
   type ColumnKey,
 } from "@/lib/timetableFilters";
 
@@ -187,6 +188,134 @@ export function GroupMenu({
             </button>
           ))}
         </>
+      )}
+    </Popover>
+  );
+}
+
+// ─── Filter menu ──────────────────────────────────────────────────────────
+// Writes filters into the SmartSearch query string so both surfaces stay
+// in sync: toggling "Post" here = appending `type:post`. Uncheck removes
+// the token. Status and kind are independent sections; agent filters
+// remain keyboard-only via @name for now.
+
+const KIND_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "heartbeat", label: "💓 Heartbeat" },
+  { value: "task", label: "✅ Task" },
+  { value: "routine", label: "🔁 Routine" },
+  { value: "post", label: "📢 Post" },
+  { value: "reel", label: "🎬 Reel" },
+  { value: "email", label: "✉️ Email" },
+  { value: "reply", label: "💬 Reply" },
+  { value: "manual_task", label: "📌 Manual" },
+  { value: "meeting", label: "🗓 Meeting" },
+  { value: "reminder", label: "⏰ Reminder" },
+  { value: "call", label: "📞 Call" },
+  { value: "test", label: "🧪 Test" },
+];
+
+const STATUS_FILTER_OPTIONS: Array<{ value: TimetableStatus; label: string }> = [
+  { value: "done", label: "✅ Done" },
+  { value: "running", label: "🔵 Running" },
+  { value: "scheduled", label: "🟡 Scheduled" },
+  { value: "failed", label: "❌ Failed" },
+  { value: "paused", label: "⏸ Paused" },
+];
+
+function toggleToken(query: string, token: string): string {
+  const tokens = query.split(/\s+/).filter(Boolean);
+  const idx = tokens.indexOf(token);
+  if (idx >= 0) tokens.splice(idx, 1);
+  else tokens.push(token);
+  return tokens.join(" ");
+}
+
+export function FilterMenu({
+  query,
+  onQueryChange,
+}: {
+  query: string;
+  onQueryChange: (q: string) => void;
+}) {
+  const parsed = parseQuery(query);
+  const typeCount = parsed.types.size;
+  const statusCount = parsed.status.size;
+  const totalCount = typeCount + statusCount;
+
+  const toggleType = (val: string) => {
+    onQueryChange(toggleToken(query, `type:${val}`));
+  };
+  const toggleStatus = (val: TimetableStatus) => {
+    onQueryChange(toggleToken(query, `status:${val}`));
+  };
+  const clearAll = () => {
+    const tokens = query.split(/\s+/).filter(Boolean);
+    const keep = tokens.filter(
+      (t) => !t.startsWith("type:") && !t.startsWith("status:"),
+    );
+    onQueryChange(keep.join(" "));
+  };
+
+  return (
+    <Popover
+      icon={<Filter size={12} />}
+      label="Lọc"
+      badge={totalCount > 0 ? String(totalCount) : undefined}
+      tip="Lọc nhanh theo loại + trạng thái — ghi vào ô tìm kiếm"
+      width="w-64"
+    >
+      {() => (
+        <div className="max-h-96 overflow-y-auto">
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Loại
+          </div>
+          {KIND_FILTER_OPTIONS.map((opt) => {
+            const on = parsed.types.has(opt.value);
+            return (
+              <label
+                key={opt.value}
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent"
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggleType(opt.value)}
+                />
+                <span className={on ? "font-medium" : ""}>{opt.label}</span>
+              </label>
+            );
+          })}
+          <div className="mt-1 border-t border-border px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Trạng thái
+          </div>
+          {STATUS_FILTER_OPTIONS.map((opt) => {
+            const on = parsed.status.has(opt.value);
+            return (
+              <label
+                key={opt.value}
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent"
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggleStatus(opt.value)}
+                />
+                <span className={on ? "font-medium" : ""}>{opt.label}</span>
+              </label>
+            );
+          })}
+          {totalCount > 0 && (
+            <div className="mt-1 border-t border-border p-1">
+              <button
+                type="button"
+                onClick={clearAll}
+                className="w-full rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent"
+              >
+                Xoá tất cả ({totalCount})
+              </button>
+            </div>
+          )}
+        </div>
       )}
     </Popover>
   );

@@ -17,7 +17,7 @@ import { HCM_TZ, TimetableTable } from "../components/timetable/TimetableTable";
 import { TimetableAuditTab } from "../components/timetable/TimetableAuditTab";
 import { TimetableUpcomingTab } from "../components/timetable/TimetableUpcomingTab";
 import { AddManualRowModal } from "../components/timetable/AddManualRowModal";
-import { SortMenu, GroupMenu, ColumnMenu } from "../components/timetable/TimetableMenus";
+import { SortMenu, GroupMenu, ColumnMenu, FilterMenu } from "../components/timetable/TimetableMenus";
 import { SmartSearch } from "../components/timetable/SmartSearch";
 import { EmptyState } from "../components/EmptyState";
 import type { TimetableKpis, TimetableSort, TimetableGroup } from "../types/timetable";
@@ -301,6 +301,7 @@ export function Timetable() {
             <SortMenu sort={sort} onChange={setSort} />
             <GroupMenu group={group} onChange={setGroup} />
             <ColumnMenu visibleColumns={visibleColumns} onChange={setVisibleColumns} />
+            <FilterMenu query={query} onQueryChange={setQuery} />
             <button
               type="button"
               onClick={() => setAddOpen(true)}
