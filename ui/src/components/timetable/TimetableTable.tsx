@@ -431,31 +431,137 @@ export function TimetableTable({
 }) {
   const vis = visibleColumns ?? defaultVisibleSet();
   return (
-    <table className="w-full text-sm" style={{ minWidth: `${minWidth}px` }}>
-      <thead className="bg-muted/40 text-[11px] uppercase tracking-wider text-muted-foreground">
-        <tr className="text-left">
-          {COLUMN_KEYS.map((key) =>
-            vis.has(key) ? (
-              <th key={key} className={`px-3 py-2 font-semibold ${COLUMN_CLASS[key]}`}>
-                {COLUMN_LABELS[key]}
-              </th>
-            ) : null,
-          )}
-          <th className="px-3 py-2 w-14 font-semibold" aria-label="Hành động" />
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      {/* Mobile: card list — 9-col table is unreadable under 640px. */}
+      <div className="md:hidden">
         {rows.map((row) => (
-          <TimetableTableRow
+          <TimetableCardRow
             key={row.id}
             row={row}
             companyId={companyId}
             expanded={!!expanded[row.id]}
             onToggle={() => onToggleRow(row.id)}
-            visibleColumns={vis}
           />
         ))}
-      </tbody>
-    </table>
+      </div>
+
+      {/* Desktop: full table. */}
+      <table
+        className="hidden w-full text-sm md:table"
+        style={{ minWidth: `${minWidth}px` }}
+      >
+        <thead className="bg-muted/40 text-[11px] uppercase tracking-wider text-muted-foreground">
+          <tr className="text-left">
+            {COLUMN_KEYS.map((key) =>
+              vis.has(key) ? (
+                <th key={key} className={`px-3 py-2 font-semibold ${COLUMN_CLASS[key]}`}>
+                  {COLUMN_LABELS[key]}
+                </th>
+              ) : null,
+            )}
+            <th className="px-3 py-2 w-14 font-semibold" aria-label="Hành động" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <TimetableTableRow
+              key={row.id}
+              row={row}
+              companyId={companyId}
+              expanded={!!expanded[row.id]}
+              onToggle={() => onToggleRow(row.id)}
+              visibleColumns={vis}
+            />
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+// ─── Mobile card row ───────────────────────────────────────────────────────
+
+function TimetableCardRow({
+  row,
+  companyId,
+  expanded,
+  onToggle,
+}: {
+  row: TimetableRow;
+  companyId: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const time = formatTimeHCM(row.startsAt);
+  const result = row.resultOverride ?? row.resultAuto;
+  const note = row.note;
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(rowToCopyText(row)).catch(() => {});
+    }
+  };
+
+  return (
+    <div className="border-b border-border last:border-b-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full flex-col gap-1.5 px-4 py-3 text-left hover:bg-accent/40"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">{time}</span>
+            <KindPill kind={row.kind} />
+          </div>
+          <StatusPill status={row.status} extra={row.statusExtra} />
+        </div>
+
+        <div className="flex items-start gap-2 min-w-0">
+          <div className="flex-1 min-w-0">
+            <div className="truncate font-medium text-sm">{row.title}</div>
+            {row.description && (
+              <div className="truncate text-xs text-muted-foreground">{row.description}</div>
+            )}
+            {row.agent && (
+              <div className="mt-1">
+                <AgentCell row={row} />
+              </div>
+            )}
+            {result && (
+              <div className="mt-1 text-xs">
+                <span className="text-muted-foreground">Kết quả: </span>
+                <span className="text-foreground">{result}</span>
+              </div>
+            )}
+            {note && (
+              <div className="text-xs">
+                <span className="text-muted-foreground">Ghi chú: </span>
+                <span className="italic text-foreground/80">{note}</span>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="rounded p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Copy dòng"
+              aria-label="Copy"
+            >
+              <Copy size={14} />
+            </button>
+            <ChevronRight
+              size={16}
+              className={`text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
+              aria-hidden
+            />
+          </div>
+        </div>
+      </button>
+      {expanded && <RowDetail row={row} companyId={companyId} onClose={onToggle} />}
+    </div>
   );
 }

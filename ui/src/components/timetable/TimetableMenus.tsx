@@ -1,14 +1,68 @@
-// Sort / Group / Column menus. Native <details> keeps click-outside
-// behavior trivial (clicking outside doesn't auto-close, but a second
-// click on summary toggles) — Phase 10 will add useOnClickOutside.
+// Sort / Group / Column menus. Each is a state-managed popover closed by
+// outside-click or Escape via useOnClickOutside. Buttons meet the 44px
+// touch target on mobile (py-2 on sm+).
 
+import { useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Columns3, Eye, EyeOff, Layers } from "lucide-react";
 import type { TimetableSort, TimetableGroup } from "@/types/timetable";
+import { useOnClickOutside } from "@/hooks/useOnClickOutside";
 import {
   COLUMN_KEYS,
   COLUMN_LABELS,
   type ColumnKey,
 } from "@/lib/timetableFilters";
+
+// ─── Reusable popover shell ───────────────────────────────────────────────
+
+function Popover({
+  label,
+  badge,
+  icon,
+  tip,
+  width = "w-56",
+  children,
+}: {
+  label: string;
+  badge?: string;
+  icon: React.ReactNode;
+  tip: string;
+  width?: string;
+  children: (close: () => void) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const close = () => setOpen(false);
+  useOnClickOutside(ref, close, open);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 rounded px-2 py-1.5 text-xs hover:bg-accent sm:py-1"
+        title={tip}
+        aria-expanded={open}
+      >
+        {icon}
+        <span>{label}</span>
+        {badge && (
+          <span className="rounded bg-muted/40 px-1 py-0.5 text-[10px] text-muted-foreground">
+            {badge}
+          </span>
+        )}
+        <ChevronDown size={10} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div
+          className={`absolute right-0 top-full z-30 mt-1 ${width} max-w-[90vw] rounded border border-border bg-popover p-1 shadow-lg`}
+        >
+          {children(close)}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Sort menu ────────────────────────────────────────────────────────────
 
@@ -31,59 +85,57 @@ export function SortMenu({
   const dirArrow = sort.dir === "asc" ? "↑" : "↓";
 
   return (
-    <details className="relative">
-      <summary
-        className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent list-none"
-        title="Sắp xếp dòng theo cột · click để đổi field + hướng"
-      >
-        <ArrowUpDown size={12} />
-        <span>Sắp xếp</span>
-        <span className="rounded bg-muted/40 px-1 py-0.5 text-[10px] text-muted-foreground">
-          {activeLabel.replace(/^[^\s]+\s/, "")} {dirArrow}
-        </span>
-        <ChevronDown size={10} />
-      </summary>
-      <div className="absolute right-0 top-full z-30 mt-1 w-56 rounded border border-border bg-popover p-1 shadow-lg">
-        <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-          Sắp xếp theo
-        </div>
-        {SORT_FIELDS.map((f) => (
-          <button
-            key={f.key}
-            type="button"
-            onClick={() => onChange({ field: f.key, dir: sort.dir })}
-            className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs hover:bg-accent ${
-              sort.field === f.key ? "bg-accent/60 font-medium" : ""
-            }`}
-          >
-            <span>{f.label}</span>
-            {sort.field === f.key && <span className="text-[10px] text-muted-foreground">đang chọn</span>}
-          </button>
-        ))}
-        <div className="mt-1 flex gap-1 border-t border-border p-1">
-          <button
-            type="button"
-            onClick={() => onChange({ field: sort.field, dir: "asc" })}
-            className={`flex-1 rounded px-2 py-1 text-xs hover:bg-accent ${
-              sort.dir === "asc" ? "bg-accent/60 font-medium" : ""
-            }`}
-            title="A→Z · 00:00→23:59"
-          >
-            <ArrowUp size={10} className="inline" /> Tăng dần
-          </button>
-          <button
-            type="button"
-            onClick={() => onChange({ field: sort.field, dir: "desc" })}
-            className={`flex-1 rounded px-2 py-1 text-xs hover:bg-accent ${
-              sort.dir === "desc" ? "bg-accent/60 font-medium" : ""
-            }`}
-            title="Z→A · 23:59→00:00"
-          >
-            <ArrowDown size={10} className="inline" /> Giảm dần
-          </button>
-        </div>
-      </div>
-    </details>
+    <Popover
+      icon={<ArrowUpDown size={12} />}
+      label="Sắp xếp"
+      badge={`${activeLabel.replace(/^[^\s]+\s/, "")} ${dirArrow}`}
+      tip="Sắp xếp dòng theo cột · click để đổi field + hướng"
+    >
+      {() => (
+        <>
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Sắp xếp theo
+          </div>
+          {SORT_FIELDS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => onChange({ field: f.key, dir: sort.dir })}
+              className={`flex w-full items-center justify-between rounded px-2 py-2 text-left text-xs hover:bg-accent sm:py-1.5 ${
+                sort.field === f.key ? "bg-accent/60 font-medium" : ""
+              }`}
+            >
+              <span>{f.label}</span>
+              {sort.field === f.key && (
+                <span className="text-[10px] text-muted-foreground">đang chọn</span>
+              )}
+            </button>
+          ))}
+          <div className="mt-1 flex gap-1 border-t border-border p-1">
+            <button
+              type="button"
+              onClick={() => onChange({ field: sort.field, dir: "asc" })}
+              className={`flex-1 rounded px-2 py-1.5 text-xs hover:bg-accent ${
+                sort.dir === "asc" ? "bg-accent/60 font-medium" : ""
+              }`}
+              title="A→Z · 00:00→23:59"
+            >
+              <ArrowUp size={10} className="inline" /> Tăng dần
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ field: sort.field, dir: "desc" })}
+              className={`flex-1 rounded px-2 py-1.5 text-xs hover:bg-accent ${
+                sort.dir === "desc" ? "bg-accent/60 font-medium" : ""
+              }`}
+              title="Z→A · 23:59→00:00"
+            >
+              <ArrowDown size={10} className="inline" /> Giảm dần
+            </button>
+          </div>
+        </>
+      )}
+    </Popover>
   );
 }
 
@@ -107,36 +159,36 @@ export function GroupMenu({
 }) {
   const activeLabel = GROUP_OPTIONS.find((o) => o.key === group)?.label ?? "Không nhóm";
   return (
-    <details className="relative">
-      <summary
-        className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent list-none"
-        title="Nhóm dòng theo cột"
-      >
-        <Layers size={12} />
-        <span>Nhóm</span>
-        <span className="rounded bg-muted/40 px-1 py-0.5 text-[10px] text-muted-foreground">
-          {activeLabel.replace(/^[^\s]+\s/, "")}
-        </span>
-        <ChevronDown size={10} />
-      </summary>
-      <div className="absolute right-0 top-full z-30 mt-1 w-60 rounded border border-border bg-popover p-1 shadow-lg">
-        <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-          Nhóm theo
-        </div>
-        {GROUP_OPTIONS.map((opt) => (
-          <button
-            key={opt.key}
-            type="button"
-            onClick={() => onChange(opt.key)}
-            className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs hover:bg-accent ${
-              group === opt.key ? "bg-accent/60 font-medium" : ""
-            }`}
-          >
-            <span>{opt.label}</span>
-          </button>
-        ))}
-      </div>
-    </details>
+    <Popover
+      icon={<Layers size={12} />}
+      label="Nhóm"
+      badge={activeLabel.replace(/^[^\s]+\s/, "")}
+      tip="Nhóm dòng theo cột"
+      width="w-60"
+    >
+      {(close) => (
+        <>
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Nhóm theo
+          </div>
+          {GROUP_OPTIONS.map((opt) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => {
+                onChange(opt.key);
+                close();
+              }}
+              className={`flex w-full items-center justify-between rounded px-2 py-2 text-left text-xs hover:bg-accent sm:py-1.5 ${
+                group === opt.key ? "bg-accent/60 font-medium" : ""
+              }`}
+            >
+              <span>{opt.label}</span>
+            </button>
+          ))}
+        </>
+      )}
+    </Popover>
   );
 }
 
@@ -164,52 +216,49 @@ export function ColumnMenu({
   const resetDefault = () => onChange([...COLUMN_KEYS]);
 
   return (
-    <details className="relative">
-      <summary
-        className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent list-none"
-        title="Ẩn/hiện cột · lưu trên trình duyệt"
-      >
-        <Columns3 size={12} />
-        <span>Cột</span>
-        <span className="rounded bg-muted/40 px-1 py-0.5 text-[10px] text-muted-foreground">
-          {visibleColumns.length}/{COLUMN_KEYS.length}
-        </span>
-        <ChevronDown size={10} />
-      </summary>
-      <div className="absolute right-0 top-full z-30 mt-1 w-52 rounded border border-border bg-popover p-1 shadow-lg">
-        <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-          Ẩn / hiện cột
-        </div>
-        {COLUMN_KEYS.map((key) => {
-          const on = visibleSet.has(key);
-          return (
+    <Popover
+      icon={<Columns3 size={12} />}
+      label="Cột"
+      badge={`${visibleColumns.length}/${COLUMN_KEYS.length}`}
+      tip="Ẩn/hiện cột · lưu trên trình duyệt"
+      width="w-52"
+    >
+      {() => (
+        <>
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Ẩn / hiện cột
+          </div>
+          {COLUMN_KEYS.map((key) => {
+            const on = visibleSet.has(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => toggle(key)}
+                className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent sm:py-1.5"
+              >
+                {on ? (
+                  <Eye size={12} className="text-primary" />
+                ) : (
+                  <EyeOff size={12} className="text-muted-foreground" />
+                )}
+                <span className={on ? "" : "text-muted-foreground line-through"}>
+                  {COLUMN_LABELS[key]}
+                </span>
+              </button>
+            );
+          })}
+          <div className="mt-1 flex border-t border-border p-1">
             <button
-              key={key}
               type="button"
-              onClick={() => toggle(key)}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+              onClick={resetDefault}
+              className="flex-1 rounded px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent"
             >
-              {on ? (
-                <Eye size={12} className="text-primary" />
-              ) : (
-                <EyeOff size={12} className="text-muted-foreground" />
-              )}
-              <span className={on ? "" : "text-muted-foreground line-through"}>
-                {COLUMN_LABELS[key]}
-              </span>
+              Reset về mặc định
             </button>
-          );
-        })}
-        <div className="mt-1 flex border-t border-border p-1">
-          <button
-            type="button"
-            onClick={resetDefault}
-            className="flex-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
-          >
-            Reset về mặc định
-          </button>
-        </div>
-      </div>
-    </details>
+          </div>
+        </>
+      )}
+    </Popover>
   );
 }

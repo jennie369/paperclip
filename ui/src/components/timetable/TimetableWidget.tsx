@@ -8,8 +8,6 @@ import { Link } from "@/lib/router";
 import {
   ArrowRight,
   CalendarDays,
-  ChevronDown,
-  Filter,
   Plus,
   RotateCw,
 } from "lucide-react";
@@ -131,13 +129,12 @@ export default function TimetableWidget() {
           <button
             type="button"
             onClick={() => setAddOpen(true)}
-            className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent"
+            className="inline-flex items-center gap-1 rounded px-2 py-1.5 text-xs hover:bg-accent sm:py-1"
             title="Thêm dòng thủ công — meeting, reminder, giao việc agent"
           >
             <Plus size={12} />
             <span>Thêm</span>
           </button>
-          <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Bộ lọc nâng cao — sắp ra mắt (Phase 10)" />
           <Link
             to="/timetable"
             className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-primary hover:underline"
@@ -266,28 +263,3 @@ export default function TimetableWidget() {
   );
 }
 
-// ─── Toolbar stub button ──────────────────────────────────────────────────
-// Real menus land in P7–P9. Disabled for now with clear tooltip.
-
-function ToolbarButton({
-  icon,
-  label,
-  tip,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  tip: string;
-}) {
-  return (
-    <button
-      type="button"
-      disabled
-      title={tip}
-      className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent disabled:opacity-70"
-    >
-      {icon}
-      <span>{label}</span>
-      <ChevronDown size={10} aria-hidden />
-    </button>
-  );
-}

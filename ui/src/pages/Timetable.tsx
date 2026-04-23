@@ -9,8 +9,6 @@ import {
   ChevronRight,
   RotateCw,
   Plus,
-  Filter,
-  ChevronDown,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -306,13 +304,12 @@ export function Timetable() {
             <button
               type="button"
               onClick={() => setAddOpen(true)}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent"
+              className="inline-flex items-center gap-1 rounded px-2 py-1.5 text-xs hover:bg-accent sm:py-1"
               title="Thêm dòng thủ công cho ngày đang xem"
             >
               <Plus size={12} />
               <span>Thêm dòng</span>
             </button>
-            <ToolbarButton icon={<Filter size={12} />} label="Lọc" tip="Lọc nâng cao — Phase 10" />
           </div>
           <span className="text-xs text-muted-foreground">
             Cập nhật: <span className="font-mono">{lastUpdated}</span>
@@ -405,28 +402,3 @@ export function Timetable() {
 }
 
 export default Timetable;
-
-// ─── Toolbar stub ─────────────────────────────────────────────────────────
-
-function ToolbarButton({
-  icon,
-  label,
-  tip,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  tip: string;
-}) {
-  return (
-    <button
-      type="button"
-      disabled
-      title={tip}
-      className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent disabled:opacity-70"
-    >
-      {icon}
-      <span>{label}</span>
-      <ChevronDown size={10} aria-hidden />
-    </button>
-  );
-}
