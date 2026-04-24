@@ -535,8 +535,8 @@ const GEMRAL_INDUSTRY_KNOWLEDGE = {
 const AI_MODEL_COMBINED_OPTIONS = [
   { value: 'gemini|gemini-2.5-pro', label: '✨ Gemini 2.5 Pro (miễn phí)' },
   { value: 'gemini|gemini-2.5-flash', label: '✨ Gemini 2.5 Flash (miễn phí)' },
-  { value: 'gemini|gemini-3.1-pro', label: '✨ Gemini 3.1 Pro (Experimental)' },
-  { value: 'gemini|gemini-3-flash', label: '✨ Gemini 3 Flash (Experimental)' },
+  { value: 'gemini|gemini-3.1-pro-preview', label: '✨ Gemini 3.1 Pro (Experimental)' },
+  { value: 'gemini|gemini-3-flash-preview', label: '✨ Gemini 3 Flash (Experimental)' },
   { value: 'openai|cx/gpt-5.4', label: '🤖 GPT-5.4 (9Router)' },
   { value: 'openai|cx/gpt-4.1', label: '🤖 GPT-4.1 (9Router)' },
   { value: 'openai|cx/o4-mini', label: '🤖 o4-mini (9Router)' },
@@ -558,7 +558,7 @@ const AI_PROVIDER_OPTIONS = [
 ];
 const AI_MODEL_OPTIONS = {
   claude: [{ value: 'opus-4-7', label: 'Claude Opus 4.7' }, { value: 'sonnet', label: 'Claude Sonnet 4.6' }, { value: 'opus', label: 'Claude Opus 4.6' }],
-  gemini: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }, { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }, { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' }, { value: 'gemini-3-flash', label: 'Gemini 3 Flash' }],
+  gemini: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }, { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }, { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro' }, { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' }],
   openai: [{ value: 'cx/gpt-5.4', label: 'GPT-5.4' }, { value: 'cx/gpt-4.1', label: 'GPT-4.1' }, { value: 'cx/o4-mini', label: 'o4-mini' }],
 };
 
@@ -3071,7 +3071,8 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             html_body: htmlContent,
             from_name: emailSender.split('<')[0]?.trim() || 'Jennie Uyen Chu',
             from_email: emailSender.match(/<(.+)>/)?.[1] || emailSender,
-            campaign_type: 'one_time',
+            // 2026-04-24 Option C — dùng campaignType state thay vì hardcode
+            campaign_type: campaignType || 'one_time',
             audience_type: 'manual',
             audience_count: recipients.length,
             total_sent: recipients.length,

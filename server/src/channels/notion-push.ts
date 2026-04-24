@@ -211,6 +211,9 @@ const VALID_TEMPLATES = new Set([
   'onboarding_trading_tier3','onboarding_love','onboarding_wealth','onboarding_roots',
   'affiliate_kit','ctv_kit','promo_flash','promo_launch','transactional_receipt','custom',
 ]);
+// 2026-04-24: Campaign Type Notion select — match CCAIGen dropdown values.
+// Extend here + add option in Notion DB "Campaign Type" if UI adds more types.
+const VALID_CAMPAIGN_TYPES = new Set(['one_time', 'recurring']);
 
 function buildProperties(row: CcScriptRow): Record<string, any> {
   const ct = String(row.content_type ?? '');
@@ -267,6 +270,12 @@ function buildProperties(row: CcScriptRow): Record<string, any> {
     if (es.email_day !== undefined && es.email_day !== null && es.email_day !== '') {
       const n = Number(es.email_day);
       if (!Number.isNaN(n)) props['Email Day'] = { number: n };
+    }
+    // 2026-04-24: Campaign Type — UI CCAIGen gửi `campaign_type` (one_time|recurring)
+    // qua input_params. Notion DB đã add "Campaign Type" select (2026-04-24). Guard
+    // bằng whitelist để tránh 400 silent nếu value không khớp option.
+    if (es.campaign_type && VALID_CAMPAIGN_TYPES.has(String(es.campaign_type))) {
+      props['Campaign Type'] = { select: { name: String(es.campaign_type) } };
     }
   }
   // "Created At (CC)" / "Updated At (CC)" removed 2026-04-19 — properties không
@@ -402,6 +411,9 @@ export async function pushScript(scriptId: string): Promise<{ ok: boolean; actio
           audience_type: p.audience_type,
           preview_text: p.preview_text,
           email_day: p.email_day,
+          // 2026-04-24: add campaign_type — UI CCAIGen gửi nhưng trước đây bị drop
+          // ở hydrate stage → Notion property "Campaign Type" luôn empty dù UI có set.
+          campaign_type: p.campaign_type,
         };
       } catch (e) {
         log(`pushScript(${scriptId}) job hydrate failed`, e instanceof Error ? e.message : e);
