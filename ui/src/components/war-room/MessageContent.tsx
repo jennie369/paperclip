@@ -67,7 +67,7 @@ const components: Components = {
 
 export function MessageContent({ children }: { children: string }) {
   return (
-    <div className="text-[13px] leading-relaxed text-foreground/85 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className="text-[14px] leading-relaxed text-foreground/90 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} skipHtml>
         {children}
       </ReactMarkdown>

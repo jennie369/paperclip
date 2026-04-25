@@ -196,54 +196,55 @@ function WarRoomMessageRow({
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-xs font-semibold ${senderColor}`}>{sender_name || "Ẩn danh"}</span>
+          <span className={`text-sm font-semibold ${senderColor}`}>{sender_name || "Ẩn danh"}</span>
           {priority && (
-            <span className={`inline-flex items-center h-[18px] px-1.5 text-[9px] font-bold rounded ${PRIORITY_CLASSES[priority] ?? PRIORITY_CLASSES.P3}`}>
+            <span className={`inline-flex items-center h-[18px] px-1.5 text-[10px] font-bold rounded ${PRIORITY_CLASSES[priority] ?? PRIORITY_CLASSES.P3}`}>
               {priority}
             </span>
           )}
           {typeMeta && (
-            <span className={`inline-flex items-center gap-0.5 h-[18px] px-1.5 text-[9px] font-semibold rounded ${typeMeta.cls}`}>
-              <typeMeta.icon className="h-2.5 w-2.5" />
+            <span className={`inline-flex items-center gap-0.5 h-[18px] px-1.5 text-[10px] font-semibold rounded ${typeMeta.cls}`}>
+              <typeMeta.icon className="h-3 w-3" />
               {typeMeta.label}
             </span>
           )}
-          <span className="text-[10px] text-muted-foreground">{timeAgo(created_at)}</span>
+          <span className="text-[11px] text-muted-foreground">{timeAgo(created_at)}</span>
         </div>
 
         <div className="mt-0.5">
           <MessageContent>{content}</MessageContent>
         </div>
 
-        <div className="flex items-center gap-2 mt-1">
+        {/* Action row — always visible (was hover-only before, caused jitter feel when hovering across messages) */}
+        <div className="flex items-center gap-1.5 mt-1.5">
           {replyCount > 0 && (
             <button
               onClick={() => onToggleThread?.(id)}
-              className="inline-flex items-center gap-1 h-6 px-2 text-[10px] font-medium rounded bg-primary/10 text-primary border-none cursor-pointer hover:bg-primary/20 transition-colors"
+              className="inline-flex items-center gap-1 h-6 px-2 text-[11px] font-medium rounded bg-primary/10 text-primary border-none cursor-pointer hover:bg-primary/20 transition-colors"
             >
-              <MessageSquare className="h-2.5 w-2.5" />
+              <MessageSquare className="h-3 w-3" />
               {replyCount} phản hồi
-              {isExpanded ? <ChevronUp className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />}
+              {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </button>
           )}
-          <div className="hidden group-hover:flex items-center gap-1">
-            <button
-              onClick={() => onReply?.(message)}
-              className="inline-flex items-center h-6 px-1.5 text-[10px] text-muted-foreground bg-transparent border-none cursor-pointer hover:text-foreground hover:bg-accent rounded transition-colors"
-              title="Trả lời"
-            >
-              <Reply className="h-3 w-3" />
-            </button>
-            <button
-              onClick={() => onPin?.(id, !is_pinned)}
-              className={`inline-flex items-center h-6 px-1.5 text-[10px] bg-transparent border-none cursor-pointer rounded transition-colors ${
-                is_pinned ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground hover:text-foreground hover:bg-accent"
-              }`}
-              title={is_pinned ? "Bỏ ghim" : "Ghim"}
-            >
-              <Pin className="h-3 w-3" />
-            </button>
-          </div>
+          <button
+            onClick={() => onReply?.(message)}
+            className="inline-flex items-center gap-1 h-6 px-2 text-[11px] text-muted-foreground bg-transparent border-none cursor-pointer hover:text-foreground hover:bg-accent rounded transition-colors"
+            title="Trả lời"
+          >
+            <Reply className="h-3 w-3" />
+            <span className="hidden sm:inline">Trả lời</span>
+          </button>
+          <button
+            onClick={() => onPin?.(id, !is_pinned)}
+            className={`inline-flex items-center gap-1 h-6 px-2 text-[11px] bg-transparent border-none cursor-pointer rounded transition-colors ${
+              is_pinned ? "text-amber-500 hover:text-amber-400 bg-amber-500/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+            }`}
+            title={is_pinned ? "Bỏ ghim" : "Ghim"}
+          >
+            <Pin className="h-3 w-3" />
+            <span className="hidden sm:inline">{is_pinned ? "Bỏ ghim" : "Ghim"}</span>
+          </button>
         </div>
       </div>
     </div>
