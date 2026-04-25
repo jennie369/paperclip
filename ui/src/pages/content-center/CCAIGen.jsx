@@ -4730,7 +4730,6 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                                         stepId={slot.stepId}
                                         stepLabel={`Email ${idx + 1}/${activeOnbDoc.emailCount}`}
                                         defaultFrom={emailSender}
-                                        track={aiTrack}
                                         htmlBody={slot.htmlBody || ''}
                                         htmlSubject={slot.htmlSubject || ''}
                                         htmlPreview={slot.htmlPreview || ''}
