@@ -333,9 +333,18 @@ async function resolveSpawnTarget(
   if (/\.(cmd|bat)$/i.test(executable)) {
     const shell = env.ComSpec || process.env.ComSpec || "cmd.exe";
     const commandLine = [quoteForCmd(executable), ...args.map(quoteForCmd)].join(" ");
+    // GEMRAL FIX 2026-04-25b: cmd.exe `/s` flag forces "old behavior" of stripping
+    // exactly one outer quote pair from the /c argument. To survive /s and keep the
+    // inner quotes around an executable path with spaces (e.g. C:\Users\Jennie Chu\
+    // ...\gemini.CMD), wrap the entire commandLine in an extra outer pair. cmd.exe
+    // strips the outer pair → inner `"C:\path\gemini.CMD" args` reaches the parser
+    // intact. Combined with windowsVerbatimArguments=true at the spawn site, Node
+    // does not re-escape and clobber the carefully-built quoting. Pattern matches
+    // Node.js own shell:true cmd.exe handling.
+    const wrappedCommandLine = `"${commandLine}"`;
     return {
       command: shell,
-      args: ["/d", "/s", "/c", commandLine],
+      args: ["/d", "/s", "/c", wrappedCommandLine],
     };
   }
 
