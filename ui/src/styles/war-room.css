@@ -50,6 +50,24 @@
   border-top-color: hsl(var(--border));
 }
 
+/* Bottom variant — used when trigger is inside a sticky header / clipped container.
+   Flips position so the tooltip renders below the trigger instead of above. */
+.wr-tooltip-content-bottom {
+  bottom: auto;
+  top: calc(100% + 6px);
+  transform: translateX(-50%) translateY(-4px);
+}
+.wr-tooltip-trigger:hover > .wr-tooltip-content-bottom,
+.wr-tooltip-trigger:focus-visible > .wr-tooltip-content-bottom {
+  transform: translateX(-50%) translateY(0);
+}
+.wr-tooltip-content-bottom::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: hsl(var(--border));
+}
+
 /* New-messages floating pill */
 @keyframes wr-pill-in {
   from { opacity: 0; transform: translateX(-50%) translateY(6px); }

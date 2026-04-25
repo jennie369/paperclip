@@ -66,7 +66,7 @@ export function AgentAvatarStack({ members, maxShown = 4, onOverflowClick }: Age
   return (
     <div className="flex items-center -space-x-1.5">
       {visible.map((m) => (
-        <Tooltip key={m.agent_slug} label={`${m.agent_name} · ${PRESENCE_LABEL[m.presence]}`}>
+        <Tooltip key={m.agent_slug} label={`${m.agent_name} · ${PRESENCE_LABEL[m.presence]}`} position="bottom">
           <span className="relative inline-flex">
             <span
               className={`w-6 h-6 rounded-full bg-gradient-to-br ${gradientForSlug(m.agent_slug)} ring-2 ring-background flex items-center justify-center text-[9px] font-bold text-white`}
@@ -80,7 +80,7 @@ export function AgentAvatarStack({ members, maxShown = 4, onOverflowClick }: Age
         </Tooltip>
       ))}
       {overflow > 0 && (
-        <Tooltip label={`Xem tất cả ${sorted.length} agents`}>
+        <Tooltip label={`Xem tất cả ${sorted.length} agents`} position="bottom">
           <button
             type="button"
             onClick={onOverflowClick}
