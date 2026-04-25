@@ -26,6 +26,10 @@ import {
   Settings,
   ExternalLink,
   ArrowDown,
+  Pencil,
+  MoreVertical,
+  Archive,
+  Trash2,
 } from "lucide-react";
 import {
   warRoomApi,
@@ -403,6 +407,11 @@ export function WarRoom() {
   const [editingName, setEditingName] = useState(false);
   const [editNameDraft, setEditNameDraft] = useState("");
 
+  // Header kebab menu (rename / archive / delete)
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [confirmDeleteRoom, setConfirmDeleteRoom] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+
   // Smart auto-scroll: only follow new messages when user is near the bottom.
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
@@ -539,18 +548,54 @@ export function WarRoom() {
     return () => { cancelled = true; clearInterval(t); };
   }, [activeChannelId]);
 
+  // ─── Header kebab menu — close on outside click ─────────
+  useEffect(() => {
+    if (!showHeaderMenu) return;
+    function handleClick(e: MouseEvent) {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)) {
+        setShowHeaderMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showHeaderMenu]);
+
   // ─── Inline edit display_name ───────────────────────────
   function startEditingName(channel: WarRoomChannel) {
-    setEditNameDraft(channel.display_name ?? channel.name);
+    // Strip leading "#" — DB stores with prefix but the input editor should not
+    const raw = channel.display_name ?? channel.name;
+    setEditNameDraft(raw.startsWith("#") ? raw.slice(1) : raw);
     setEditingName(true);
+    setShowHeaderMenu(false);
+  }
+
+  async function handleArchiveRoom() {
+    if (!activeChannel) return;
+    setShowHeaderMenu(false);
+    await warRoomApi.archiveChannel(activeChannel.id);
+    setChannels((prev) => prev.filter((c) => c.id !== activeChannel.id));
+    const remaining = channels.filter((c) => c.id !== activeChannel.id);
+    if (remaining.length > 0) setActiveChannelId(remaining[0].id);
+  }
+
+  async function handleDeleteRoom() {
+    if (!activeChannel) return;
+    setConfirmDeleteRoom(false);
+    setShowHeaderMenu(false);
+    await warRoomApi.deleteChannel(activeChannel.id);
+    setChannels((prev) => prev.filter((c) => c.id !== activeChannel.id));
+    const remaining = channels.filter((c) => c.id !== activeChannel.id);
+    if (remaining.length > 0) setActiveChannelId(remaining[0].id);
   }
   async function commitNameEdit() {
-    const trimmed = editNameDraft.trim();
+    const trimmed = editNameDraft.trim().replace(/^#+/, ""); // user might re-type the # — strip it
     setEditingName(false);
     if (!trimmed || !activeChannel) return;
-    if (trimmed === (activeChannel.display_name ?? activeChannel.name)) return;
+    // Persist with leading "#" to match the existing convention in the DB
+    const next = `#${trimmed}`;
+    if (next === (activeChannel.display_name ?? activeChannel.name)) return;
     try {
-      const updated = await warRoomApi.updateChannel(activeChannel.id, { display_name: trimmed });
+      const updated = await warRoomApi.updateChannel(activeChannel.id, { display_name: next });
       setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     } catch {
       // ignore — channel state will refresh on next subscription update
@@ -737,8 +782,9 @@ export function WarRoom() {
             </button>
             <ActiveChannelIcon className="h-4 w-4 text-muted-foreground shrink-0" />
 
-            {/* Inline-edit display name (skip default channels — keep `#general` etc. fixed) */}
-            {editingName && activeChannel && !activeChannel.is_default ? (
+            {/* Inline-edit display name — every channel is renameable; only display_name changes,
+                the canonical `name` stays so routing/lookup keep working. */}
+            {editingName && activeChannel ? (
               <input
                 autoFocus
                 value={editNameDraft}
@@ -748,22 +794,108 @@ export function WarRoom() {
                   if (e.key === "Enter") { e.preventDefault(); commitNameEdit(); }
                   if (e.key === "Escape") { setEditingName(false); }
                 }}
-                className="h-7 px-2 text-sm font-semibold rounded bg-muted border border-primary/40 outline-none focus:border-primary"
-                placeholder="Tên phòng…"
+                className="h-7 px-2 text-sm font-semibold rounded bg-muted border border-primary/40 outline-none focus:border-primary min-w-[140px]"
+                placeholder="tên phòng…"
               />
             ) : (
-              <button
-                type="button"
-                onClick={() => activeChannel && !activeChannel.is_default && startEditingName(activeChannel)}
-                disabled={!activeChannel || activeChannel.is_default}
-                className="group inline-flex items-center gap-1 text-sm font-semibold text-foreground bg-transparent border-none p-0 cursor-pointer disabled:cursor-default"
-                title={activeChannel?.is_default ? "Phòng mặc định không đổi tên được" : "Click để đổi tên"}
-              >
-                {formatChannelLabel(activeChannel?.display_name ?? activeChannelName)}
-                {activeChannel && !activeChannel.is_default && (
-                  <span className="opacity-0 group-hover:opacity-100 text-muted-foreground text-[10px] transition-opacity">✎</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => activeChannel && startEditingName(activeChannel)}
+                  disabled={!activeChannel}
+                  className="text-sm font-semibold text-foreground bg-transparent border-none p-0 cursor-pointer hover:text-primary transition-colors disabled:cursor-default"
+                  title="Click để đổi tên"
+                >
+                  {formatChannelLabel(activeChannel?.display_name ?? activeChannelName)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => activeChannel && startEditingName(activeChannel)}
+                  disabled={!activeChannel}
+                  className="h-6 w-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent border-none bg-transparent cursor-pointer transition-colors"
+                  title="Đổi tên phòng"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+
+                {/* Kebab menu — Lưu trữ / Xoá */}
+                {activeChannel && (
+                  <div ref={headerMenuRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowHeaderMenu((v) => !v)}
+                      className={`h-6 w-6 rounded flex items-center justify-center border-none bg-transparent cursor-pointer transition-colors ${
+                        showHeaderMenu ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                      }`}
+                      title="Tuỳ chọn phòng"
+                    >
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </button>
+                    {showHeaderMenu && (
+                      <div className="absolute left-0 top-7 w-48 rounded-md border border-border bg-popover shadow-lg z-30 overflow-hidden">
+                        <button
+                          onClick={() => activeChannel && startEditingName(activeChannel)}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-foreground hover:bg-accent border-none bg-transparent cursor-pointer text-left"
+                        >
+                          <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                          Đổi tên
+                        </button>
+                        <button
+                          onClick={() => { setShowRoomSettings(true); setShowHeaderMenu(false); }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-foreground hover:bg-accent border-none bg-transparent cursor-pointer text-left"
+                        >
+                          <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+                          Cài đặt phòng
+                        </button>
+                        {!activeChannel.is_default && (
+                          <>
+                            <div className="h-px bg-border" />
+                            <button
+                              onClick={handleArchiveRoom}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 border-none bg-transparent cursor-pointer text-left"
+                            >
+                              <Archive className="h-3.5 w-3.5" />
+                              Lưu trữ phòng
+                            </button>
+                            {!confirmDeleteRoom ? (
+                              <button
+                                onClick={() => setConfirmDeleteRoom(true)}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-destructive hover:bg-destructive/10 border-none bg-transparent cursor-pointer text-left"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Xoá phòng
+                              </button>
+                            ) : (
+                              <div className="px-3 py-1.5 bg-destructive/5">
+                                <div className="text-[11px] text-destructive font-medium mb-1">Xoá vĩnh viễn?</div>
+                                <div className="flex gap-1.5">
+                                  <button
+                                    onClick={handleDeleteRoom}
+                                    className="h-6 px-2 text-[11px] font-medium rounded bg-destructive text-white hover:bg-destructive/90 border-none cursor-pointer"
+                                  >
+                                    Xoá
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmDeleteRoom(false)}
+                                    className="h-6 px-2 text-[11px] rounded text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer"
+                                  >
+                                    Huỷ
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        )}
+                        {activeChannel.is_default && (
+                          <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border">
+                            Phòng mặc định không xoá được — chỉ đổi tên + cài đặt thôi.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
-              </button>
+              </div>
             )}
 
             {members.length > 0 && (
