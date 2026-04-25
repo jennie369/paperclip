@@ -538,6 +538,21 @@ export const warRoomApi = {
     return result;
   },
 
+  /** Subscribe to every new message across all war_room_messages — used to power
+   *  the sidebar unread counters in real time. Caller decides whether to count or
+   *  ignore based on active channel + sender. */
+  subscribeToAllNewMessages(onMessage: (msg: WarRoomMessage) => void) {
+    return getSupabase()
+      .channel("warroom:all-new")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "war_room_messages" },
+        (payload: RealtimePostgresChangesPayload<WarRoomMessage>) =>
+          onMessage(normalizeMessage(payload.new as WarRoomMessage)),
+      )
+      .subscribe();
+  },
+
   subscribeToChannels(onUpdate: (channel: WarRoomChannel, eventType: string) => void) {
     return getSupabase()
       .channel("warroom:channels")

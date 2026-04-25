@@ -582,11 +582,30 @@ export function WarRoom() {
     setUnreadCounts((prev) => ({ ...prev, ...counts, [activeChannelId]: 0 }));
   }, [channels, activeChannelId]);
 
+  // Initial baseline count when channel list changes (mount, room created/archived).
   useEffect(() => {
     refreshUnreadCounts();
-    const t = setInterval(refreshUnreadCounts, 30000);
-    return () => clearInterval(t);
   }, [refreshUnreadCounts]);
+
+  // Realtime: increment unread counter the moment a new message lands in any
+  // channel that isn't the one the user is currently looking at. Replaces the
+  // previous 30s polling — latency drops from ~15s average to ~instant and we
+  // stop hitting the DB once per minute per open tab.
+  const activeChannelIdRef = useRef(activeChannelId);
+  useEffect(() => { activeChannelIdRef.current = activeChannelId; }, [activeChannelId]);
+
+  useEffect(() => {
+    const sub = warRoomApi.subscribeToAllNewMessages((msg) => {
+      if (msg.reply_to) return; // thread replies don't bump channel-level unread
+      if (msg.sender_type === "owner") return; // your own messages don't count
+      if (msg.channel_id === activeChannelIdRef.current) return; // you're looking at it
+      setUnreadCounts((prev) => ({
+        ...prev,
+        [msg.channel_id]: (prev[msg.channel_id] ?? 0) + 1,
+      }));
+    });
+    return () => { sub.unsubscribe(); };
+  }, []);
 
   // When user switches into a channel, mark it read immediately and zero its badge.
   useEffect(() => {
