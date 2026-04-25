@@ -504,6 +504,40 @@ export const warRoomApi = {
     }
   },
 
+  /** Count messages in each channel newer than the corresponding last_read timestamp.
+   *  Excludes messages sent by the owner (no point alerting yourself).
+   *  Channels missing a lastRead are treated as fully read (count 0) — caller can pass
+   *  a fresh now() the first time a channel is opened to avoid showing the entire history
+   *  as unread on initial mount. */
+  async getUnreadCountsByChannel(
+    channelLastReads: Array<{ channelId: string; lastRead: string | null }>,
+  ): Promise<Record<string, number>> {
+    const result: Record<string, number> = {};
+    if (!channelLastReads.length) return result;
+    try {
+      // Run per-channel queries in parallel — single GROUP BY would need OR conditions on
+      // (channel_id, created_at) pairs which Supabase JS client cannot express cleanly.
+      await Promise.all(
+        channelLastReads.map(async ({ channelId, lastRead }) => {
+          if (!lastRead) {
+            result[channelId] = 0;
+            return;
+          }
+          const { count } = await getSupabase()
+            .from("war_room_messages")
+            .select("id", { count: "exact", head: true })
+            .eq("channel_id", channelId)
+            .gt("created_at", lastRead)
+            .neq("sender_type", "owner");
+          result[channelId] = count ?? 0;
+        }),
+      );
+    } catch {
+      // best-effort — fall through with whatever we got
+    }
+    return result;
+  },
+
   subscribeToChannels(onUpdate: (channel: WarRoomChannel, eventType: string) => void) {
     return getSupabase()
       .channel("warroom:channels")

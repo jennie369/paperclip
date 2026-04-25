@@ -127,29 +127,39 @@ const MESSAGE_TYPES = [
 function ChannelItem({
   channel,
   isActive,
+  unread = 0,
   onClick,
 }: {
   channel: WarRoomChannel;
   isActive: boolean;
+  unread?: number;
   onClick: () => void;
 }) {
   // Prefer explicit icon, fallback to legacy mapping by name
   const IconComponent = channel.icon ? getIcon(channel.icon) : (CHANNEL_ICONS[channel.name] ?? Hash);
   const channelColor = channel.color ?? "amber";
+  const hasUnread = !isActive && unread > 0;
 
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-2 h-[34px] px-2.5 rounded-lg text-[12px] font-medium cursor-pointer transition-colors border-none text-left mb-0.5 ${
+      className={`w-full flex items-center gap-2 h-[34px] px-2.5 rounded-lg text-[12px] cursor-pointer transition-colors border-none text-left mb-0.5 ${
         isActive
-          ? `bg-${channelColor}-500/10 text-${channelColor}-600 dark:text-${channelColor}-400`
-          : "bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground"
+          ? `bg-${channelColor}-500/10 text-${channelColor}-600 dark:text-${channelColor}-400 font-medium`
+          : hasUnread
+          ? "bg-transparent text-foreground font-semibold hover:bg-accent"
+          : "bg-transparent text-muted-foreground font-medium hover:bg-accent hover:text-foreground"
       }`}
       title={channel.description ?? channel.name}
     >
       <IconComponent className={`h-3.5 w-3.5 shrink-0 ${isActive ? `text-${channelColor}-500` : ""}`} />
       <span className="flex-1 truncate">{channel.display_name ?? `#${channel.name}`}</span>
       {channel.is_private && <Lock size={10} className="text-muted-foreground shrink-0" />}
+      {hasUnread && (
+        <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold leading-none">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
     </button>
   );
 }
@@ -416,6 +426,9 @@ export function WarRoom() {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMsgCount, setNewMsgCount] = useState(0);
 
+  // Sidebar unread counters — keyed by channel id.
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const subscriptionRef = useRef<ReturnType<typeof warRoomApi.subscribeToChannel> | null>(null);
@@ -528,6 +541,59 @@ export function WarRoom() {
     setIsAtBottom(true);
     setNewMsgCount(0);
   }
+
+  // ─── Sidebar unread counter ─────────────────────────────
+  // Tracks per-channel last_read timestamp in localStorage so the user sees a
+  // "N tin mới" badge when other channels have activity. Refreshed every 30s
+  // (the active channel always reads as 0 — user is looking at it).
+  const LAST_READ_KEY = (id: string) => `wr_last_read_${id}`;
+
+  function readLastRead(id: string): string | null {
+    try {
+      return localStorage.getItem(LAST_READ_KEY(id));
+    } catch {
+      return null;
+    }
+  }
+  function writeLastRead(id: string, iso: string) {
+    try {
+      localStorage.setItem(LAST_READ_KEY(id), iso);
+    } catch {
+      // localStorage may be unavailable (private mode, quota) — silent fallback
+    }
+  }
+
+  // First time we see a channel, mark it as "fully read up to now" so initial
+  // mount doesn't surface the entire history as unread.
+  useEffect(() => {
+    if (channels.length === 0) return;
+    const now = new Date().toISOString();
+    channels.forEach((c) => {
+      if (!readLastRead(c.id)) writeLastRead(c.id, now);
+    });
+  }, [channels]);
+
+  const refreshUnreadCounts = useCallback(async () => {
+    if (channels.length === 0) return;
+    const list = channels
+      .filter((c) => c.id !== activeChannelId)
+      .map((c) => ({ channelId: c.id, lastRead: readLastRead(c.id) }));
+    const counts = await warRoomApi.getUnreadCountsByChannel(list);
+    setUnreadCounts((prev) => ({ ...prev, ...counts, [activeChannelId]: 0 }));
+  }, [channels, activeChannelId]);
+
+  useEffect(() => {
+    refreshUnreadCounts();
+    const t = setInterval(refreshUnreadCounts, 30000);
+    return () => clearInterval(t);
+  }, [refreshUnreadCounts]);
+
+  // When user switches into a channel, mark it read immediately and zero its badge.
+  useEffect(() => {
+    if (!activeChannelId) return;
+    writeLastRead(activeChannelId, new Date().toISOString());
+    setUnreadCounts((prev) => ({ ...prev, [activeChannelId]: 0 }));
+  }, [activeChannelId]);
 
   // ─── Channel members presence (avatar stack + settings) ─
   useEffect(() => {
@@ -712,6 +778,7 @@ export function WarRoom() {
               key={channel.id}
               channel={channel}
               isActive={channel.id === activeChannelId}
+              unread={unreadCounts[channel.id] ?? 0}
               onClick={() => { setActiveChannelId(channel.id); setMobileSidebarOpen(false); }}
             />
           ))}
@@ -727,6 +794,7 @@ export function WarRoom() {
                   key={channel.id}
                   channel={channel}
                   isActive={channel.id === activeChannelId}
+                  unread={unreadCounts[channel.id] ?? 0}
                   onClick={() => { setActiveChannelId(channel.id); setMobileSidebarOpen(false); }}
                 />
               ))}
@@ -744,6 +812,7 @@ export function WarRoom() {
                   key={channel.id}
                   channel={channel}
                   isActive={channel.id === activeChannelId}
+                  unread={unreadCounts[channel.id] ?? 0}
                   onClick={() => { setActiveChannelId(channel.id); setMobileSidebarOpen(false); }}
                 />
               ))}
@@ -761,6 +830,7 @@ export function WarRoom() {
                   key={channel.id}
                   channel={channel}
                   isActive={channel.id === activeChannelId}
+                  unread={unreadCounts[channel.id] ?? 0}
                   onClick={() => { setActiveChannelId(channel.id); setMobileSidebarOpen(false); }}
                 />
               ))}
