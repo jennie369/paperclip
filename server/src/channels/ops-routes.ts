@@ -2030,6 +2030,30 @@ router.post('/email/steps/:stepId/link-campaign', async (req, res) => {
   }
 });
 
+// GET /email/campaigns/:id — đọc lại 1 campaign (cho UI preview HTML đã lưu).
+// Dùng để confirm sau khi user save HTML override: response trả nguyên html_body
+// + subject + status + created_at để UI render iframe preview hoặc badge "đã lưu".
+router.get('/email/campaigns/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('cc_email_campaigns')
+      .select('id, subject, html_body, preview_text, status, campaign_type, audience_type, created_at, metadata')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'campaign not found' });
+    res.json({
+      ok: true,
+      campaign: {
+        ...data,
+        html_length: data.html_body?.length ?? 0,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /email/steps/:stepId/save-campaign — one-shot: tạo cc_email_campaigns
 // từ HTML body + subject + sender, set status=approved, link ngay vào step.
 // Dành cho drip override: bypass Notion, chị generate xong UI gọi trực tiếp.

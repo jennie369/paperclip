@@ -1427,6 +1427,15 @@ export default function AiGenPage() {
       .then((data) => setDripSequences(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [dripOverrideEnabled, dripSequences.length]);
+
+  // Force refetch sequences (used after a step's HTML is overridden so the
+  // step dropdown can show "· đã override" for the affected step).
+  const refetchDripSequences = useCallback(() => {
+    fetch('/api/ops/email/sequences')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setDripSequences(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
   // Khi sequence đổi hoặc DOC-ONB-* selection đổi → reset map theo emailCount
   // + prefill stepId theo thứ tự + extraPrompt từ step.generation_hint (baseline DB).
   const activeOnbDoc = useMemo(() => {
@@ -4728,6 +4737,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                                         onChange={(patch) => setOverrideEmailMap((prev) => prev.map((s, i) =>
                                           i === idx ? { ...s, ...patch } : s
                                         ))}
+                                        onSaved={refetchDripSequences}
                                       />
                                     </>
                                   )}
