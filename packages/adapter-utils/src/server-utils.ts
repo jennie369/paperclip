@@ -795,6 +795,18 @@ export async function runChildProcess(
     const mergedEnv = ensurePathInEnv(rawMerged);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv)
       .then((target) => {
+        // GEMRAL FIX 2026-04-25: When spawning .CMD/.BAT through cmd.exe wrapper,
+        // resolveSpawnTarget pre-quotes the command line (executable + args) using
+        // quoteForCmd. Default Node.js Windows spawn then re-escapes that quoted
+        // string, producing `cmd.exe /d /s /c ""C:\path with space\gemini.CMD" ..."`
+        // which cmd.exe interprets as command name `"C:\path...\gemini.CMD"` (with
+        // literal quotes). Result: "is not recognized as an internal or external
+        // command". Setting windowsVerbatimArguments=true tells Node to pass the
+        // already-quoted command line through verbatim. Only applies to cmd.exe
+        // wrapper invocations — direct .exe spawns still get default escaping.
+        const isCmdShellInvocation =
+          process.platform === "win32" &&
+          /(?:^|[\\/])cmd\.exe$/i.test(target.command);
         const child = spawn(target.command, target.args, {
           cwd: opts.cwd,
           env: mergedEnv,
@@ -804,6 +816,7 @@ export async function runChildProcess(
           // all heartbeat/cron spawned processes (Claude CLI, Gemini CLI, etc.)
           // Per Jennie msg #1920 — "terminal đen không tự động pop-up trên màn hình"
           windowsHide: true,
+          windowsVerbatimArguments: isCmdShellInvocation,
         }) as ChildProcessWithEvents;
         const startedAt = new Date().toISOString();
 
