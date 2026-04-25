@@ -302,7 +302,7 @@ function WarRoomInput({
   const activeType = MESSAGE_TYPES.find((t) => t.value === messageType) ?? MESSAGE_TYPES[0];
 
   return (
-    <div className="border-t border-border bg-background">
+    <div className="shrink-0 border-t border-border bg-background">
       {replyingTo && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/5 border-b border-border">
           <div className="w-0.5 h-4 bg-primary rounded-full" />
@@ -616,8 +616,14 @@ export function WarRoom() {
     (c) => !c.is_default && !c.is_archived && c.channel_type !== "project" && c.channel_type !== "goal",
   );
 
+  // Helper: tên hiển thị đã có thể chứa "#" sẵn (DB lưu "#general"). Tránh render double "##".
+  const formatChannelLabel = (label: string) => (label.startsWith("#") ? label : `#${label}`);
+
   return (
-    <div className="flex h-[calc(100vh-48px)] overflow-hidden">
+    // Full-bleed: negate <main>'s p-4 md:p-6 padding so the chat surface fills the
+    // entire viewport row. Without this, scroll happens at <main> level and the
+    // header/input lose their sticky anchoring.
+    <div className="flex -m-4 md:-m-6 h-[calc(100%+2rem)] md:h-[calc(100%+3rem)] w-[calc(100%+2rem)] md:w-[calc(100%+3rem)] overflow-hidden">
       {/* Mobile overlay */}
       {mobileSidebarOpen && (
         <div className="fixed inset-0 bg-black/50 z-30 lg:hidden" onClick={() => setMobileSidebarOpen(false)} />
@@ -720,8 +726,8 @@ export function WarRoom() {
 
       {/* ─── Main content ────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Channel header */}
-        <div className="border-b border-border bg-background shrink-0">
+        {/* Channel header — sticky at the top of the chat surface */}
+        <div className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 shrink-0">
           <div className="flex items-center gap-2.5 px-4 h-[44px]">
             <button
               onClick={() => setMobileSidebarOpen(true)}
@@ -753,7 +759,7 @@ export function WarRoom() {
                 className="group inline-flex items-center gap-1 text-sm font-semibold text-foreground bg-transparent border-none p-0 cursor-pointer disabled:cursor-default"
                 title={activeChannel?.is_default ? "Phòng mặc định không đổi tên được" : "Click để đổi tên"}
               >
-                #{activeChannel?.display_name ?? activeChannelName}
+                {formatChannelLabel(activeChannel?.display_name ?? activeChannelName)}
                 {activeChannel && !activeChannel.is_default && (
                   <span className="opacity-0 group-hover:opacity-100 text-muted-foreground text-[10px] transition-opacity">✎</span>
                 )}
