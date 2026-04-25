@@ -9,6 +9,44 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { pushScript, updatePageStatus, bulkUpdatePageStatus, notionPushEnabled } from './notion-push.js';
+import DOMPurify from 'dompurify';
+import { JSDOM } from 'jsdom';
+
+// HTML sanitizer for user-pasted email bodies. Allows the standard email-safe tag
+// surface (basic block/inline tags + a/img + tables + inline style) and strips
+// scripts/event handlers/javascript: URIs. Lazy-init the JSDOM window once per
+// process — instantiating per-request is wasteful.
+let _purify: ReturnType<typeof DOMPurify> | null = null;
+function getPurify() {
+  if (!_purify) {
+    const window = new JSDOM('').window;
+    _purify = DOMPurify(window as unknown as Window);
+  }
+  return _purify;
+}
+const EMAIL_SAFE_TAGS = [
+  'a', 'b', 'blockquote', 'br', 'code', 'div', 'em', 'figure', 'figcaption',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'li', 'ol', 'p', 'pre',
+  's', 'small', 'span', 'strong', 'sub', 'sup', 'table', 'tbody', 'td', 'tfoot',
+  'th', 'thead', 'tr', 'u', 'ul', 'center', 'font', 'style',
+];
+const EMAIL_SAFE_ATTRS = [
+  'href', 'target', 'rel', 'title', 'src', 'alt', 'width', 'height',
+  'align', 'valign', 'bgcolor', 'border', 'cellpadding', 'cellspacing',
+  'colspan', 'rowspan', 'style', 'class', 'id', 'face', 'color', 'size',
+];
+
+function sanitizeEmailHtml(rawHtml: string): { clean: string; removed: number } {
+  const before = rawHtml.length;
+  const clean = getPurify().sanitize(rawHtml, {
+    ALLOWED_TAGS: EMAIL_SAFE_TAGS,
+    ALLOWED_ATTR: EMAIL_SAFE_ATTRS,
+    ALLOW_DATA_ATTR: false,
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
+    FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur'],
+  });
+  return { clean, removed: Math.max(0, before - clean.length) };
+}
 
 // Dedicated Realtime client — service_role key + realtime config
 const REALTIME_URL = 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
@@ -2005,6 +2043,13 @@ router.post('/email/steps/:stepId/save-campaign', async (req, res) => {
     if (!html_body || !subject) {
       return res.status(400).json({ error: 'html_body + subject required' });
     }
+    // Sanitize before any further processing — strip <script>, on* handlers,
+    // javascript: URIs, iframes/embeds. Keep table+inline-style surface so
+    // email layouts work. Returns char-count diff for the audit log.
+    const { clean: safeHtml, removed: bytesStripped } = sanitizeEmailHtml(html_body);
+    if (!safeHtml.trim()) {
+      return res.status(400).json({ error: 'html_body became empty after sanitization (everything was stripped)' });
+    }
     // Get step → extract sequence segment để audience_type khớp
     const { data: step, error: stepErr } = await supabase
       .from('email_sequence_steps')
@@ -2013,12 +2058,24 @@ router.post('/email/steps/:stepId/save-campaign', async (req, res) => {
       .single();
     if (stepErr || !step) return res.status(404).json({ error: 'step not found' });
 
-    const audienceType = (step as any).sequence?.segment ?? 'all';
+    // cc_email_campaigns.audience_type CHECK constraint allows only:
+    //   'all','tier_free','tier_1','tier_2','tier_3','segment','manual'
+    // Map raw sequence.segment (e.g. 'ctv_partners','paid_buyers') → 'segment'
+    // bucket; pass canonical tier names through unchanged.
+    const VALID_AUDIENCE = new Set(['all', 'tier_free', 'tier_1', 'tier_2', 'tier_3', 'segment', 'manual']);
+    const rawSegment = (step as any).sequence?.segment ?? 'all';
+    const audienceType = VALID_AUDIENCE.has(rawSegment) ? rawSegment : 'segment';
 
-    // Insert campaign (status=approved ngay để trigger enqueue nếu có users)
+    // Insert campaign (status=approved ngay để trigger enqueue nếu có users).
+    // cc_email_campaigns.created_by has a NOT NULL constraint — fall back to the
+    // hardcoded owner UUID (chị Jennie) when no auth session is attached, since
+    // this route is callable from the trusted local UI without a session token.
+    const ownerUuid = process.env.PAPERCLIP_OWNER_UUID
+      || '01fe99b8-ef1b-4cdd-892a-3e976d6b1881';
     const { data: campaign, error: campErr } = await supabase
       .from('cc_email_campaigns')
       .insert({
+        name: `Drip override · ${step.template} · ${new Date().toISOString().slice(0, 10)}`,
         template_key: template_key || step.template,
         sop_id: `drip_override:${step.id}`,
         from_name: from_name || 'GEM',
@@ -2026,12 +2083,25 @@ router.post('/email/steps/:stepId/save-campaign', async (req, res) => {
         reply_to: reply_to || from_email || 'hello@gemral.com',
         subject,
         preview_text: preview_text || null,
-        html_body,
-        campaign_type: 'recurring',
+        html_body: safeHtml,
+        // CHECK constraints on cc_email_campaigns:
+        //   campaign_type ∈ {one_time, sequence, ab_test, triggered, newsletter}
+        //   status        ∈ {draft, scheduled, sending, sent, paused, failed}
+        //   track         ∈ {wealth, wellness, integration}
+        // Drip steps map naturally to 'sequence'. Status starts 'scheduled'
+        // (= ready, will pick up when drip cron triggers; consumers gate on the
+        //  step.campaign_id_override link, not the campaign's own status).
+        campaign_type: 'sequence',
         track: track || 'wealth',
         audience_type: audienceType,
-        status: 'approved',
-        metadata: { source: 'drip_override_ui', step_id: step.id },
+        status: 'scheduled',
+        created_by: ownerUuid,
+        metadata: {
+          source: 'drip_override_ui',
+          step_id: step.id,
+          sanitized_bytes_stripped: bytesStripped,
+          raw_segment: rawSegment,
+        },
       })
       .select('id')
       .single();
@@ -2044,7 +2114,13 @@ router.post('/email/steps/:stepId/save-campaign', async (req, res) => {
       .eq('id', req.params.stepId);
     if (linkErr) return res.status(500).json({ error: `link step: ${linkErr.message}` });
 
-    res.json({ ok: true, campaign_id: campaign.id, step_id: req.params.stepId, audience_type: audienceType });
+    res.json({
+      ok: true,
+      campaign_id: campaign.id,
+      step_id: req.params.stepId,
+      audience_type: audienceType,
+      sanitized_bytes_stripped: bytesStripped,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

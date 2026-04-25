@@ -67,6 +67,7 @@ import { useJobSubscription } from '@gem/hooks/useJobSubscription';
 import CCSelect from './CCSelect';
 import ContentPlannerSidebar from './ContentPlannerSidebar';
 import JobLogViewerPanel from './JobLogViewerPanel';
+import DripStepHtmlEditor from './components/DripStepHtmlEditor';
 
 // ============================================================================
 // Constants — Loại nội dung
@@ -4716,6 +4717,18 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                                         />
                                         <span className="text-[10px] text-txt-3">Save prompt này vào step để lần sau auto-prefill</span>
                                       </label>
+                                      <DripStepHtmlEditor
+                                        stepId={slot.stepId}
+                                        stepLabel={`Email ${idx + 1}/${activeOnbDoc.emailCount}`}
+                                        defaultFrom={emailSender}
+                                        track={aiTrack}
+                                        htmlBody={slot.htmlBody || ''}
+                                        htmlSubject={slot.htmlSubject || ''}
+                                        htmlPreview={slot.htmlPreview || ''}
+                                        onChange={(patch) => setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                          i === idx ? { ...s, ...patch } : s
+                                        ))}
+                                      />
                                     </>
                                   )}
                                 </div>
@@ -5124,6 +5137,18 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                                       />
                                       <span className="text-[10px] text-txt-3">Save prompt này vào step để lần sau auto-prefill</span>
                                     </label>
+                                    <DripStepHtmlEditor
+                                      stepId={slot.stepId}
+                                      stepLabel={`Email ${idx + 1}/${activeOnbDoc.emailCount}`}
+                                      defaultFrom={emailSender}
+                                      track={aiTrack}
+                                      htmlBody={slot.htmlBody || ''}
+                                      htmlSubject={slot.htmlSubject || ''}
+                                      htmlPreview={slot.htmlPreview || ''}
+                                      onChange={(patch) => setOverrideEmailMap((prev) => prev.map((s, i) =>
+                                        i === idx ? { ...s, ...patch } : s
+                                      ))}
+                                    />
                                   </>
                                 )}
                               </div>
