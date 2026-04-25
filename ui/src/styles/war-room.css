@@ -1,0 +1,58 @@
+/* War Room — animations + presence indicator + markdown helpers */
+
+/* Soft fade-in for new messages — opacity only, no transform → no "jump" feel */
+@keyframes wr-fade-in-soft {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.wr-msg-enter { animation: wr-fade-in-soft 180ms ease-out; }
+
+/* Pulse halo for online indicator */
+@keyframes wr-pulse-online {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
+  50%      { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+.wr-online-dot { animation: wr-pulse-online 2.2s ease-out infinite; }
+
+/* Tooltip (lightweight custom — no Radix) */
+.wr-tooltip-trigger { position: relative; }
+.wr-tooltip-trigger:hover > .wr-tooltip-content,
+.wr-tooltip-trigger:focus-visible > .wr-tooltip-content {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+.wr-tooltip-content {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  z-index: 60;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.wr-tooltip-content::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: hsl(var(--border));
+}
+
+/* New-messages floating pill */
+@keyframes wr-pill-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.wr-newmsg-pill { animation: wr-pill-in 160ms ease-out; }

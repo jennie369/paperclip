@@ -24,14 +24,20 @@ import {
   Target,
   Lock,
   Settings,
-  Archive,
   ExternalLink,
-  Loader2,
-  Trash2,
+  ArrowDown,
 } from "lucide-react";
-import { warRoomApi, type WarRoomChannel, type WarRoomMessage } from "../api/warRoom";
+import {
+  warRoomApi,
+  type WarRoomChannel,
+  type WarRoomMessage,
+  type ChannelMemberPresence,
+} from "../api/warRoom";
 import { CreateRoomModal } from "../components/war-room/CreateRoomModal";
 import { RoomSettingsPanel } from "../components/war-room/RoomSettingsPanel";
+import { MessageContent } from "../components/war-room/MessageContent";
+import { AgentAvatarStack } from "../components/war-room/AgentAvatarStack";
+import "../styles/war-room.css";
 
 // ─── Icon resolver ──────────────────────────────────────────
 
@@ -172,9 +178,9 @@ function WarRoomMessageRow({
 
   return (
     <div
-      className={`group relative flex gap-2.5 px-3 rounded-lg transition-colors hover:bg-accent/50 ${
+      className={`group wr-msg-enter relative flex gap-2.5 px-3 rounded-lg transition-colors hover:bg-accent/50 ${
         is_pinned ? "border-l-2 border-amber-500/40 pl-2.5" : ""
-      } ${isCompact ? "py-1.5" : "py-2"}`}
+      } ${isCompact ? "py-1.5" : "py-2"} ${priority === "P0" ? "border-l-4 border-destructive pl-2.5" : ""}`}
     >
       <div
         className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
@@ -205,8 +211,8 @@ function WarRoomMessageRow({
           <span className="text-[10px] text-muted-foreground">{timeAgo(created_at)}</span>
         </div>
 
-        <div className="text-[13px] leading-relaxed mt-0.5 whitespace-pre-wrap break-words text-foreground/80">
-          {content}
+        <div className="mt-0.5">
+          <MessageContent>{content}</MessageContent>
         </div>
 
         <div className="flex items-center gap-2 mt-1">
@@ -389,7 +395,19 @@ export function WarRoom() {
   // Room settings
   const [showRoomSettings, setShowRoomSettings] = useState(false);
 
+  // Channel members with live presence (header avatars + settings panel)
+  const [members, setMembers] = useState<ChannelMemberPresence[]>([]);
+
+  // Inline edit room name
+  const [editingName, setEditingName] = useState(false);
+  const [editNameDraft, setEditNameDraft] = useState("");
+
+  // Smart auto-scroll: only follow new messages when user is near the bottom.
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [newMsgCount, setNewMsgCount] = useState(0);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const subscriptionRef = useRef<ReturnType<typeof warRoomApi.subscribeToChannel> | null>(null);
   const channelSubRef = useRef<ReturnType<typeof warRoomApi.subscribeToChannels> | null>(null);
 
@@ -471,15 +489,72 @@ export function WarRoom() {
         }
       } else {
         setMessages((prev) => (prev.find((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        // Bump unread counter only if user has scrolled away from the bottom
+        if (!isAtBottom) setNewMsgCount((c) => c + 1);
       }
     });
     return () => { subscriptionRef.current?.unsubscribe(); };
-  }, [activeChannelId, expandedThreadId]);
+  }, [activeChannelId, expandedThreadId, isAtBottom]);
 
-  // ─── Auto-scroll ────────────────────────────────────────
+  // ─── Smart auto-scroll ──────────────────────────────────
+  // Only follow new messages when user is near the bottom; otherwise let them
+  // keep reading and surface a "↓ N tin mới" pill instead of yanking them down.
   useEffect(() => {
-    if (!loading) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+    if (loading || !isAtBottom) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    setNewMsgCount(0);
+  }, [messages, loading, isAtBottom]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = dist < 80;
+    if (atBottom !== isAtBottom) setIsAtBottom(atBottom);
+    if (atBottom) setNewMsgCount(0);
+  }
+
+  function jumpToBottom() {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    setIsAtBottom(true);
+    setNewMsgCount(0);
+  }
+
+  // ─── Channel members presence (avatar stack + settings) ─
+  useEffect(() => {
+    if (!activeChannelId) {
+      setMembers([]);
+      return;
+    }
+    let cancelled = false;
+    warRoomApi.getChannelMembersWithPresence(activeChannelId).then((m) => {
+      if (!cancelled) setMembers(m);
+    });
+    // Refresh presence every 60s while on this channel
+    const t = setInterval(() => {
+      warRoomApi.getChannelMembersWithPresence(activeChannelId).then((m) => {
+        if (!cancelled) setMembers(m);
+      });
+    }, 60000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [activeChannelId]);
+
+  // ─── Inline edit display_name ───────────────────────────
+  function startEditingName(channel: WarRoomChannel) {
+    setEditNameDraft(channel.display_name ?? channel.name);
+    setEditingName(true);
+  }
+  async function commitNameEdit() {
+    const trimmed = editNameDraft.trim();
+    setEditingName(false);
+    if (!trimmed || !activeChannel) return;
+    if (trimmed === (activeChannel.display_name ?? activeChannel.name)) return;
+    try {
+      const updated = await warRoomApi.updateChannel(activeChannel.id, { display_name: trimmed });
+      setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    } catch {
+      // ignore — channel state will refresh on next subscription update
+    }
+  }
 
   // ─── Handlers ───────────────────────────────────────────
 
@@ -653,9 +728,47 @@ export function WarRoom() {
             >
               <Menu className="h-4.5 w-4.5" />
             </button>
-            <ActiveChannelIcon className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-semibold text-foreground">#{activeChannelName}</span>
-            <span className="text-[11px] text-muted-foreground hidden sm:inline flex-1 truncate">
+            <ActiveChannelIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+
+            {/* Inline-edit display name (skip default channels — keep `#general` etc. fixed) */}
+            {editingName && activeChannel && !activeChannel.is_default ? (
+              <input
+                autoFocus
+                value={editNameDraft}
+                onChange={(e) => setEditNameDraft(e.target.value)}
+                onBlur={commitNameEdit}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitNameEdit(); }
+                  if (e.key === "Escape") { setEditingName(false); }
+                }}
+                className="h-7 px-2 text-sm font-semibold rounded bg-muted border border-primary/40 outline-none focus:border-primary"
+                placeholder="Tên phòng…"
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => activeChannel && !activeChannel.is_default && startEditingName(activeChannel)}
+                disabled={!activeChannel || activeChannel.is_default}
+                className="group inline-flex items-center gap-1 text-sm font-semibold text-foreground bg-transparent border-none p-0 cursor-pointer disabled:cursor-default"
+                title={activeChannel?.is_default ? "Phòng mặc định không đổi tên được" : "Click để đổi tên"}
+              >
+                #{activeChannel?.display_name ?? activeChannelName}
+                {activeChannel && !activeChannel.is_default && (
+                  <span className="opacity-0 group-hover:opacity-100 text-muted-foreground text-[10px] transition-opacity">✎</span>
+                )}
+              </button>
+            )}
+
+            {members.length > 0 && (
+              <div className="hidden sm:flex">
+                <AgentAvatarStack
+                  members={members}
+                  onOverflowClick={() => setShowRoomSettings(true)}
+                />
+              </div>
+            )}
+
+            <span className="text-[11px] text-muted-foreground hidden lg:inline flex-1 truncate">
               {activeChannel?.description ?? ""}
             </span>
             <div className="ml-auto flex items-center gap-1.5">
@@ -685,8 +798,8 @@ export function WarRoom() {
                   <span className="hidden sm:inline">{pinnedMessages.length}</span>
                 </button>
               )}
-              {/* Settings (non-default channels only) */}
-              {activeChannel && !activeChannel.is_default && (
+              {/* Settings — every channel can configure members + wake mode + notifications */}
+              {activeChannel && (
                 <button
                   onClick={() => setShowRoomSettings(!showRoomSettings)}
                   className={`h-7 px-1.5 rounded-md text-[11px] flex items-center border-none cursor-pointer transition-colors ${
@@ -700,10 +813,15 @@ export function WarRoom() {
             </div>
           </div>
 
-          {/* Room settings panel (inline) */}
-          {showRoomSettings && activeChannel && !activeChannel.is_default && (
+          {/* Room settings panel (inline) — available for all channels including defaults so user can manage members + wake mode */}
+          {showRoomSettings && activeChannel && (
             <RoomSettingsPanel
               channel={activeChannel}
+              members={members}
+              agents={agents}
+              onMembersChanged={() => {
+                warRoomApi.getChannelMembersWithPresence(activeChannel.id).then(setMembers);
+              }}
               onArchived={() => {
                 setChannels((prev) => prev.filter((c) => c.id !== activeChannelId));
                 const remaining = channels.filter((c) => c.id !== activeChannelId);
@@ -741,7 +859,22 @@ export function WarRoom() {
           )}
 
           {/* Message list */}
-          <div className="flex-1 overflow-y-auto px-1 py-2">
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleScroll}
+            className="relative flex-1 overflow-y-auto px-1 py-2"
+          >
+            {/* New-messages floating pill — only when user has scrolled away */}
+            {newMsgCount > 0 && !isAtBottom && (
+              <button
+                type="button"
+                onClick={jumpToBottom}
+                className="wr-newmsg-pill fixed sm:absolute bottom-[78px] left-1/2 -translate-x-1/2 z-10 inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-primary text-primary-foreground text-[11px] font-semibold shadow-md hover:bg-primary/90 border-none cursor-pointer"
+              >
+                <ArrowDown className="h-3 w-3" />
+                {newMsgCount} tin mới
+              </button>
+            )}
             {loading ? (
               <div className="space-y-3 p-3">
                 {[1, 2, 3, 4, 5].map((i) => (

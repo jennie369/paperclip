@@ -81,6 +81,43 @@ export interface WarRoomMessage {
   created_at: string;
 }
 
+export interface ChannelMemberPresence {
+  agent_slug: string;
+  agent_name: string;
+  agent_id: string | null;
+  role: string;
+  last_heartbeat_at: string | null;
+  status: string | null;
+  /** "online" | "idle" | "offline" — derived from last_heartbeat_at */
+  presence: "online" | "idle" | "offline";
+}
+
+/** Wake routing for a war-room channel.
+ *  - "ceo_only" (default): only CEO agent is woken; CEO delegates as needed.
+ *  - "members": every agent in war_room_members is woken.
+ *  - "manual": no auto-wake; user must summon explicitly. */
+export type WakeMode = "ceo_only" | "members" | "manual";
+
+/** Normalize DB int priority (0/1/2/3) → UI string ("P0"/"P1"/"P2"/"P3"). */
+function normalizePriority(p: number | string | null | undefined): string | null {
+  if (p === null || p === undefined) return null;
+  if (typeof p === "string") return p.startsWith("P") ? p : `P${p}`;
+  if (typeof p === "number" && p >= 0 && p <= 3) return `P${p}`;
+  return null;
+}
+
+function normalizeMessage(m: WarRoomMessage & { priority?: number | string | null }): WarRoomMessage {
+  return { ...m, priority: normalizePriority(m.priority) };
+}
+
+function presenceFromHeartbeat(lastHeartbeatAt: string | null): "online" | "idle" | "offline" {
+  if (!lastHeartbeatAt) return "offline";
+  const minsAgo = (Date.now() - new Date(lastHeartbeatAt).getTime()) / 60000;
+  if (minsAgo < 15) return "online";
+  if (minsAgo < 60) return "idle";
+  return "offline";
+}
+
 const DEFAULT_CHANNELS: WarRoomChannel[] = [
   { id: "general", name: "general", description: "Tin nhắn chung của team" },
   { id: "skills", name: "skills", description: "Cập nhật skill & công cụ" },
@@ -116,7 +153,7 @@ export const warRoomApi = {
         .order("created_at", { ascending: true })
         .limit(limit);
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map(normalizeMessage);
     } catch {
       return [];
     }
@@ -130,7 +167,7 @@ export const warRoomApi = {
         .eq("reply_to", parentId)
         .order("created_at", { ascending: true });
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map(normalizeMessage);
     } catch {
       return [];
     }
@@ -146,7 +183,7 @@ export const warRoomApi = {
         .order("created_at", { ascending: false })
         .limit(10);
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map(normalizeMessage);
     } catch {
       return [];
     }
@@ -181,39 +218,81 @@ export const warRoomApi = {
         void this._wakeWarRoomAgents(payload.channelId, data.id, payload.content);
       }
 
-      return data;
+      return data ? normalizeMessage(data) : null;
     } catch {
       return null;
     }
   },
 
-  /** Wake CEO agent only — CEO delegates to other agents as needed.
-   *  Previous approach woke ALL channel members (23 agents!) which exhausted resources. */
+  /** Wake agents based on channel.settings.wake_mode.
+   *  Default "ceo_only" preserves backward-compat: only CEO wakes, CEO delegates as needed.
+   *  "members" wakes every listed war_room_members agent (bounded concurrency 5).
+   *  "manual" wakes nothing — user must summon explicitly. */
   async _wakeWarRoomAgents(channelId: string, messageId: string, content: string): Promise<void> {
     try {
-      // Only wake CEO agent — prevents resource exhaustion from mass spawning
-      const { data: ceo } = await getSupabase()
-        .from("agents")
-        .select("id, slug, company_id")
-        .eq("role", "ceo")
-        .not("status", "eq", "terminated")
-        .limit(1)
+      const { data: channel } = await getSupabase()
+        .from("war_room_channels")
+        .select("settings")
+        .eq("id", channelId)
         .single();
+      const wakeMode: WakeMode =
+        (channel?.settings as Record<string, unknown> | null)?.wake_mode as WakeMode | undefined ??
+        "ceo_only";
 
-      if (!ceo) return;
+      if (wakeMode === "manual") return;
 
       const { agentsApi } = await import("./agents");
+      const reason = `War Room #${channelId}: ${content.slice(0, 100)}`;
+      const payloadBase = { channelId, messageId, content: content.slice(0, 500) };
 
-      await agentsApi.wakeup(
-        ceo.id,
-        {
-          source: "on_demand",
-          triggerDetail: "system",
-          reason: `War Room #${channelId}: ${content.slice(0, 100)}`,
-          payload: { channelId, messageId, content: content.slice(0, 500) },
-        },
-        ceo.company_id,
-      );
+      if (wakeMode === "ceo_only") {
+        const { data: ceo } = await getSupabase()
+          .from("agents")
+          .select("id, slug, company_id")
+          .eq("role", "ceo")
+          .not("status", "eq", "terminated")
+          .limit(1)
+          .single();
+        if (!ceo) return;
+        await agentsApi.wakeup(
+          ceo.id,
+          { source: "on_demand", triggerDetail: "system", reason, payload: payloadBase },
+          ceo.company_id,
+        );
+        return;
+      }
+
+      // wakeMode === "members"
+      const { data: members } = await getSupabase()
+        .from("war_room_members")
+        .select("agent_slug, agent_id")
+        .eq("channel_id", channelId);
+      if (!members?.length) return;
+
+      const slugs = members.map((m) => m.agent_slug).filter(Boolean);
+      if (!slugs.length) return;
+
+      const { data: agents } = await getSupabase()
+        .from("agents")
+        .select("id, slug, company_id, status")
+        .in("slug", slugs)
+        .not("status", "eq", "terminated");
+      if (!agents?.length) return;
+
+      // Bounded parallelism — process in batches of 5 to avoid overwhelming the bridge
+      const batchSize = 5;
+      for (let i = 0; i < agents.length; i += batchSize) {
+        const batch = agents.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map((a) =>
+            agentsApi.wakeup(
+              a.id,
+              { source: "on_demand", triggerDetail: "system", reason, payload: payloadBase },
+              a.company_id,
+            ).catch(() => {}),
+          ),
+        );
+      }
     } catch {
       // War Room trigger is best-effort
     }
@@ -248,12 +327,12 @@ export const warRoomApi = {
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "war_room_messages", filter: `channel_id=eq.${channelId}` },
-        (payload: RealtimePostgresChangesPayload<WarRoomMessage>) => onMessage(payload.new as WarRoomMessage),
+        (payload: RealtimePostgresChangesPayload<WarRoomMessage>) => onMessage(normalizeMessage(payload.new as WarRoomMessage)),
       )
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "war_room_messages", filter: `channel_id=eq.${channelId}` },
-        (payload: RealtimePostgresChangesPayload<WarRoomMessage>) => onMessage(payload.new as WarRoomMessage, "update"),
+        (payload: RealtimePostgresChangesPayload<WarRoomMessage>) => onMessage(normalizeMessage(payload.new as WarRoomMessage), "update"),
       )
       .subscribe();
   },
@@ -326,6 +405,40 @@ export const warRoomApi = {
       .select("agent_slug, role")
       .eq("channel_id", channelId);
     return data ?? [];
+  },
+
+  /** Members of a channel with live presence derived from agents.last_heartbeat_at. */
+  async getChannelMembersWithPresence(channelId: string): Promise<ChannelMemberPresence[]> {
+    try {
+      const { data: members } = await getSupabase()
+        .from("war_room_members")
+        .select("agent_slug, agent_id, agent_name, role")
+        .eq("channel_id", channelId);
+      if (!members?.length) return [];
+
+      const slugs = Array.from(new Set(members.map((m) => m.agent_slug).filter(Boolean)));
+      const { data: agents } = await getSupabase()
+        .from("agents")
+        .select("id, slug, name, last_heartbeat_at, status")
+        .in("slug", slugs);
+
+      const bySlug = new Map((agents ?? []).map((a) => [a.slug, a]));
+      return members.map((m) => {
+        const a = bySlug.get(m.agent_slug);
+        const lastHeartbeat = a?.last_heartbeat_at ?? null;
+        return {
+          agent_slug: m.agent_slug,
+          agent_name: m.agent_name ?? a?.name ?? m.agent_slug,
+          agent_id: m.agent_id ?? a?.id ?? null,
+          role: m.role ?? "member",
+          last_heartbeat_at: lastHeartbeat,
+          status: a?.status ?? null,
+          presence: presenceFromHeartbeat(lastHeartbeat),
+        };
+      });
+    } catch {
+      return [];
+    }
   },
 
   async addMember(channelId: string, agentSlug: string): Promise<void> {
