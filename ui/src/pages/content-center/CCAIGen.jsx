@@ -2158,6 +2158,19 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
           }
 
           for (const payload of payloads) {
+            // 2026-04-26 — log full payload right before send so the user can
+            // verify in DevTools that posted_account / email_day match what
+            // they selected in the dropdowns. JobLogViewerPanel only reads
+            // back what was persisted; this proves the UI shipped the right
+            // values in the first place (vs. a state-not-updating bug).
+            console.log('[DOC-QUEUE] payload →', {
+              docId: payload.content_type,
+              posted_account: payload.posted_account,
+              email_day: payload.email_day,
+              brand_voice: payload.brand_voice,
+              publish_mode: payload.publish_mode,
+              full: payload,
+            });
             try {
               const r = await fetch('/api/ops/content-pipeline/generate', {
                 method: 'POST',
@@ -5328,16 +5341,69 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                   const buttonLabel = isDocTaiLieu
                     ? `Queue ${selectedDocIds.length} Job(s) Tạo Tài Liệu`
                     : `Tạo Nội Dung (${aiProvider === 'gemini' ? 'Gemini' : aiProvider === 'openai' ? 'GPT' : 'Claude'})`;
+                  // 2026-04-26 — Pre-submit summary for DOC-* flow. Job rows in
+                  // cc_generation_jobs were silently saving posted_account=
+                  // 'page_jennie' + email_day='all' even when the user thought
+                  // they'd selected 'email' + 'Day 2'. Native <select> on
+                  // Windows can swallow change events when the user opens the
+                  // dropdown then clicks outside instead of choosing an item.
+                  // Show the actual state values about to be POSTed so any
+                  // mismatch is visible BEFORE the user clicks Generate.
+                  const isOnboardingDoc = isDocTaiLieu && selectedDocIds.some(
+                    (id) => DOC_SOP_OPTIONS.find((o) => o.value === id)?.group === 'Onboarding Email'
+                  );
+                  const accountMismatch = isOnboardingDoc && postedAccount !== 'email';
                   return (
-                    <Button
-                      variant="gold"
-                      icon={Sparkles}
-                      onClick={handleGenerate}
-                      disabled={disabled}
-                      title={title}
-                    >
-                      {buttonLabel}
-                    </Button>
+                    <div className="space-y-2">
+                      {isDocTaiLieu && selectedDocIds.length > 0 && (
+                        <div className={`text-[11px] rounded p-2 border ${accountMismatch
+                          ? 'bg-amber-500/10 border-amber-500/40 text-amber-700 dark:text-amber-400'
+                          : 'bg-muted/30 border-border text-muted-foreground'}`}>
+                          <div className="font-semibold mb-0.5 text-[10px] uppercase tracking-wider">
+                            📤 Sẽ gửi đi:
+                          </div>
+                          <div>
+                            <strong>posted_account</strong>: <code className="rounded bg-muted/40 px-1">{postedAccount}</code>
+                            {accountMismatch && (
+                              <span className="ml-2 text-amber-700 dark:text-amber-400">
+                                ⚠ Đang là social account nhưng tài liệu là email series — đổi sang &lsquo;email&rsquo;?
+                              </span>
+                            )}
+                            {' '}· <strong>publish_mode</strong>: <code className="rounded bg-muted/40 px-1">{publishMode}</code>
+                            {' '}· <strong>brand_voice</strong>: <code className="rounded bg-muted/40 px-1">{brandVoice || 'jennie'}</code>
+                          </div>
+                          {selectedDocIds.map((docId) => {
+                            const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
+                            const isOnb = String(docId).startsWith('DOC-ONB-') && opt?.emailCount;
+                            const day = selectedDocEmailDays[docId];
+                            return (
+                              <div key={docId} className="mt-0.5">
+                                · <code className="rounded bg-muted/40 px-1">{docId}</code>
+                                {isOnb && (
+                                  <>
+                                    {' '}email_day=<code className="rounded bg-muted/40 px-1">{day ?? 'all'}</code>
+                                    {!day && (
+                                      <span className="ml-1 text-amber-700 dark:text-amber-400">
+                                        (chưa chọn cụ thể — sẽ generate tất cả {opt.emailCount} ngày)
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <Button
+                        variant="gold"
+                        icon={Sparkles}
+                        onClick={handleGenerate}
+                        disabled={disabled}
+                        title={title}
+                      >
+                        {buttonLabel}
+                      </Button>
+                    </div>
                   );
                 })()}
                 {output && (
