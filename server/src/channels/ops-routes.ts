@@ -190,10 +190,22 @@ router.get('/content-pipeline/stats', async (_req, res) => {
 // Scripts CRUD — REAL DB
 router.get('/content-pipeline/scripts', async (req, res) => {
   try {
-    const { status, pillar, limit = '50' } = req.query;
+    const { status, pillar, limit = '50', id, generation_job_id } = req.query;
     let query = supabase.from('cc_scripts').select('*').order('created_at', { ascending: false }).limit(Number(limit));
     if (status) query = query.eq('status', String(status));
     if (pillar) query = query.eq('pillar', String(pillar));
+    // 2026-04-26 — UI poll uses these to resolve a script after a DOC-* generation
+    // completes. Without them, ?id=X and ?generation_job_id=X were silently ignored
+    // and the endpoint returned latest 50 of EVERY user → wrong script picked up.
+    if (id) query = query.eq('id', String(id));
+    if (generation_job_id) {
+      // batch_processor.py writes the originating job id into metadata->>'job_id'
+      // (the dedicated generation_job_id FK column is left NULL as of 2026-04-26).
+      // Match either location so the UI poll can resolve a script regardless of
+      // which back-link batch_processor populated.
+      const jobId = String(generation_job_id);
+      query = query.or(`generation_job_id.eq.${jobId},metadata->>job_id.eq.${jobId}`);
+    }
     const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);

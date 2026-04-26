@@ -1732,6 +1732,7 @@ export default function AiGenPage() {
   const isImagePrompt = outputType === 'image_prompt';
   // 2026-04-17 — Doc-Tài Liệu Nội Dung (25 SOPs checkbox group)
   const isDocTaiLieu = outputType === 'doc_tai_lieu';
+  const isHtmlPreview = isEmail || isDocTaiLieu;
 
   // -- Planner: copy to brief callback --
   const handlePlannerCopyToBrief = useCallback((planBrief, planType) => {
@@ -2029,7 +2030,16 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
   }, [isShortClip, isSocialPost, isNews, isEmail, isContentPlanner, clipTemplate, clipFeatures, clipCourses, clipCtaType, socialPlatforms, socialTopic, socialTopicDetails, newsCategories, newsSubtopics, newsFormat, emailType, emailSubject, plannerDuration, plannerPlatforms, plannerContentTypes, plannerTopics]);
 
   // -- Generate --
-  const handleGenerate = useCallback(async () => {
+  // 2026-04-26 — DROPPED useCallback wrapper. The previous deps array was missing
+  // 19+ form-state variables (brandVoice, selectedDocEmailDays, postedAccount,
+  // publishMode, campaignTemplate, campaignSegment, dripOverrideEnabled,
+  // overrideEmailMap, contentPillar, docTitle, docOutputFormat, ...). When user
+  // changed those after selecting a DOC-ONB-* (which DID refresh the closure via
+  // contentType dep), the handler kept submitting the OLD initial defaults
+  // (brandVoice='jennie', email_day='all', email_template='daily_newsletter_general')
+  // even though the inline preview pill rendered the latest state correctly.
+  // Plain async fn = always-fresh closure, no perf cost (runs only on click).
+  const handleGenerate = async () => {
     console.log('[DEBUG] handleGenerate called, validateBrief() =', validateBrief());
     if (!validateBrief()) return;
 
@@ -2215,18 +2225,72 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
                 const job = await jr.json();
                 if (job.status === 'completed' || job.status === 'failed') {
                   completed.add(jid);
-                  if (job.status === 'completed' && job.entity_id) {
-                    try {
-                      const sr = await fetch(`/api/ops/content-pipeline/scripts?id=${job.entity_id}&limit=1`);
-                      if (sr.ok) {
-                        const rows = await sr.json();
-                        const body = Array.isArray(rows) && rows[0]?.body ? rows[0].body : '';
-                        if (body) {
-                          setOutput(body);
-                          setGenerationDone?.(true);
+                  if (job.status === 'completed') {
+                    // 2026-04-26 — Resolve generated content via 3-tier fallback:
+                    //   1. job.output_data.content (always present, batch_processor stores raw output)
+                    //   2. cc_scripts.body via job.entity_id (when batch_processor back-links)
+                    //   3. cc_scripts WHERE generation_job_id = jid (when entity_id is null —
+                    //      observed gap for DOC-ONB-* jobs as of 2026-04-26)
+                    // Previously only step 2 ran, so DOC-ONB-* completions left UI stuck on
+                    // "Đang generate..." even though content existed in DB.
+                    let body = '';
+                    const od = job.output_data;
+                    if (od) {
+                      if (typeof od === 'string') body = od;
+                      else if (typeof od === 'object' && typeof od.content === 'string') body = od.content;
+                    }
+                    if (!body && job.entity_id) {
+                      try {
+                        const sr = await fetch(`/api/ops/content-pipeline/scripts?id=${job.entity_id}&limit=1`);
+                        if (sr.ok) {
+                          const rows = await sr.json();
+                          if (Array.isArray(rows) && rows[0]?.body) body = rows[0].body;
                         }
+                      } catch (e) { console.warn('[DOC-POLL] fetch script by entity_id failed', e); }
+                    }
+                    if (!body) {
+                      try {
+                        const sr = await fetch(`/api/ops/content-pipeline/scripts?generation_job_id=${jid}&limit=1`);
+                        if (sr.ok) {
+                          const rows = await sr.json();
+                          if (Array.isArray(rows) && rows[0]?.body) body = rows[0].body;
+                        }
+                      } catch (e) { console.warn('[DOC-POLL] fetch script by job_id failed', e); }
+                    }
+                    if (body) {
+                      let parsedBody = body.trim();
+                      if (parsedBody.startsWith('```')) {
+                        parsedBody = parsedBody.replace(/^```(?:html|markdown)?\s*\n?/, '').replace(/\n?```\s*$/, '');
                       }
-                    } catch (e) { console.warn('[DOC-POLL] fetch script failed', e); }
+                      
+                      let extractedImgPrompt = '';
+                      const imgMarkerIdx = parsedBody.indexOf('===IMAGE_PROMPT===');
+                      if (imgMarkerIdx !== -1) {
+                        extractedImgPrompt = parsedBody.slice(imgMarkerIdx + '===IMAGE_PROMPT==='.length).trim();
+                        parsedBody = parsedBody.slice(0, imgMarkerIdx).trim();
+                      }
+                      
+                      // For HTML DOCs, strip pre/post content
+                      const doctypeIdx = parsedBody.indexOf('<!DOCTYPE');
+                      const htmlTagIdx = parsedBody.indexOf('<html');
+                      const cleanStartIdx = doctypeIdx !== -1 ? doctypeIdx : htmlTagIdx;
+                      if (cleanStartIdx > 0) {
+                        parsedBody = parsedBody.slice(cleanStartIdx);
+                      }
+                      const htmlEndIdx = parsedBody.lastIndexOf('</html>');
+                      if (htmlEndIdx !== -1) {
+                        parsedBody = parsedBody.slice(0, htmlEndIdx + '</html>'.length);
+                      }
+                      
+                      if (extractedImgPrompt) {
+                        setImagePrompt(extractedImgPrompt);
+                      }
+                      
+                      setOutput(parsedBody);
+                      setGenerationDone?.(true);
+                    } else {
+                      setOutput(`✅ Job ${jid} completed nhưng không lấy được nội dung. Thử mở tab "Nội Dung" để check cc_scripts trực tiếp.`);
+                    }
                   } else if (job.status === 'failed') {
                     setOutput(`❌ Job ${jid} FAILED\n\n${job.error_message || 'unknown error'}`);
                   }
@@ -2622,7 +2686,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
       setGenerating(false);
       abortRef.current = null;
     }
-  }, [brief, outputType, selectedOption, jobType, contentType, persona, writingMode, productHook, batchCount, buildDynamicContext, validateBrief, addToast, aiProvider, aiModel, isEmail, emailSubject]);
+  };
 
   // -- Cancel --
   const handleCancel = useCallback(() => {
@@ -3139,7 +3203,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
 
   // -- Email: detect image placeholders --
   const emailPlaceholders = React.useMemo(() => {
-    if (!isEmail || !output) return [];
+    if (!isHtmlPreview || !output) return [];
     const regex = /https?:\/\/placehold\.co\/[^\s"'<>]+/gi;
     const matches = [];
     let m;
@@ -3147,7 +3211,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
       matches.push({ url: m[0], index: m.index });
     }
     return matches;
-  }, [isEmail, output]);
+  }, [isHtmlPreview, output]);
 
   // -- Email: handle image upload to replace placeholder --
   const handleEmailImageUpload = useCallback((e) => {
@@ -5450,7 +5514,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
       )}
 
       {/* Email Toolbox — fixed position in left margin, outside content flow */}
-      {output && isEmail && showEmailToolbox && (
+      {output && isHtmlPreview && showEmailToolbox && (
         <div
           className="rounded-card border border-border bg-glass-bg overflow-hidden z-50"
           style={{ position: 'fixed', right: '16px', top: '80px', width: '190px', maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}
@@ -5535,7 +5599,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                 icon={isEditing ? Check : Edit3}
                 onClick={() => {
                   const next = !isEditing;
-                  if (isEmail) {
+                  if (isHtmlPreview) {
                     // Toggle contentEditable mode inside the iframe via postMessage
                     const iframe = emailIframeRef.current;
                     if (iframe?.contentWindow) {
@@ -5618,7 +5682,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
           )}
 
           {/* Content: Email HTML Preview or standard markdown */}
-          {isEmail ? (
+          {isHtmlPreview ? (
             <div className="mb-4 space-y-3">
               {/* Email toolbar */}
               <div className="flex items-center gap-2 flex-wrap">
@@ -5841,7 +5905,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
           )}
 
           {/* Thống kê */}
-          {generationDone && !isEmail && (
+          {generationDone && !isHtmlPreview && (
             <div className="flex items-center gap-6 flex-wrap mb-4">
               {brandResult && (
                 <div className="flex items-center gap-2">
@@ -5874,7 +5938,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
           )}
 
           {/* Brand Voice + GEM Tools Analysis Cards */}
-          {generationDone && !isEmail && (
+          {generationDone && !isHtmlPreview && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               {/* Card 1: Giọng Thương Hiệu */}
               <Card variant="glass" padding="md">
