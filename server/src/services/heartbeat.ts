@@ -2976,6 +2976,12 @@ export function heartbeatService(db: Db) {
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
         } finally {
+          // Safety net: ensure the issue execution lock is always released even
+          // if the success path, inner catch, or outer catch threw before reaching
+          // their own releaseIssueExecutionAndPromote call. Idempotent — if the
+          // lock was already cleared, the lookup by executionRunId returns null
+          // and the function is a no-op.
+          await releaseIssueExecutionAndPromote(run).catch(() => undefined);
           await releaseRuntimeServicesForRun(run.id).catch(() => undefined);
           activeRunExecutions.delete(run.id);
           await startNextQueuedRunForAgent(run.agentId);
