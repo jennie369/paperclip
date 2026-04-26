@@ -4068,6 +4068,14 @@ export function heartbeatService(db: Db) {
       let enqueued = 0;
       let skipped = 0;
 
+      // Pass 1: collect agents whose timer/cron has elapsed.
+      type PendingFire = {
+        agent: typeof allAgents[0];
+        policy: ReturnType<typeof parseHeartbeatPolicy>;
+        reason: string;
+      };
+      const pendingFires: PendingFire[] = [];
+
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
         const policy = parseHeartbeatPolicy(agent);
@@ -4097,7 +4105,53 @@ export function heartbeatService(db: Db) {
           }
         }
 
-        if (!shouldFire) continue;
+        if (shouldFire) {
+          pendingFires.push({ agent, policy, reason });
+        }
+      }
+
+      // GEM-316 fix: Batch-fetch task status for agents whose timers fired.
+      // Skip timer wakeup when an agent has ONLY blocked tasks (no actionable
+      // todo/in_progress/backlog work). Event-based wakeups (issue_assigned,
+      // issue_comment_mentioned) still fire when blockers resolve, so the agent
+      // is never permanently silenced — it just stops burning budget on
+      // heartbeats where it has nothing it can do.
+      const agentTaskFlags = new Map<string, { hasActionable: boolean; hasBlocked: boolean }>();
+      if (pendingFires.length > 0) {
+        const pendingIds = pendingFires.map((p) => p.agent.id);
+        const taskRows = await db
+          .select({ agentId: issues.assigneeAgentId, status: issues.status })
+          .from(issues)
+          .where(
+            and(
+              inArray(issues.assigneeAgentId, pendingIds),
+              inArray(issues.status, ["todo", "in_progress", "backlog", "blocked"]),
+              sql`${issues.hiddenAt} is null`,
+            ),
+          );
+        for (const row of taskRows) {
+          if (!row.agentId) continue;
+          const entry = agentTaskFlags.get(row.agentId) ?? { hasActionable: false, hasBlocked: false };
+          if (row.status !== "blocked") entry.hasActionable = true;
+          else entry.hasBlocked = true;
+          agentTaskFlags.set(row.agentId, entry);
+        }
+      }
+
+      // Pass 2: enqueue wakeups, skipping agents that only have blocked tasks.
+      for (const { agent, policy, reason } of pendingFires) {
+        const flags = agentTaskFlags.get(agent.id) ?? { hasActionable: false, hasBlocked: false };
+
+        // Skip timer-driven heartbeat when all assigned tasks are blocked.
+        // Prevents the agent from looping on work it cannot make progress on.
+        if (!flags.hasActionable && flags.hasBlocked) {
+          logger.debug(
+            { agentId: agent.id },
+            "[tickTimers] Skipping timer wakeup — agent has only blocked tasks",
+          );
+          skipped += 1;
+          continue;
+        }
 
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
