@@ -102,7 +102,7 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
       return <pre {...preProps}>{preChildren}</pre>;
     },
     table: ({ node: _node, children: tableChildren, ...tableProps }) => (
-      <div className="overflow-x-auto">
+      <div className="paperclip-markdown-table-wrapper">
         <table {...tableProps}>{tableChildren}</table>
       </div>
     ),
