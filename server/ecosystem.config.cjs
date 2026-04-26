@@ -53,10 +53,18 @@ module.exports = {
         // delegation via MCP tools. See runbook: crypto-pattern-scanner/memory/
         // reports/2026-04-21-delegation-rollout-runbook.md for rollback procedure.
         PAPERCLIP_DELEGATION_ENABLED: 'true',
-        // Use Vite dev middleware instead of static ui-dist/ — bypasses UI
-        // build when esbuild cleanup is blocked by Windows AV. Remove once
-        // `pnpm --filter @paperclipai/ui build` succeeds.
-        PAPERCLIP_UI_DEV_MIDDLEWARE: 'true',
+        // 2026-04-22 — revert to static-ui mode. Defender exclusion allows
+        // `npx vite build` to succeed directly; serve the built ui/dist/ bundle.
+        // Set to 'true' only if build fails and Vite dev middleware is needed.
+        PAPERCLIP_UI_DEV_MIDDLEWARE: 'false',
+        // 2026-04-26 — auto-apply pending Drizzle migrations on startup. Without
+        // this, any new migration file in packages/db/src/migrations causes the
+        // server to refuse to start and crash-loop until db:migrate is run by
+        // hand. Trade-off: very small risk that a half-written local migration
+        // gets applied on next restart — acceptable on this single-machine
+        // single-developer setup. If/when a team works on the same DB, flip
+        // back to false and require explicit `pnpm db:migrate`.
+        PAPERCLIP_MIGRATION_AUTO_APPLY: 'true',
       },
     },
   ],
