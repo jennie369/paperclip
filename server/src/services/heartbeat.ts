@@ -3002,6 +3002,7 @@ export function heartbeatService(db: Db) {
       await tx
         .update(issues)
         .set({
+          checkoutRunId: null,
           executionRunId: null,
           executionAgentNameKey: null,
           executionLockedAt: null,
