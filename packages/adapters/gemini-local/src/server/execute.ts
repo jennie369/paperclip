@@ -651,6 +651,39 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         `Đọc context dưới đây TRƯỚC khi xử lý issue. Đây là cùng memory mà Claude Code dùng.\n\n` +
         `${blocks.join("\n\n---\n\n")}\n\n---\n\n`;
     }
+
+    // 2026-04-27 — Inject claude-mem semantic timeline (50 recent observations).
+    // Same dump that Claude Code SessionStart hook produces. Spawn worker-service
+    // CLI, parse JSON, extract `hookSpecificOutput.additionalContext`. Silent skip
+    // if worker not running (port 37777) or spawn fails.
+    try {
+      const { spawnSync } = await import("node:child_process");
+      const claudeMemRoot = path.join(
+        userHome, ".claude", "plugins", "cache", "thedotmack", "claude-mem", "12.2.0",
+      );
+      const bunRunner = path.join(claudeMemRoot, "scripts", "bun-runner.js");
+      const workerService = path.join(claudeMemRoot, "scripts", "worker-service.cjs");
+      // Try once with 8s budget — context query is local SQLite read, fast.
+      const result = spawnSync(
+        "node",
+        [bunRunner, workerService, "hook", "claude-code", "context"],
+        { cwd: cwdRoot, timeout: 8000, encoding: "utf8", windowsHide: true },
+      );
+      if (result.status === 0 && typeof result.stdout === "string" && result.stdout.length > 0) {
+        try {
+          const parsed = JSON.parse(result.stdout);
+          const ctx = parsed?.hookSpecificOutput?.additionalContext;
+          if (typeof ctx === "string" && ctx.length > 0) {
+            memoryPrefix +=
+              `## 🧠 CLAUDE-MEM TIMELINE (semantic index, shared cross-runtime)\n\n` +
+              `Đây là 50 observations gần nhất của project (cùng index Claude Code dùng).\n` +
+              `Fetch chi tiết: \`mcp__claude-mem__get_observations([IDs])\` hoặc skill mem-search.\n\n` +
+              `${ctx}\n\n---\n\n`;
+            memoryFilesLoaded.push("[claude-mem timeline]");
+          }
+        } catch { /* JSON parse fail — skip silent */ }
+      }
+    } catch { /* spawn fail — skip silent */ }
   }
   // Prepend memory TRƯỚC instructions để agent đọc context trước rules.
   instructionsPrefix = memoryPrefix + instructionsPrefix;
