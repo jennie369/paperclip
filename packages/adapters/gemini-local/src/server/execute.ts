@@ -353,7 +353,8 @@ async function ensureGeminiIncludeDirectoriesInjected(
     // Phong Thuỷ Đế Vương (astrology / bazi) — project root + web dashboard.
     "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương",
     "C:/Users/Jennie Chu/Desktop/Projects/App Phong Thủy Đế Vương/web-dashboard",
-    "C:\Users\Jennie Chu\Desktop\Projects\llm-wiki\TỬ VI NTP",
+    "C:/Users/Jennie Chu/Desktop/Projects/llm-wiki",
+    "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner",
   ];
   const dirs = CANDIDATE_DIRS.filter((p) => existsSync(p));
   if (dirs.length === 0) return;
@@ -486,8 +487,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  if (!hasExplicitApiKey && authToken) {
+  if (authToken) {
     env.PAPERCLIP_API_KEY = authToken;
+  } else if (!hasExplicitApiKey) {
+    // Prevent parent process PAPERCLIP_API_KEY from leaking into the agent subprocess.
+    // If we cannot generate a JWT (authToken null) and no explicit key is configured,
+    // we must explicitly clear this var so the agent does not inherit the server's own key.
+    env.PAPERCLIP_API_KEY = "";
   }
   const effectiveEnv = Object.fromEntries(
     Object.entries({ ...process.env, ...env }).filter(
@@ -597,6 +603,57 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
     }
   }
+
+  // 2026-04-27 — Auto-inject memory context cho Gemini agents.
+  // Claude agents tự có via SessionStart hook + claude-mem MCP. Gemini CLI
+  // không có hook system runtime → adapter phải prepend memory vào prompt.
+  //
+  // SSOT MEMORY.md location (verified 2026-04-27 với chị Jennie):
+  //   ~/.claude/projects/<encoded(cwd)>/memory/MEMORY.md
+  // Encoded rule: replace `:`, `/`, `\`, AND whitespace bằng `-`, strip leading `-`.
+  // Verified path example: cwd "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner"
+  //   → "C--Users-Jennie-Chu-Desktop-Projects-crypto-pattern-scanner"
+  // Lý do: Claude Code auto-load từ encoded path, KHÔNG phải project root.
+  // Hot data từ project root memory/: today.md + active-tasks.json.
+  // Plan: memory/reports/2026-04-27-gemini-memory-injection-plan.md
+  let memoryPrefix = "";
+  let memoryFilesLoaded: string[] = [];
+  const cwdRoot = asString(config.cwd, "").trim();
+  if (cwdRoot) {
+    const encodedCwd = cwdRoot.replace(/[:/\\\s]/g, "-").replace(/^-+/, "");
+    const userHome = process.env.USERPROFILE || process.env.HOME || os.homedir();
+    const ssotMemoryPath = path.join(userHome, ".claude", "projects", encodedCwd, "memory", "MEMORY.md");
+    // Cap riêng per file:
+    // - MEMORY.md SSOT: 65536 bytes (~64KB) — chứa lessons quan trọng, không nên truncate
+    // - today.md: 8192 bytes (8KB) — daily, recent entries quan trọng nhất ở đầu file
+    // - active-tasks.json: 16384 bytes (16KB) — JSON cấu trúc, cần đủ để parse
+    const memFiles = [
+      { p: ssotMemoryPath, label: "MEMORY (project lessons + pitfalls — SSOT, shared với Claude Code)", cap: 65536 },
+      { p: path.join(cwdRoot, "memory", "today.md"), label: "TODAY (daily progress, hot data)", cap: 8192 },
+      { p: path.join(cwdRoot, "memory", "active-tasks.json"), label: "ACTIVE TASKS (in-flight)", cap: 16384 },
+    ];
+    const blocks: string[] = [];
+    for (const f of memFiles) {
+      try {
+        const raw = await fs.readFile(f.p, "utf8");
+        const text = raw.length > f.cap
+          ? raw.slice(0, f.cap) + `\n... [truncated at ${f.cap} bytes; full at ${f.p}]`
+          : raw;
+        blocks.push(`### ${f.label}\n\n${text}`);
+        memoryFilesLoaded.push(f.p);
+      } catch {
+        // Silent skip — file có thể không tồn tại cho project mới.
+      }
+    }
+    if (blocks.length > 0) {
+      memoryPrefix =
+        `## 🧠 MEMORY CONTEXT (auto-injected by Paperclip — shared với Claude Code)\n\n` +
+        `Đọc context dưới đây TRƯỚC khi xử lý issue. Đây là cùng memory mà Claude Code dùng.\n\n` +
+        `${blocks.join("\n\n---\n\n")}\n\n---\n\n`;
+    }
+  }
+  // Prepend memory TRƯỚC instructions để agent đọc context trước rules.
+  instructionsPrefix = memoryPrefix + instructionsPrefix;
   const commandNotes = (() => {
     const notes: string[] = [
       "Prompt is passed to Gemini via stdin when it contains newlines or exceeds 4000 chars",
@@ -617,6 +674,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     );
     return notes;
   })();
+
+  // 2026-04-27 — Log memory injection separately so debugging can confirm
+  // each agent run actually picked up SSOT memory files.
+  if (memoryPrefix.length > 0) {
+    commandNotes.push(
+      `Auto-injected memory context (~${memoryPrefix.length} chars from ${memoryFilesLoaded.length} file(s)): ${memoryFilesLoaded.join(", ")}`,
+    );
+  }
 
   const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
   const templateData = {
