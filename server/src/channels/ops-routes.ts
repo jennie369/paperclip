@@ -1850,6 +1850,17 @@ router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
         })
         .eq('script_id', id).eq('status', 'pending')
         .then(() => {});
+      // Fire-and-forget: sync Status=Published to Notion when publish succeeds.
+      // Mirror approve flow's no-page fallback (page may be missing for
+      // manually-inserted rows). post_url not yet captured by Playwright (B2).
+      if (r.code === 0) {
+        void (async () => {
+          const quick = await updatePageStatus(id, 'published');
+          if (!quick.ok && quick.note === 'no-page') {
+            await pushScript(id);
+          }
+        })().catch((e) => console.warn('[notion-push] publish-now fail', e));
+      }
     });
 
     res.json({ message: 'Đang publish ngay — check Log Viewer hoặc cc_publish_queue để track', script_id: id });
@@ -1903,6 +1914,14 @@ router.post('/content-pipeline/publish-batch', async (req, res) => {
         })
         .in('script_id', ids).eq('status', 'pending')
         .then(() => {});
+      // Fire-and-forget: bulk sync Status=Published to Notion when publish
+      // succeeds. Items were 'approved' before this call → Notion pages should
+      // already exist from the approve flow's pushScript fallback.
+      if (r.code === 0) {
+        void bulkUpdatePageStatus(ids, 'published').catch((e) =>
+          console.warn('[notion-push] publish-batch fail', e),
+        );
+      }
     });
 
     res.json({ message: `Đã enqueue ${ids.length} bài để publish batch`, count: ids.length, script_ids: ids });
