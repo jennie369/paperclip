@@ -53,6 +53,7 @@ export const createIssueSchema = z.object({
   ]).optional().nullable(),
   executionWorkspaceSettings: issueExecutionWorkspaceSettingsSchema.optional().nullable(),
   labelIds: z.array(z.string().uuid()).optional(),
+  metadata: z.record(z.unknown()).optional().default({}),
 });
 
 export type CreateIssue = z.infer<typeof createIssueSchema>;
@@ -75,14 +76,24 @@ export type UpdateIssue = z.infer<typeof updateIssueSchema>;
 export type IssueExecutionWorkspaceSettings = z.infer<typeof issueExecutionWorkspaceSettingsSchema>;
 
 export const checkoutIssueSchema = z.object({
-  agentId: z.string().uuid(),
+  agentId: z.string().uuid().optional(),
   expectedStatuses: z.array(z.enum(ISSUE_STATUSES)).nonempty(),
 });
 
 export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;
 
+// PostgreSQL text columns reject NULL bytes (0x00). LLM agents sometimes emit
+// a literal NULL byte when escaping UUIDs with leading zero — they tokenise
+// the JSON escape sequence (backslash u 0000 0xxxxxxx-) into codepoint
+// U-plus-0000 followed by "0xxxxxxx-". Without this refine, server returns 500
+// "PostgresError: invalid byte sequence for encoding UTF8: 0x00", agent
+// silently retries or hallucinates success. Reject early with 400 so caller
+// strips and retries explicitly. Same rule applied to issue document body.
+const noNullByte = (s: string) => !s.includes("\x00");
+const NO_NULL_BYTE_MSG = "Body chứa NULL byte (0x00). LLM agents thường tạo ký tự này khi escape UUID có leading zero (ví dụ \\u00004a4beca-...). Strip NULL byte trước khi gửi lại.";
+
 export const addIssueCommentSchema = z.object({
-  body: z.string().min(1),
+  body: z.string().min(1).refine(noNullByte, { message: NO_NULL_BYTE_MSG }),
   reopen: z.boolean().optional(),
   interrupt: z.boolean().optional(),
 });
@@ -115,7 +126,7 @@ export const issueDocumentKeySchema = z
 export const upsertIssueDocumentSchema = z.object({
   title: z.string().trim().max(200).nullable().optional(),
   format: issueDocumentFormatSchema,
-  body: z.string().max(524288),
+  body: z.string().max(524288).refine(noNullByte, { message: NO_NULL_BYTE_MSG }),
   changeSummary: z.string().trim().max(500).nullable().optional(),
   baseRevisionId: z.string().uuid().nullable().optional(),
 });
