@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
+import { sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   addIssueCommentSchema,
@@ -1208,6 +1209,30 @@ export function issueRoutes(db: Db, storage: StorageService) {
         },
         "[lesson-loop] issue closed — extraction will trigger on assignee's next heartbeat (Section 0.7 of HEARTBEAT.md)",
       );
+      // Layer 1.5 (2026-04-28): insert into lesson_extraction_queue. Heartbeat
+      // Section 0.7 SELECT WHERE assignee=me AND status='pending' thay vì
+      // poll Paperclip /api/issues. UNIQUE(issue_id, agent_id) constraint =
+      // idempotent — re-close cùng issue (vd cancelled → done) không tạo
+      // duplicate row, ON CONFLICT DO NOTHING. Audit fields (status,
+      // attempt_count, error_message) cho retry tracking.
+      void (async () => {
+        try {
+          await db.execute(sql`
+            INSERT INTO lesson_extraction_queue
+              (issue_id, agent_id, company_id, closed_status,
+               trigger_actor_type, trigger_actor_id)
+            VALUES
+              (${issue.id}::uuid, ${issue.assigneeAgentId}::uuid, ${issue.companyId}::uuid,
+               ${issue.status}, ${actor.actorType}, ${actor.actorId})
+            ON CONFLICT (issue_id, agent_id) DO NOTHING
+          `);
+        } catch (err) {
+          logger.warn(
+            { err, issueId: issue.id, agentId: issue.assigneeAgentId },
+            "[lesson-loop] failed to insert into lesson_extraction_queue (non-fatal)",
+          );
+        }
+      })();
     }
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
@@ -1865,6 +1890,63 @@ export function issueRoutes(db: Db, storage: StorageService) {
     });
 
     res.json({ ok: true });
+  });
+
+  // ─── Layer 1.5 lesson extraction queue read endpoint (2026-04-28) ──────────
+  // Heartbeat agents Section 0.7 GET /api/internal/lesson-queue?agent_id=...
+  // &status=pending&limit=N → list pending lesson rows. Mark done qua PATCH
+  // /api/internal/lesson-queue/:id (status='done' | 'failed' | 'skipped').
+  router.get("/internal/lesson-queue", async (req, res) => {
+    const agentId = String(req.query.agent_id || "").trim();
+    const status = String(req.query.status || "pending").trim();
+    const limit = Math.min(parseInt(String(req.query.limit || "10"), 10) || 10, 50);
+    if (!agentId) {
+      res.status(400).json({ error: "agent_id required" });
+      return;
+    }
+    try {
+      const rows = await db.execute(sql`
+        SELECT id, issue_id, agent_id, company_id, closed_at, closed_status,
+               trigger_actor_type, trigger_actor_id, status, attempt_count,
+               error_message, lesson_summary, created_at
+          FROM lesson_extraction_queue
+         WHERE agent_id = ${agentId}::uuid AND status = ${status}
+         ORDER BY closed_at ASC
+         LIMIT ${limit}
+      `);
+      res.json({ rows: rows.rows ?? rows });
+    } catch (err: any) {
+      logger.warn({ err, agentId, status }, "lesson-queue read failed");
+      res.status(500).json({ error: err.message || "lesson-queue read failed" });
+    }
+  });
+
+  router.patch("/internal/lesson-queue/:id", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const newStatus = String(req.body?.status || "").trim();
+    const errorMsg = req.body?.error_message ? String(req.body.error_message).slice(0, 1000) : null;
+    const lessonPreview = req.body?.lesson_summary ? String(req.body.lesson_summary).slice(0, 500) : null;
+    if (!id || !["pending", "processing", "done", "failed", "skipped"].includes(newStatus)) {
+      res.status(400).json({ error: "id + valid status required" });
+      return;
+    }
+    try {
+      await db.execute(sql`
+        UPDATE lesson_extraction_queue
+           SET status = ${newStatus},
+               attempted_at = COALESCE(attempted_at, now()),
+               completed_at = CASE WHEN ${newStatus} IN ('done','failed','skipped') THEN now() ELSE completed_at END,
+               attempt_count = attempt_count + 1,
+               error_message = ${errorMsg},
+               lesson_summary = COALESCE(${lessonPreview}, lesson_summary),
+               updated_at = now()
+         WHERE id = ${id}::uuid
+      `);
+      res.json({ ok: true });
+    } catch (err: any) {
+      logger.warn({ err, id }, "lesson-queue update failed");
+      res.status(500).json({ error: err.message || "lesson-queue update failed" });
+    }
   });
 
   return router;

@@ -330,6 +330,27 @@
       "when": 1774960197878,
       "tag": "0046_smooth_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1776861115226,
+      "tag": "0047_damp_exodus",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1777161613247,
+      "tag": "0048_past_taskmaster",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1777723200000,
+      "tag": "0049_lesson_extraction_queue",
+      "breakpoints": true
     }
   ]
 }
