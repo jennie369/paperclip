@@ -129,6 +129,7 @@ function CommentCard({
   projectId,
   highlightCommentId,
   queued = false,
+  onAddAndReassign,
 }: {
   comment: CommentWithRunMeta;
   agentMap?: Map<string, Agent>;
@@ -291,6 +292,7 @@ const TimelineList = memo(function TimelineList({
   companyId,
   projectId,
   highlightCommentId,
+  onAddAndReassign,
 }: {
   timeline: TimelineItem[];
   agentMap?: Map<string, Agent>;

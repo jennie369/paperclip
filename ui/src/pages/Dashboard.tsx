@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { dashboardApi } from "../api/dashboard";
@@ -155,8 +155,29 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
 
+  // Scroll to top on mount + sau khi data render xong (loading → content shift).
+  // Layout có <main id="main-content" overflow-auto> → main IS scroll container
+  // ở desktop (window không scroll). Mobile dùng window scroll. Phải đụng cả 2.
+  // history.scrollRestoration='manual' để reload không restore scroll cũ.
+  useLayoutEffect(() => {
+    if (typeof history !== "undefined" && "scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
+    const main = document.getElementById("main-content");
+    if (main) main.scrollTop = 0;
+    window.scrollTo(0, 0);
+    // Defer 1 frame: data có thể async render (recent tasks, activity) đẩy
+    // page cao thêm sau initial paint → scroll lại để stick đầu trang.
+    const raf = requestAnimationFrame(() => {
+      const m = document.getElementById("main-content");
+      if (m) m.scrollTop = 0;
+      window.scrollTo(0, 0);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   useEffect(() => {
-    setBreadcrumbs([{ label: "Dashboard" }]);
+    setBreadcrumbs([{ label: "Dashboard", href: "/dashboard" }]);
   }, [setBreadcrumbs]);
 
   const { data, isLoading, error } = useQuery({
