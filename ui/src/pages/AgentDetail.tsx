@@ -980,6 +980,7 @@ export function AgentDetail() {
           agentRouteId={canonicalAgentRef}
           selectedRunId={urlRunId ?? null}
           adapterType={agent.adapterType}
+          allIssues={allIssues ?? []}
         />
       )}
 
@@ -1037,6 +1038,21 @@ function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentI
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : run.error ?? "";
 
+  // Derive issue from run's contextSnapshot (wake-context issueId) thay vì
+  // issues[0] (first assigned issue list). issues[0] có thể KHÁC issue mà
+  // run này thực sự touch — incident 28/04: latest run được wake by GEM-348
+  // nhưng issues[0] = GEM-308 → click "→ GEM-308" land sai issue.
+  const runContext = asRecord(run.contextSnapshot);
+  const runIssueId = runContext?.issueId as string | undefined;
+  const linkedRunIssue = runIssueId && issues
+    ? issues.find((i) => i.id === runIssueId || i.identifier === runIssueId)
+    : null;
+  const targetIssue = linkedRunIssue ?? (issues && issues.length > 0 ? issues[0] : null);
+  const targetIssuePath = targetIssue
+    ? `/${companyPrefix}/issues/${targetIssue.identifier ?? targetIssue.id}`
+    : `/${companyPrefix}/agents/${agentId}/runs/${run.id}`;
+  const targetIssueLabel = targetIssue?.identifier ?? (targetIssue?.id ? targetIssue.id.slice(0, 8) : null);
+
   return (
     <div className="space-y-3">
       <div className="flex w-full items-center justify-between">
@@ -1050,15 +1066,15 @@ function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentI
           {isLive ? "Live Run" : "Latest Run"}
         </h3>
         <Link
-          to={issues && issues.length > 0 ? `/${companyPrefix}/issues/${issues[0].identifier ?? issues[0].id}` : `/${companyPrefix}/agents/${agentId}/runs`}
+          to={targetIssue ? targetIssuePath : `/${companyPrefix}/agents/${agentId}/runs`}
           className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors no-underline"
         >
-          {issues && issues.length > 0 ? `${issues[0].identifier} →` : "View details →"}
+          {targetIssueLabel ? `${targetIssueLabel} →` : "View details →"}
         </Link>
       </div>
 
       <Link
-        to={issues && issues.length > 0 ? `/${companyPrefix}/issues/${issues[0].identifier ?? issues[0].id}` : `/${companyPrefix}/agents/${agentId}/runs/${run.id}`}
+        to={targetIssuePath}
         className={cn(
           "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
@@ -1737,8 +1753,9 @@ function CopyableFileRow({ name, path, size, missing }: { name: string; path?: s
 
 /* ---- Runs Tab ---- */
 
-function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
+function RunListItem({ run, isSelected, agentId, allIssues }: { run: HeartbeatRun; isSelected: boolean; agentId: string; allIssues?: { id: string; identifier?: string | null; title?: string }[] }) {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
+  const navigate = useNavigate();
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
@@ -1746,21 +1763,54 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : run.error ?? "";
 
+  const context = asRecord(run.contextSnapshot);
+  const issueId = context?.issueId as string | undefined;
+  const linkedIssue = issueId ? allIssues?.find(i => i.id === issueId) : null;
+  const issueIdentifier = linkedIssue?.identifier ?? issueId;
+
   return (
     <Link
       to={isSelected ? `/${companyPrefix}/agents/${agentId}/runs` : `/${companyPrefix}/agents/${agentId}/runs/${run.id}`}
       className={cn(
         "flex flex-col gap-1 w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors no-underline text-inherit",
-        isSelected ? "bg-accent/40" : "hover:bg-accent/20",
+        isSelected ? "bg-accent/80 ring-1 ring-border border-l-2 border-l-primary" : "hover:bg-accent/20",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 overflow-hidden">
         <StatusIcon className={cn("h-3.5 w-3.5 shrink-0", statusInfo.color, run.status === "running" && "animate-spin")} />
-        <span className="font-mono text-xs text-muted-foreground">
+        <span className="font-mono text-xs text-muted-foreground shrink-0">
           {run.id.slice(0, 8)}
         </span>
+        {issueId && (
+          // Badge GEM-XXX: dùng <button> + stopPropagation để bypass parent Link.
+          // Trước đây click badge → parent <Link> capture → navigate /runs/{run.id}
+          // → user phải click thêm 1 lần ở Issues Touched panel mới đến issue,
+          // và touched issues có thể KHÁC wake-context issue (incident 28/04:
+          // wake context GEM-348, run touched GEM-308 → click GEM-348 badge land
+          // ở GEM-308). Nested <a> trong <a> là invalid HTML — phải dùng button.
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (issueIdentifier) navigate(`/${companyPrefix}/issues/${issueIdentifier}`);
+            }}
+            className="flex items-center min-w-0 text-[10px] bg-accent/50 border border-border/50 px-1.5 py-0.5 rounded hover:bg-accent/80 hover:border-primary/40 transition-colors cursor-pointer"
+            title={linkedIssue ? `Mở issue ${linkedIssue.identifier ?? issueId} — ${linkedIssue.title}` : `Mở issue ${issueId}`}
+          >
+            <span className="shrink-0 font-medium text-foreground">
+              {linkedIssue?.identifier ?? issueId.slice(0, 8)}
+            </span>
+            {linkedIssue?.title && (
+              <>
+                <span className="shrink-0 mx-1 text-muted-foreground">-</span>
+                <span className="truncate text-muted-foreground">{linkedIssue.title}</span>
+              </>
+            )}
+          </button>
+        )}
         <span className={cn(
-          "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0",
+          "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0 ml-auto",
           run.invocationSource === "timer" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
             : run.invocationSource === "assignment" ? "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
             : run.invocationSource === "on_demand" ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
@@ -1768,7 +1818,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
         )}>
           {sourceLabels[run.invocationSource] ?? run.invocationSource}
         </span>
-        <span className="ml-auto text-[11px] text-muted-foreground shrink-0">
+        <span className="text-[11px] text-muted-foreground shrink-0">
           {relativeTime(run.createdAt)}
         </span>
       </div>
@@ -1794,6 +1844,7 @@ function RunsTab({
   agentRouteId,
   selectedRunId,
   adapterType,
+  allIssues,
 }: {
   runs: HeartbeatRun[];
   companyId: string;
@@ -1801,6 +1852,7 @@ function RunsTab({
   agentRouteId: string;
   selectedRunId: string | null;
   adapterType: string;
+  allIssues: any[];
 }) {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const { isMobile } = useSidebar();
@@ -1837,7 +1889,7 @@ function RunsTab({
     return (
       <div className="border border-border rounded-lg overflow-x-hidden">
         {sorted.map((run) => (
-          <RunListItem key={run.id} run={run} isSelected={false} agentId={agentRouteId} />
+          <RunListItem key={run.id} run={run} isSelected={false} agentId={agentRouteId} allIssues={allIssues} />
         ))}
       </div>
     );
@@ -1853,7 +1905,7 @@ function RunsTab({
       )}>
         <div className="sticky top-4 overflow-y-auto" style={{ maxHeight: "calc(100vh - 2rem)" }}>
         {sorted.map((run) => (
-          <RunListItem key={run.id} run={run} isSelected={run.id === effectiveRunId} agentId={agentRouteId} />
+          <RunListItem key={run.id} run={run} isSelected={run.id === effectiveRunId} agentId={agentRouteId} allIssues={allIssues} />
         ))}
         </div>
       </div>
