@@ -73,6 +73,46 @@ import DripStepHtmlEditor from './components/DripStepHtmlEditor';
 // Constants — Loại nội dung
 // ============================================================================
 
+// Strip phần "AI nói chuyện" (preamble + conclusion) khỏi generated body.
+// Gemini hay wrap kết quả bằng câu mở đầu ("Em sẽ bắt đầu đọc file...",
+// "Tuyệt vời, đây là...") + câu kết ("Hy vọng chị thích"). Filter các
+// pattern phổ biến — KHÔNG aggressive (chỉ match dòng đầu/cuối rõ ràng).
+const AI_PREAMBLE_PATTERNS = [
+  /^(em|tôi|ta)\s+(sẽ|đang|xin|đã|hiểu|sẵn sàng|bắt đầu)/i,
+  /^(tuyệt vời|tuyệt!|được|ok|okay|hiểu rồi|chào chị)/i,
+  /^(bắt đầu|trước tiên|đầu tiên|để bắt đầu|sau khi đọc|dựa trên|theo phân tích|theo yêu cầu|tiếp theo|kế tiếp)/i,
+  /^(đây là|sau đây là|dưới đây là)\s+(bài|nội dung|kịch bản|caption|báo cáo)/i,
+];
+const AI_CONCLUSION_PATTERNS = [
+  /^(hy vọng|mong rằng|em hy vọng|chị xem qua|em đợi|chờ phản hồi|chờ feedback|nếu chị|nếu cần)/i,
+  /^(chúc chị|chúc bạn|cảm ơn chị|thanks)/i,
+];
+function stripAiPreamble(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  // KHÔNG strip nếu là HTML doc (email-ready) hoặc quá ngắn
+  const trimmed = text.trim();
+  if (trimmed.length < 50) return trimmed;
+  if (/^<!DOCTYPE/i.test(trimmed) || /^<html/i.test(trimmed)) return trimmed;
+  const lines = text.split(/\r?\n/);
+  let start = 0;
+  while (start < lines.length) {
+    const ln = lines[start].trim();
+    if (!ln) { start++; continue; }
+    if (AI_PREAMBLE_PATTERNS.some((re) => re.test(ln))) { start++; continue; }
+    break;
+  }
+  let end = lines.length;
+  while (end > start) {
+    const ln = lines[end - 1].trim();
+    if (!ln) { end--; continue; }
+    if (AI_CONCLUSION_PATTERNS.some((re) => re.test(ln))) { end--; continue; }
+    break;
+  }
+  const result = lines.slice(start, end).join('\n').trim();
+  // Safety net: nếu strip lấy mất hết, trả nguyên bản
+  return result.length > 30 ? result : trimmed;
+}
+
 const OUTPUT_TYPE_OPTIONS = [
   { value: 'script_latc', label: 'Kịch Bản LATC', jobType: 'script', contentType: 'latc' },
   { value: 'script_tmt', label: 'Kịch Bản Thầy Minh Tuệ', jobType: 'script', contentType: 'tmt' },
@@ -2286,7 +2326,10 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
                         setImagePrompt(extractedImgPrompt);
                       }
                       
-                      setOutput(parsedBody);
+                      // Strip AI preamble/conclusion trước khi hiển thị Kết Quả.
+                      // AI hay leak câu mở "Em sẽ đọc file..." + "Tiếp theo, em sẽ..."
+                      // ra body — pollute output user-facing.
+                      setOutput(stripAiPreamble(parsedBody));
                       setGenerationDone?.(true);
                     } else {
                       setOutput(`✅ Job ${jid} completed nhưng không lấy được nội dung. Thử mở tab "Nội Dung" để check cc_scripts trực tiếp.`);
@@ -6825,7 +6868,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                     onChange={(e) => setEmailSender(e.target.value)}
                     className="fi text-sm w-full"
                   >
-                    <option value="Jennie Uyen Chu <hello@gemral.com>">Jennie Uyen Chu &lt;hello@gemral.com&gt;</option>
+                    <option value="Gemral <hello@gemral.com>">Gemral &lt;hello@gemral.com&gt;</option>
                     <option value="Jennie Uyen Chu <jennieuyenchu@gemral.com>">Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;</option>
                     <option value="Gemral <no_reply@gemral.com>">Gemral &lt;no_reply@gemral.com&gt;</option>
                     <option value="Gemral <info@gemral.com>">Gemral &lt;info@gemral.com&gt;</option>

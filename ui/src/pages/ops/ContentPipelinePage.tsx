@@ -208,13 +208,11 @@ export function ContentPipelinePage() {
   const total = stats?.total_scripts ?? 0;
 
   // ── drag helpers for blocks ──────────────────────────────────────────────────
-  const blockDragProps = (id: BlockId) => ({
-    draggable: true as const,
-    onDragStart: (e: React.DragEvent) => {
-      setDragBlock(id);
-      e.dataTransfer.effectAllowed = "move";
-    },
-    onDragEnd: () => { setDragBlock(null); setDragOverBlock(null); },
+  // Tách 2 set props để text-selection trong block không bị browser intercept
+  // thành drag-start. Wrapper CHỈ là drop-target, drag-source phải gắn vào
+  // handle ⠿ riêng. Trước đây wrapper có draggable=true → bôi text bất cứ
+  // đâu trong block đều trigger drag → user không bôi được. Incident 28/04.
+  const blockDropTargetProps = (id: BlockId) => ({
     onDragOver: (e: React.DragEvent) => { e.preventDefault(); setDragOverBlock(id); },
     onDragLeave: () => setDragOverBlock(null),
     onDrop: (e: React.DragEvent) => {
@@ -223,6 +221,16 @@ export function ContentPipelinePage() {
       setDragBlock(null); setDragOverBlock(null);
     },
   });
+  const blockDragSourceProps = (id: BlockId) => ({
+    draggable: true as const,
+    onDragStart: (e: React.DragEvent) => {
+      setDragBlock(id);
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragEnd: () => { setDragBlock(null); setDragOverBlock(null); },
+  });
+  // Backwards-compat alias — keep until all renderBlock cases migrated.
+  const blockDragProps = blockDropTargetProps;
 
   // Drag handle indicator style
   const blockWrapCls = (id: BlockId) =>
@@ -236,7 +244,7 @@ export function ContentPipelinePage() {
       case "publish-triggers":
         return (
           <div key={id} className={blockWrapCls(id)} {...blockDragProps(id)}>
-            <span className={dragHandleCls} title="Kéo để đổi vị trí">⠿</span>
+            <span className={dragHandleCls} title="Kéo để đổi vị trí" {...blockDragSourceProps(id)}>⠿</span>
             <Card className="p-3 border-primary/30 bg-gradient-to-br from-primary/5 to-transparent">
               <div className="flex items-center gap-2 mb-2">
                 <Play className="h-4 w-4 text-primary" />
@@ -284,7 +292,7 @@ export function ContentPipelinePage() {
       case "stats":
         return (
           <div key={id} className={blockWrapCls(id)} {...blockDragProps(id)}>
-            <span className={dragHandleCls} title="Kéo để đổi vị trí">⠿</span>
+            <span className={dragHandleCls} title="Kéo để đổi vị trí" {...blockDragSourceProps(id)}>⠿</span>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Card className="p-3 cursor-pointer hover:ring-2 hover:ring-primary/30 transition-all" onClick={() => setActiveTab("schedule")}>
                 <div className="text-xl font-bold text-center">{posted}/{target}</div>
@@ -327,7 +335,7 @@ export function ContentPipelinePage() {
       case "notion-sync":
         return (
           <div key={id} className={blockWrapCls(id)} {...blockDragProps(id)}>
-            <span className={dragHandleCls} title="Kéo để đổi vị trí">⠿</span>
+            <span className={dragHandleCls} title="Kéo để đổi vị trí" {...blockDragSourceProps(id)}>⠿</span>
             <NotionSyncCard />
           </div>
         );
@@ -335,7 +343,7 @@ export function ContentPipelinePage() {
       case "tab-nav":
         return (
           <div key={id} className={`${blockWrapCls(id)} space-y-0`} {...blockDragProps(id)}>
-            <span className={dragHandleCls} title="Kéo để đổi vị trí">⠿</span>
+            <span className={dragHandleCls} title="Kéo để đổi vị trí" {...blockDragSourceProps(id)}>⠿</span>
             {/* Tab bar — 2026-04-19 fix: dùng <a href> để right-click mở new tab/window được.
                 Drag-reorder chuyển qua handle "⋮⋮" riêng để không intercept click selection text. */}
             <div className="flex border-b">

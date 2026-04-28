@@ -48,6 +48,57 @@ function stripCodeFence(content: string): string {
   return trimmed;
 }
 
+// Strip phần "AI nói chuyện" (preamble + conclusion) khỏi content/title.
+// AI generation thường wrap content thực bằng câu mở đầu ("Em sẽ bắt đầu...",
+// "Tuyệt vời, đây là...") + câu kết ("Hy vọng chị thích", "Em đợi feedback").
+// Filter các pattern phổ biến — KHÔNG aggressive (chỉ match dòng đầu/cuối
+// rõ ràng là AI talking, không touch content thực).
+const AI_PREAMBLE_PATTERNS = [
+  /^(em|tôi|ta)\s+(sẽ|đang|xin|đã|hiểu|sẵn sàng|bắt đầu)/i,
+  /^(tuyệt vời|tuyệt!|được|ok|okay|hiểu rồi|chào chị)/i,
+  /^(bắt đầu|trước tiên|đầu tiên|để bắt đầu|sau khi đọc|dựa trên|theo phân tích|theo yêu cầu)/i,
+  /^(đây là|sau đây là|dưới đây là)\s+(bài|nội dung|kịch bản|caption)/i,
+];
+const AI_CONCLUSION_PATTERNS = [
+  /^(hy vọng|mong rằng|em hy vọng|chị xem qua|em đợi|chờ phản hồi|chờ feedback|nếu chị|nếu cần)/i,
+  /^(chúc chị|chúc bạn|cảm ơn chị|thanks)/i,
+  /^---\s*$/,  // markdown horizontal rule sau content thực
+];
+function stripAiPreamble(text: string): string {
+  if (!text) return '';
+  const lines = text.split(/\r?\n/);
+  // Strip leading AI talking lines until first non-AI paragraph
+  let start = 0;
+  while (start < lines.length) {
+    const ln = lines[start].trim();
+    if (!ln) { start++; continue; }  // skip blank
+    if (AI_PREAMBLE_PATTERNS.some(re => re.test(ln))) { start++; continue; }
+    break;
+  }
+  // Strip trailing AI conclusion lines
+  let end = lines.length;
+  while (end > start) {
+    const ln = lines[end - 1].trim();
+    if (!ln) { end--; continue; }
+    if (AI_CONCLUSION_PATTERNS.some(re => re.test(ln))) { end--; continue; }
+    break;
+  }
+  return lines.slice(start, end).join('\n').trim();
+}
+
+// Strip AI talking từ title — title thường là 1 dòng.
+// Pattern: "Đây là title: <real>", "Title: <real>", "Tiêu đề: <real>".
+function stripAiTitlePrefix(title: string): string {
+  if (!title) return '';
+  let t = title.trim();
+  // Remove common AI prefixes
+  t = t.replace(/^(đây là\s+)?(tiêu đề|title|chủ đề|headline)\s*[:\-—]\s*/i, '');
+  t = t.replace(/^(em|tôi|ta)\s+(đề xuất|gợi ý|đưa ra)\s*[:\-—]?\s*/i, '');
+  // Strip surrounding quotes
+  t = t.replace(/^["'""'']/, '').replace(/["'""'']$/, '');
+  return t.trim();
+}
+
 // Tách phần IMAGE_PROMPT ra khỏi nội dung email trước khi gửi
 function stripImagePrompt(html: string): string {
   // Dạng comment HTML: <!-- IMAGE_PROMPT: ... -->
@@ -136,7 +187,12 @@ function ScriptExpandedPanel({ script }: { script: any }) {
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const [mode, setMode] = useState<'preview' | 'edit'>('preview');
-  const [body, setBody] = useState(script.body || script.caption || script.content || '');
+  // Auto-strip AI preamble từ body + title khi load. Chị có thể override
+  // trong edit mode nếu strip nhầm.
+  const initialBody = stripAiPreamble(script.body || script.caption || script.content || '');
+  const initialTitle = stripAiTitlePrefix(script.title || '');
+  const [body, setBody] = useState(initialBody);
+  const [title, setTitle] = useState(initialTitle);
   const [saving, setSaving] = useState(false);
   const [reviewAgent, setReviewAgent] = useState('ceo');
   const [scheduleForm, setScheduleForm] = useState({ date: '', time: '10:00', account: 'profile_jennie' });
@@ -146,9 +202,10 @@ function ScriptExpandedPanel({ script }: { script: any }) {
   const [emailSending, setEmailSending] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Sync body when script id changes (e.g. different row expanded)
+  // Sync body + title when script id changes (e.g. different row expanded)
   useEffect(() => {
-    setBody(script.body || script.caption || script.content || '');
+    setBody(stripAiPreamble(script.body || script.caption || script.content || ''));
+    setTitle(stripAiTitlePrefix(script.title || ''));
     setEmailSubject(getEmailSubject(script));
   }, [script.id]);
 
@@ -157,7 +214,14 @@ function ScriptExpandedPanel({ script }: { script: any }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await opsApi.updateScript(script.id, { body });
+      // Save cả title VÀ body. Trước đây chỉ save body → title AI-generated
+      // sai vẫn nguyên xi → push thẳng Notion → wrong headline.
+      const payload: Record<string, any> = { body };
+      const trimmedTitle = title.trim();
+      if (trimmedTitle && trimmedTitle !== (script.title || '').trim()) {
+        payload.title = trimmedTitle;
+      }
+      await opsApi.updateScript(script.id, payload);
       inv();
       pushToast({ title: 'Đã lưu nội dung', tone: 'success' });
     } catch {
@@ -346,12 +410,33 @@ function ScriptExpandedPanel({ script }: { script: any }) {
           </div>
         )
       ) : (
-        <textarea
-          value={body}
-          onChange={e => setBody(e.target.value)}
-          className="w-full min-h-[300px] p-4 font-mono text-sm border rounded-lg resize-y bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
-          placeholder="Nhập nội dung..."
-        />
+        <div className="space-y-2">
+          {/* Title editable — trước đây không edit được → AI-generated title sai
+              vẫn được push thẳng vào Notion. Giờ chị có thể fix trước khi Lưu. */}
+          <div>
+            <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">
+              Tiêu đề
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-medium border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+              placeholder="Nhập tiêu đề..."
+            />
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">
+              Nội dung
+            </label>
+            <textarea
+              value={body}
+              onChange={e => setBody(e.target.value)}
+              className="w-full min-h-[300px] p-4 font-mono text-sm border rounded-lg resize-y bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+              placeholder="Nhập nội dung..."
+            />
+          </div>
+        </div>
       )}
 
       {/* Hình ảnh đính kèm */}
