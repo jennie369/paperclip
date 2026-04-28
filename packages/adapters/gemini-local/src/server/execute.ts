@@ -685,6 +685,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
     } catch { /* spawn fail — skip silent */ }
   }
+  // Postgres JSONB không chứa được NUL byte và reject \\uXXXX không hợp lệ —
+  // strip cả hai trước khi memoryPrefix chảy vào prompt (claude-mem observation
+  // dump có thể nhúng NUL từ raw blobs → run fail "unsupported Unicode escape sequence").
+  memoryPrefix = memoryPrefix
+    .replace(/\x00/g, "")
+    .replace(/\\u(?![0-9a-fA-F]{4})/g, "\\\\u");
   // Prepend memory TRƯỚC instructions để agent đọc context trước rules.
   instructionsPrefix = memoryPrefix + instructionsPrefix;
   const commandNotes = (() => {
