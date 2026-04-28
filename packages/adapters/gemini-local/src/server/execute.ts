@@ -30,6 +30,7 @@ import { DEFAULT_GEMINI_LOCAL_MODEL } from "../index.js";
 import {
   describeGeminiFailure,
   detectGeminiAuthRequired,
+  detectGeminiQuotaExhausted,
   isGeminiTurnLimitResult,
   isGeminiUnknownSessionError,
   parseGeminiJsonl,
@@ -407,7 +408,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
   );
   const command = asString(config.command, "gemini");
-  const model = asString(config.model, DEFAULT_GEMINI_LOCAL_MODEL).trim();
+  // `let` (not `const`) — model có thể bị đổi runtime sang fallback khi
+  // Pro hit quota 429. Closure trong buildArgs/toResult đọc giá trị mới.
+  let model = asString(config.model, DEFAULT_GEMINI_LOCAL_MODEL).trim();
   const sandbox = asBoolean(config.sandbox, false);
 
   const workspaceContext = parseObject(context.paperclipWorkspace);
@@ -978,6 +981,34 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     );
     const retry = await runAttempt(null);
     return toResult(retry, true, true);
+  }
+
+  // Quota fallback: nếu Gemini API trả 429/quota_exhausted trên model hiện tại
+  // (auto/Pro), thử lại đúng 1 lần với gemini-2.5-flash (quota cao hơn).
+  // Bỏ qua nếu agent đã chạy Flash hoặc Flash-lite — không có model nhỏ hơn để fallback.
+  const QUOTA_FALLBACK_MODEL = "gemini-2.5-flash";
+  const isAlreadyFallbackTier = model === QUOTA_FALLBACK_MODEL || model === "gemini-2.5-flash-lite";
+  if (
+    !initial.proc.timedOut &&
+    (initial.proc.exitCode ?? 0) !== 0 &&
+    !isAlreadyFallbackTier
+  ) {
+    const quotaCheck = detectGeminiQuotaExhausted({
+      parsed: initial.parsed.resultEvent,
+      stdout: initial.proc.stdout,
+      stderr: initial.proc.stderr,
+    });
+    if (quotaCheck.exhausted) {
+      const previousModel = model || DEFAULT_GEMINI_LOCAL_MODEL;
+      await onLog(
+        "stdout",
+        `[paperclip] Gemini quota exhausted on "${previousModel}" — retrying once with ${QUOTA_FALLBACK_MODEL} (fresh session).\n`,
+      );
+      model = QUOTA_FALLBACK_MODEL;
+      // Fresh session: session state không guarantee portable cross-model.
+      const fallback = await runAttempt(null);
+      return toResult(fallback, true, true);
+    }
   }
 
   return toResult(initial);
