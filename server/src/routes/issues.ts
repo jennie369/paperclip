@@ -1185,6 +1185,31 @@ export function issueRoutes(db: Db, storage: StorageService) {
       issue.status !== "backlog" &&
       req.body.status !== undefined;
 
+    // Layer 1 lesson-loop hook (2026-04-28): detect issue close transition
+    // (open → done/cancelled). Heartbeat Section 0.7 polls /api/issues for
+    // recently-closed assigned issues every tick and distills lessons → 3
+    // SSOT files. Layer 1 = observability log only (NO eager wake — that
+    // would burn LLM quota for every close event). Future Layer 1.5 can
+    // upgrade này thành queue table với audit trail / cross-agent fan-out.
+    const isClosingTransition =
+      existing.status !== "done" &&
+      existing.status !== "cancelled" &&
+      (issue.status === "done" || issue.status === "cancelled");
+    if (isClosingTransition && issue.assigneeAgentId) {
+      logger.info(
+        {
+          issueId: issue.id,
+          identifier: issue.identifier,
+          agentId: issue.assigneeAgentId,
+          oldStatus: existing.status,
+          newStatus: issue.status,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+        },
+        "[lesson-loop] issue closed — extraction will trigger on assignee's next heartbeat (Section 0.7 of HEARTBEAT.md)",
+      );
+    }
+
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
     void (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
@@ -1340,8 +1365,14 @@ export function issueRoutes(db: Db, storage: StorageService) {
       }
     }
 
-    if (req.actor.type === "agent" && req.actor.agentId !== req.body.agentId) {
-      res.status(403).json({ error: "Agent can only checkout as itself" });
+    // When an authenticated agent calls checkout, always use the identity from
+    // the JWT token — not what the agent claims in the body. This prevents
+    // agents from accidentally (or intentionally) checking out as another agent.
+    // Board users must still supply agentId explicitly.
+    if (req.actor.type === "agent" && req.actor.agentId) {
+      req.body.agentId = req.actor.agentId;
+    } else if (!req.body.agentId) {
+      res.status(400).json({ error: "agentId is required" });
       return;
     }
 
