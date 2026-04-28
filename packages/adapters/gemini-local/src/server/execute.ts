@@ -986,11 +986,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Quota fallback: nếu Gemini API trả 429/quota_exhausted trên model hiện tại
   // (auto/Pro), thử lại đúng 1 lần với gemini-2.5-flash (quota cao hơn).
   // Bỏ qua nếu agent đã chạy Flash hoặc Flash-lite — không có model nhỏ hơn để fallback.
+  // 2026-04-28 FIX: drop `exitCode !== 0` requirement — Gemini CLI internal
+  // retry có thể exit 0 dù API fail (CLI's gaxios backoff). Detector đã rất
+  // specific (regex `\b429\b|quota|resource_exhausted`) nên match=true đủ
+  // signal để fallback. Pre-fix incident: chị thấy "No capacity available
+  // for model gemini-3.1-pro-preview" 429 nhưng fallback không fire vì
+  // CLI exit 0.
   const QUOTA_FALLBACK_MODEL = "gemini-2.5-flash";
   const isAlreadyFallbackTier = model === QUOTA_FALLBACK_MODEL || model === "gemini-2.5-flash-lite";
   if (
     !initial.proc.timedOut &&
-    (initial.proc.exitCode ?? 0) !== 0 &&
     !isAlreadyFallbackTier
   ) {
     const quotaCheck = detectGeminiQuotaExhausted({
