@@ -8,7 +8,7 @@ import { useAutosaveIndicator } from "../hooks/useAutosaveIndicator";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
 import { MarkdownBody } from "./MarkdownBody";
-import { MarkdownEditor, type MentionOption } from "./MarkdownEditor";
+import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,7 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, MoreHorizontal, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, MoreHorizontal, Plus, Trash2, X, Pencil } from "lucide-react";
 
 type DraftState = {
   key: string;
@@ -125,6 +125,8 @@ export function IssueDocumentsSection({
   const [selectedRevisionIds, setSelectedRevisionIds] = useState<Record<string, string | null>>({});
   const autosaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copiedDocumentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorRefsMap = useRef(new Map<string, MarkdownEditorRef>());
+  const pendingFocusKeyRef = useRef<string | null>(null);
   const hasScrolledToHashRef = useRef(false);
   const {
     state: autosaveState,
@@ -235,6 +237,11 @@ export function IssueDocumentsSection({
       isNew: true,
     });
     setError(null);
+  };
+
+  const beginEditAndFocus = (key: string) => {
+    pendingFocusKeyRef.current = key;
+    beginEdit(key);
   };
 
   const beginEdit = (key: string) => {
@@ -559,6 +566,16 @@ export function IssueDocumentsSection({
   }, []);
 
   useEffect(() => {
+    const pendingKey = pendingFocusKeyRef.current;
+    if (!pendingKey || !draft || draft.key !== pendingKey || draft.isNew) return;
+    pendingFocusKeyRef.current = null;
+    const editorRef = editorRefsMap.current.get(pendingKey);
+    if (editorRef) {
+      requestAnimationFrame(() => editorRef.focus());
+    }
+  }, [draft]);
+
+  useEffect(() => {
     if (!draft || draft.isNew) return;
     if (documentConflict?.key === draft.key) return;
     const existing = sortedDocuments.find((doc) => doc.key === draft.key);
@@ -797,16 +814,27 @@ export function IssueDocumentsSection({
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>
-                    <a
-                      href={`#document-${encodeURIComponent(doc.key)}`}
-                      className="truncate text-[11px] text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                    <span
+                      className="truncate text-[11px] text-muted-foreground"
+                      title={`Document key: ${doc.key}`}
                     >
                       updated {relativeTime(displayedUpdatedAt)}
-                    </a>
+                    </span>
                   </div>
                   {showTitle && <p className="mt-2 text-sm font-medium">{displayedTitle}</p>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  {!isHistoricalPreview && !activeDraft && !activeConflict && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="text-muted-foreground transition-colors hover:text-foreground"
+                      title="Edit document"
+                      onClick={() => beginEditAndFocus(doc.key)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon-xs"
@@ -988,16 +1016,18 @@ export function IssueDocumentsSection({
                     />
                   )}
                   <div
-                    className={`${documentBodyShellClassName} ${documentBodyPaddingClassName} ${
-                      activeDraft || isHistoricalPreview ? "" : "hover:bg-accent/10"
-                    }`}
+                    className={`${documentBodyShellClassName} ${documentBodyPaddingClassName}`}
                   >
                     {isHistoricalPreview ? (
                       <div className="rounded-md border border-amber-500/20 bg-background/50 p-3">
                         {renderBody(displayedBody, documentBodyContentClassName)}
                       </div>
-                    ) : (
+                    ) : activeDraft ? (
                       <MarkdownEditor
+                        ref={(editorRef) => {
+                          if (editorRef) editorRefsMap.current.set(doc.key, editorRef);
+                          else editorRefsMap.current.delete(doc.key);
+                        }}
                         value={displayedBody}
                         onChange={(body) => {
                           markDocumentDirty(doc.key);
@@ -1022,6 +1052,10 @@ export function IssueDocumentsSection({
                         imageUploadHandler={imageUploadHandler}
                         onSubmit={() => void commitDraft(activeDraft ?? draft, { clearAfterSave: false, trackAutosave: true })}
                       />
+                    ) : (
+                      <div>
+                        {renderBody(displayedBody, documentBodyContentClassName)}
+                      </div>
                     )}
                   </div>
                   <div className="flex min-h-4 items-center justify-end px-1">
