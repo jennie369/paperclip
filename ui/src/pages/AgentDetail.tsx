@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
 import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type AgentKey, type ClaudeLoginResult, type AvailableSkill } from "../api/agents";
@@ -465,6 +465,27 @@ export function AgentDetail() {
     tab?: string;
     runId?: string;
   }>();
+
+  // Scroll to top on mount + sau khi data render xong (loading → content shift).
+  // Layout có <main id="main-content" overflow-auto> → main IS scroll container
+  // ở desktop (window không scroll). Mobile dùng window scroll. Phải đụng cả 2.
+  // history.scrollRestoration='manual' để reload không restore scroll cũ.
+  useLayoutEffect(() => {
+    if (typeof history !== "undefined" && "scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
+    const main = document.getElementById("main-content");
+    if (main) main.scrollTop = 0;
+    window.scrollTo(0, 0);
+    // Defer 1 frame: data có thể async render (latest run, charts, recent issues)
+    // đẩy page cao thêm sau initial paint → scroll lại để stick đầu trang.
+    const raf = requestAnimationFrame(() => {
+      const m = document.getElementById("main-content");
+      if (m) m.scrollTop = 0;
+      window.scrollTo(0, 0);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [agentId]);
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { closePanel } = usePanel();
   const { openNewIssue } = useDialog();
