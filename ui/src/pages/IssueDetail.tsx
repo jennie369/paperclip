@@ -776,7 +776,11 @@ export function IssueDetail() {
 
   useEffect(() => {
     const titleLabel = issue?.title ?? issueId ?? "Issue";
+    const identifierLabel = issue?.identifier ?? issueId ?? null;
     const crumbs = [sourceBreadcrumb];
+    if (identifierLabel) {
+      crumbs.push({ label: identifierLabel, badge: true });
+    }
     if (issue?.assigneeAgentId) {
       const agent = agents?.find((a) => a.id === issue.assigneeAgentId);
       if (agent) {

@@ -3,6 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 export interface Breadcrumb {
   label: string;
   href?: string;
+  /** Render this crumb as a monospace pill badge (e.g. issue identifier "GEM-388"). */
+  badge?: boolean;
 }
 
 interface BreadcrumbContextValue {

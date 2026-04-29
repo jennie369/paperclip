@@ -70,12 +70,19 @@ export function BreadcrumbBar() {
 
   // Single breadcrumb = page title (uppercase)
   if (breadcrumbs.length === 1) {
+    const crumb = breadcrumbs[0];
     return (
       <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center">
         {menuButton}
         <div className="min-w-0 overflow-hidden flex-1">
           <h1 className="text-sm font-semibold uppercase tracking-wider truncate">
-            {breadcrumbs[0].label}
+            {crumb.href ? (
+              <Link to={crumb.href} className="hover:underline text-inherit no-underline">
+                {crumb.label}
+              </Link>
+            ) : (
+              crumb.label
+            )}
           </h1>
         </div>
         {globalToolbarSlots}
@@ -84,6 +91,8 @@ export function BreadcrumbBar() {
   }
 
   // Multiple breadcrumbs = breadcrumb trail
+  const badgeClass =
+    "inline-flex items-center rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[11px] font-medium tracking-tight text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors";
   return (
     <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center">
       {menuButton}
@@ -96,7 +105,15 @@ export function BreadcrumbBar() {
                 <Fragment key={i}>
                   {i > 0 && <BreadcrumbSeparator />}
                   <BreadcrumbItem className={isLast ? "min-w-0" : "shrink-0"}>
-                    {isLast || !crumb.href ? (
+                    {crumb.badge ? (
+                      crumb.href ? (
+                        <Link to={crumb.href} className={badgeClass}>
+                          {crumb.label}
+                        </Link>
+                      ) : (
+                        <span className={badgeClass}>{crumb.label}</span>
+                      )
+                    ) : isLast || !crumb.href ? (
                       <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
                     ) : (
                       <BreadcrumbLink asChild>
