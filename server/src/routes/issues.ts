@@ -34,7 +34,7 @@ import {
   workProductService,
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
-import { forbidden, HttpError, unauthorized } from "../errors.js";
+import { forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
@@ -197,6 +197,9 @@ export function issueRoutes(db: Db, storage: StorageService) {
       if (issue) {
         return issue.id;
       }
+      // shortId-shaped but not found → emit clean 404 instead of bubbling SQL error
+      // when downstream getById() runs WHERE issues.id=$1 with a non-UUID value.
+      throw notFound(`Issue not found: ${rawId}`);
     }
     return rawId;
   }
@@ -1902,6 +1905,11 @@ export function issueRoutes(db: Db, storage: StorageService) {
     const limit = Math.min(parseInt(String(req.query.limit || "10"), 10) || 10, 50);
     if (!agentId) {
       res.status(400).json({ error: "agent_id required" });
+      return;
+    }
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(agentId)) {
+      res.status(400).json({ error: "agent_id must be a UUID, not a slug. Fetch your agent UUID from /api/agents first." });
       return;
     }
     try {
