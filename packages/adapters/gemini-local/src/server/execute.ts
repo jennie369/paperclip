@@ -12,6 +12,8 @@ import {
   asString,
   asStringArray,
   buildPaperclipEnv,
+  synthesizeSpawnIdentity,
+  writeSpawnContextManifest,
   buildInvocationEnvForLogs,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
@@ -448,7 +450,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
     typeof envConfig.PAPERCLIP_API_KEY === "string" && envConfig.PAPERCLIP_API_KEY.trim().length > 0;
-  const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
+  const spawnIdentity = synthesizeSpawnIdentity(
+    agent as { id: string; companyId: string; name?: string | null; role?: string | null; title?: string | null; icon?: string | null },
+    context as unknown as Record<string, unknown>,
+    runId,
+  );
+  const env: Record<string, string> = { ...buildPaperclipEnv(agent, spawnIdentity) };
   env.PAPERCLIP_RUN_ID = runId;
   const wakeTaskId =
     (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
@@ -498,6 +505,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // we must explicitly clear this var so the agent does not inherit the server's own key.
     env.PAPERCLIP_API_KEY = "";
   }
+  // Drop spawn context manifest in cwd so agent can read full identity from one
+  // file (eliminates per-spawn API round-trips for agent name, role, issue
+  // identifier). See packages/adapter-utils server-utils writeSpawnContextManifest.
+  await writeSpawnContextManifest(cwd, spawnIdentity, env.PAPERCLIP_API_KEY ?? null);
   const effectiveEnv = Object.fromEntries(
     Object.entries({ ...process.env, ...env }).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",

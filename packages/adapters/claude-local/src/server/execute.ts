@@ -23,6 +23,8 @@ import {
   resolveCommandForLogs,
   renderTemplate,
   runChildProcess,
+  synthesizeSpawnIdentity,
+  writeSpawnContextManifest,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   parseClaudeStreamJson,
@@ -147,7 +149,16 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
   const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
     typeof envConfig.PAPERCLIP_API_KEY === "string" && envConfig.PAPERCLIP_API_KEY.trim().length > 0;
-  const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
+  // Synthesize full spawn identity from heartbeat context (denormalized
+  // upstream by services/heartbeat.ts so we don't re-query DB here). Lets the
+  // agent skip "GET /api/agents/me" + "GET /api/issues/{id}" round-trips at
+  // every spawn — env vars + manifest file already have the answers.
+  const spawnIdentity = synthesizeSpawnIdentity(
+    agent as { id: string; companyId: string; name?: string | null; role?: string | null; title?: string | null; icon?: string | null },
+    context as unknown as Record<string, unknown>,
+    runId,
+  );
+  const env: Record<string, string> = { ...buildPaperclipEnv(agent, spawnIdentity) };
   env.PAPERCLIP_RUN_ID = runId;
 
   const wakeTaskId =
@@ -236,9 +247,18 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
     if (typeof value === "string") env[key] = value;
   }
 
-  if (!hasExplicitApiKey && authToken) {
+  if (authToken) {
     env.PAPERCLIP_API_KEY = authToken;
+  } else if (!hasExplicitApiKey) {
+    // Prevent parent process PAPERCLIP_API_KEY from leaking into the agent subprocess.
+    env.PAPERCLIP_API_KEY = "";
   }
+
+  // Write the spawn context manifest to cwd so the agent can `cat
+  // .paperclip-spawn-context.json` once and skip per-spawn identity API calls
+  // (eliminates 3-4 round-trip GET requests every heartbeat). Non-fatal if
+  // write fails — env vars carry the same data as fallback.
+  await writeSpawnContextManifest(cwd, spawnIdentity, env.PAPERCLIP_API_KEY ?? null);
 
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
   await ensureCommandResolvable(command, cwd, runtimeEnv);

@@ -228,7 +228,48 @@ export function buildInvocationEnvForLogs(
   return redactEnvForLogs(merged);
 }
 
-export function buildPaperclipEnv(agent: { id: string; companyId: string }): Record<string, string> {
+/**
+ * Spawn-time identity context. Lets adapters inject everything an agent needs
+ * to know about itself + its current task without making round-trip API calls
+ * (eliminates the "Step 1: GET /api/agents/me" pattern).
+ */
+export interface SpawnIdentityContext {
+  agent: {
+    id: string;
+    companyId: string;
+    name?: string | null;
+    role?: string | null;
+    title?: string | null;
+    icon?: string | null;
+  };
+  company?: {
+    id: string;
+    name?: string | null;
+    issuePrefix?: string | null;
+  } | null;
+  issue?: {
+    id: string;
+    identifier?: string | null;
+    title?: string | null;
+    status?: string | null;
+    priority?: string | null;
+    parentId?: string | null;
+    assigneeAgentId?: string | null;
+    projectId?: string | null;
+  } | null;
+  run?: {
+    id?: string | null;
+    wakeReason?: string | null;
+    wakeCommentId?: string | null;
+    approvalId?: string | null;
+    taskId?: string | null;
+  } | null;
+}
+
+export function buildPaperclipEnv(
+  agent: { id: string; companyId: string; name?: string | null; role?: string | null; title?: string | null; icon?: string | null },
+  identity?: Omit<SpawnIdentityContext, "agent">,
+): Record<string, string> {
   const resolveHostForUrl = (rawHost: string): string => {
     const host = rawHost.trim();
     if (!host || host === "0.0.0.0" || host === "::") return "localhost";
@@ -250,6 +291,33 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string }): Rec
     PYTHONIOENCODING: "utf-8",
     PYTHONUTF8: "1",
   };
+  // Agent identity vars (so agent doesn't need GET /api/agents/me at spawn).
+  if (agent.name) vars.PAPERCLIP_AGENT_NAME = agent.name;
+  if (agent.role) vars.PAPERCLIP_AGENT_ROLE = agent.role;
+  if (agent.title) vars.PAPERCLIP_AGENT_TITLE = agent.title;
+  if (agent.icon) vars.PAPERCLIP_AGENT_ICON = agent.icon;
+  // Company prefix (so agent can construct issue URLs like /GEM/issues/GEM-378).
+  if (identity?.company?.issuePrefix) vars.PAPERCLIP_COMPANY_PREFIX = identity.company.issuePrefix;
+  if (identity?.company?.name) vars.PAPERCLIP_COMPANY_NAME = identity.company.name;
+  // Issue context vars (so agent doesn't need GET /api/issues/{id} for the
+  // task assignment that triggered this spawn).
+  const issue = identity?.issue;
+  if (issue) {
+    vars.PAPERCLIP_ISSUE_ID = issue.id;
+    if (issue.identifier) vars.PAPERCLIP_ISSUE_IDENTIFIER = issue.identifier;
+    if (issue.title) vars.PAPERCLIP_ISSUE_TITLE = issue.title;
+    if (issue.status) vars.PAPERCLIP_ISSUE_STATUS = issue.status;
+    if (issue.priority) vars.PAPERCLIP_ISSUE_PRIORITY = issue.priority;
+    if (issue.assigneeAgentId) vars.PAPERCLIP_ISSUE_ASSIGNEE_AGENT_ID = issue.assigneeAgentId;
+    if (issue.projectId) vars.PAPERCLIP_ISSUE_PROJECT_ID = issue.projectId;
+    if (issue.parentId) vars.PAPERCLIP_ISSUE_PARENT_ID = issue.parentId;
+  }
+  const run = identity?.run;
+  if (run?.id) vars.PAPERCLIP_RUN_ID = run.id;
+  if (run?.wakeReason) vars.PAPERCLIP_WAKE_REASON = run.wakeReason;
+  if (run?.wakeCommentId) vars.PAPERCLIP_WAKE_COMMENT_ID = run.wakeCommentId;
+  if (run?.approvalId) vars.PAPERCLIP_APPROVAL_ID = run.approvalId;
+  if (run?.taskId) vars.PAPERCLIP_TASK_ID = run.taskId;
   const runtimeHost = resolveHostForUrl(
     process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost",
   );
@@ -276,6 +344,132 @@ async function pathExists(candidate: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Builds a SpawnIdentityContext from an agent record + the heartbeat-context
+ * snapshot already populated by services/heartbeat.ts. Reusable across all
+ * adapters so each one doesn't reimplement the same field plucking.
+ */
+export function synthesizeSpawnIdentity(
+  agent: { id: string; companyId: string; name?: string | null; role?: string | null; title?: string | null; icon?: string | null },
+  context: Record<string, unknown>,
+  runId: string,
+): SpawnIdentityContext {
+  const pickString = (value: unknown): string | null => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+  const issueId = pickString(context.issueId);
+  return {
+    agent: {
+      id: agent.id,
+      companyId: agent.companyId,
+      name: agent.name ?? null,
+      role: agent.role ?? null,
+      title: agent.title ?? null,
+      icon: agent.icon ?? null,
+    },
+    company: {
+      id: agent.companyId,
+      name: pickString(context.companyName),
+      issuePrefix: pickString(context.companyPrefix),
+    },
+    issue: issueId
+      ? {
+          id: issueId,
+          identifier: pickString(context.issueIdentifier),
+          title: pickString(context.issueTitle),
+          status: pickString(context.issueStatus),
+          priority: pickString(context.issuePriority),
+          parentId: pickString(context.issueParentId),
+          assigneeAgentId: pickString(context.issueAssigneeAgentId),
+          projectId: pickString(context.issueProjectId),
+        }
+      : null,
+    run: {
+      id: runId,
+      wakeReason: pickString(context.wakeReason),
+      wakeCommentId: pickString(context.wakeCommentId) ?? pickString(context.commentId),
+      approvalId: pickString(context.approvalId),
+      taskId: pickString(context.taskId) ?? issueId,
+    },
+  };
+}
+
+/**
+ * Drops a `.paperclip-spawn-context.json` file in the spawn cwd containing
+ * the full identity + task context for the agent. Lets agents `cat` ONE file
+ * to know everything (eliminates 3-4 round-trip API lookups per heartbeat
+ * for agent name, role, issue identifier, etc.).
+ *
+ * Safe-by-design: file is overwritten on every spawn, contains only data
+ * the agent already has access to via API, but presented atomically.
+ */
+export async function writeSpawnContextManifest(
+  cwd: string,
+  identity: SpawnIdentityContext,
+  apiKey: string | null,
+): Promise<void> {
+  if (!cwd) return;
+  const manifest = {
+    schema: "paperclip-spawn-context/v1",
+    spawnedAt: new Date().toISOString(),
+    agent: {
+      id: identity.agent.id,
+      companyId: identity.agent.companyId,
+      name: identity.agent.name ?? null,
+      role: identity.agent.role ?? null,
+      title: identity.agent.title ?? null,
+      icon: identity.agent.icon ?? null,
+    },
+    company: identity.company
+      ? {
+          id: identity.company.id,
+          name: identity.company.name ?? null,
+          issuePrefix: identity.company.issuePrefix ?? null,
+        }
+      : null,
+    issue: identity.issue
+      ? {
+          id: identity.issue.id,
+          identifier: identity.issue.identifier ?? null,
+          title: identity.issue.title ?? null,
+          status: identity.issue.status ?? null,
+          priority: identity.issue.priority ?? null,
+          parentId: identity.issue.parentId ?? null,
+          assigneeAgentId: identity.issue.assigneeAgentId ?? null,
+          projectId: identity.issue.projectId ?? null,
+        }
+      : null,
+    run: identity.run
+      ? {
+          id: identity.run.id ?? null,
+          wakeReason: identity.run.wakeReason ?? null,
+          wakeCommentId: identity.run.wakeCommentId ?? null,
+          approvalId: identity.run.approvalId ?? null,
+          taskId: identity.run.taskId ?? null,
+        }
+      : null,
+    auth: {
+      apiUrl:
+        process.env.PAPERCLIP_API_URL ??
+        `http://${process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost"}:${process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3100"}`,
+      hasApiKey: Boolean(apiKey && apiKey.trim().length > 0),
+      runIdHeader: identity.run?.id ?? null,
+    },
+  };
+  const target = path.join(cwd, ".paperclip-spawn-context.json");
+  try {
+    await fs.writeFile(target, JSON.stringify(manifest, null, 2) + "\n", { encoding: "utf8" });
+  } catch (err) {
+    // Non-fatal — env vars still carry the same data; manifest is convenience.
+    // Log via stderr but don't block spawn.
+    process.stderr.write(
+      `[paperclip] writeSpawnContextManifest failed for ${target}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
   }
 }
 

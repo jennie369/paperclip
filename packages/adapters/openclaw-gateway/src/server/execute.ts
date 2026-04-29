@@ -3,7 +3,7 @@ import type {
   AdapterExecutionResult,
   AdapterRuntimeServiceReport,
 } from "@paperclipai/adapter-utils";
-import { asNumber, asString, buildPaperclipEnv, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import { asNumber, asString, buildPaperclipEnv, parseObject, synthesizeSpawnIdentity } from "@paperclipai/adapter-utils/server-utils";
 import crypto, { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
@@ -315,8 +315,16 @@ function resolvePaperclipApiUrlOverride(value: unknown): string | null {
 
 function buildPaperclipEnvForWake(ctx: AdapterExecutionContext, wakePayload: WakePayload): Record<string, string> {
   const paperclipApiUrlOverride = resolvePaperclipApiUrlOverride(ctx.config.paperclipApiUrl);
+  // Same spawn identity synthesis as local adapters — gives openclaw remote
+  // agents the same PAPERCLIP_AGENT_NAME / ROLE / ISSUE_IDENTIFIER env vars
+  // so they don't need to GET /api/agents/me at every wake.
+  const spawnIdentity = synthesizeSpawnIdentity(
+    ctx.agent as { id: string; companyId: string; name?: string | null; role?: string | null; title?: string | null; icon?: string | null },
+    ctx.context as unknown as Record<string, unknown>,
+    ctx.runId,
+  );
   const paperclipEnv: Record<string, string> = {
-    ...buildPaperclipEnv(ctx.agent),
+    ...buildPaperclipEnv(ctx.agent, spawnIdentity),
     PAPERCLIP_RUN_ID: ctx.runId,
   };
 

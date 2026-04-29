@@ -1914,7 +1914,23 @@ export function heartbeatService(db: Db) {
         continue;
       }
 
-      const shouldRetry = tracksLocalChild && !!run.processPid && (run.processLossRetryCount ?? 0) < 1;
+      let shouldRetry = tracksLocalChild && !!run.processPid && (run.processLossRetryCount ?? 0) < 1;
+
+      // Skip retry if the assigned issue is already done/cancelled — work was committed before the crash
+      if (shouldRetry) {
+        const contextIssueId = readNonEmptyString(parseObject(run.contextSnapshot).issueId);
+        if (contextIssueId) {
+          const issueStatus = await db
+            .select({ status: issues.status })
+            .from(issues)
+            .where(and(eq(issues.id, contextIssueId), eq(issues.companyId, run.companyId)))
+            .then((rows) => rows[0]?.status ?? null);
+          if (issueStatus === "done" || issueStatus === "cancelled") {
+            shouldRetry = false;
+          }
+        }
+      }
+
       const baseMessage = run.processPid
         ? `Process lost -- child pid ${run.processPid} is no longer running`
         : "Process lost -- server may have restarted";
@@ -2113,6 +2129,9 @@ export function heartbeatService(db: Db) {
             id: issues.id,
             identifier: issues.identifier,
             title: issues.title,
+            status: issues.status,
+            priority: issues.priority,
+            parentId: issues.parentId,
             projectId: issues.projectId,
             projectWorkspaceId: issues.projectWorkspaceId,
             executionWorkspaceId: issues.executionWorkspaceId,
@@ -2125,6 +2144,30 @@ export function heartbeatService(db: Db) {
           .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
           .then((rows) => rows[0] ?? null)
       : null;
+    // Lookup company prefix for spawn context (lets agent construct issue URLs
+    // like /GEM/issues/GEM-378 without an extra API call).
+    const companyContext = await db
+      .select({ id: companies.id, name: companies.name, issuePrefix: companies.issuePrefix })
+      .from(companies)
+      .where(eq(companies.id, agent.companyId))
+      .then((rows) => rows[0] ?? null);
+    // Augment heartbeat context with denormalized identity fields so adapter
+    // execute() can synthesize PAPERCLIP_* env vars + spawn manifest without
+    // re-querying the DB. Keeps existing context.* fields untouched for
+    // backward compat with adapters that haven't migrated yet.
+    if (issueContext) {
+      context.issueIdentifier = issueContext.identifier ?? null;
+      context.issueTitle = issueContext.title ?? null;
+      context.issueStatus = issueContext.status ?? null;
+      context.issuePriority = issueContext.priority ?? null;
+      context.issueParentId = issueContext.parentId ?? null;
+      context.issueAssigneeAgentId = issueContext.assigneeAgentId ?? null;
+      context.issueProjectId = issueContext.projectId ?? null;
+    }
+    if (companyContext) {
+      context.companyName = companyContext.name ?? null;
+      context.companyPrefix = companyContext.issuePrefix ?? null;
+    }
     const issueAssigneeOverrides =
       issueContext && issueContext.assigneeAgentId === agent.id
         ? parseIssueAssigneeAdapterOverrides(
