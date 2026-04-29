@@ -1008,6 +1008,15 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.patch("/issues/:id", validate(updateIssueRouteSchema), async (req, res) => {
     const id = req.params.id as string;
+    // Same anonymous-script guard as comment POST (PATCH body may include `comment` field
+    // that creates a comment too — must require explicit identity).
+    if (req.actor.source === "local_implicit" && !req.header("sec-fetch-site")) {
+      res.status(401).json({
+        error: "Issue update requires explicit identity",
+        hint: "Set X-Paperclip-Run-Id (heartbeat agent), Authorization: Bearer <agent_api_key|board_api_key>, or post via Web UI.",
+      });
+      return;
+    }
     const existing = await svc.getById(id);
     if (!existing) {
       res.status(404).json({ error: "Issue not found" });
@@ -1535,6 +1544,17 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.post("/issues/:id/comments", validate(addIssueCommentSchema), async (req, res) => {
     const id = req.params.id as string;
+    // Reject anonymous script/curl posts to prevent ghost "local-board" attribution.
+    // Browsers auto-send Sec-Fetch-Site (forbidden header, scripts cannot fake);
+    // heartbeat agents send X-Paperclip-Run-Id; CLI scripts send Authorization.
+    // Web UI continues to work via session+sec-fetch-site=same-origin.
+    if (req.actor.source === "local_implicit" && !req.header("sec-fetch-site")) {
+      res.status(401).json({
+        error: "Comment requires explicit identity",
+        hint: "Set X-Paperclip-Run-Id (heartbeat agent), Authorization: Bearer <agent_api_key|board_api_key>, or post via Web UI. Anonymous fallback to 'local-board' is rejected to prevent agent comments showing up as 'You'.",
+      });
+      return;
+    }
     const issue = await svc.getById(id);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
