@@ -900,6 +900,43 @@ export function issueService(db: Db) {
       return enriched;
     },
 
+    /**
+     * Resolve `:id` from URL params that may be either a UUID, a shortId
+     * (e.g. `GEM-372`), or — in legacy callers — an 8-char prefix of a UUID.
+     * Returns the same enriched shape as `getById`. Returns null if not found.
+     *
+     * Avoids 500s from Postgres 22P02 when callers pass a non-UUID into a
+     * route that expected one.
+     */
+    getByIdOrIdentifier: async (idOrIdentifier: string) => {
+      if (!idOrIdentifier) return null;
+      const trimmed = idOrIdentifier.trim();
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const SHORT_ID_RE = /^[A-Z][A-Z0-9]*-\d+$/i;
+      if (UUID_RE.test(trimmed)) {
+        const row = await db
+          .select()
+          .from(issues)
+          .where(eq(issues.id, trimmed))
+          .then((rows) => rows[0] ?? null);
+        if (!row) return null;
+        const [enriched] = await withIssueLabels(db, [row]);
+        return enriched;
+      }
+      if (SHORT_ID_RE.test(trimmed)) {
+        const row = await db
+          .select()
+          .from(issues)
+          .where(eq(issues.identifier, trimmed.toUpperCase()))
+          .then((rows) => rows[0] ?? null);
+        if (!row) return null;
+        const [enriched] = await withIssueLabels(db, [row]);
+        return enriched;
+      }
+      // Unknown shape — refuse rather than letting Postgres throw 22P02.
+      return null;
+    },
+
     getByIdentifier: async (identifier: string) => {
       const row = await db
         .select()
@@ -1296,6 +1333,38 @@ export function issueService(db: Db) {
         if (adopted) return adopted;
       }
 
+      // Handle null checkoutRunId with a stale/different executionRunId (execution-path assignment).
+      if (
+        checkoutRunId &&
+        current.assigneeAgentId === agentId &&
+        current.status === "in_progress" &&
+        current.checkoutRunId == null &&
+        current.executionRunId &&
+        current.executionRunId !== checkoutRunId
+      ) {
+        const stale = await isTerminalOrMissingHeartbeatRun(current.executionRunId);
+        if (stale) {
+          const now = new Date();
+          const adopted = await db
+            .update(issues)
+            .set({ checkoutRunId, executionRunId: checkoutRunId, executionLockedAt: now, updatedAt: now })
+            .where(
+              and(
+                eq(issues.id, id),
+                eq(issues.status, "in_progress"),
+                eq(issues.assigneeAgentId, agentId),
+                isNull(issues.checkoutRunId),
+              ),
+            )
+            .returning()
+            .then((rows) => rows[0] ?? null);
+          if (adopted) {
+            const [enriched] = await withIssueLabels(db, [adopted]);
+            return enriched;
+          }
+        }
+      }
+
       if (
         checkoutRunId &&
         current.assigneeAgentId === agentId &&
@@ -1343,6 +1412,7 @@ export function issueService(db: Db) {
           status: issues.status,
           assigneeAgentId: issues.assigneeAgentId,
           checkoutRunId: issues.checkoutRunId,
+          executionRunId: issues.executionRunId,
         })
         .from(issues)
         .where(eq(issues.id, id))
@@ -1380,11 +1450,48 @@ export function issueService(db: Db) {
         }
       }
 
+      // Handle case where checkoutRunId is null (execution-path assignment or legacy state)
+      // but executionRunId is stale/terminal — allow adoption so the agent can continue.
+      if (
+        actorRunId &&
+        current.status === "in_progress" &&
+        current.assigneeAgentId === actorAgentId &&
+        !current.checkoutRunId
+      ) {
+        const staleExecution = !current.executionRunId || await isTerminalOrMissingHeartbeatRun(current.executionRunId);
+        if (staleExecution) {
+          const now = new Date();
+          const adopted = await db
+            .update(issues)
+            .set({ checkoutRunId: actorRunId, executionRunId: actorRunId, executionLockedAt: now, updatedAt: now })
+            .where(
+              and(
+                eq(issues.id, id),
+                eq(issues.status, "in_progress"),
+                eq(issues.assigneeAgentId, actorAgentId),
+                isNull(issues.checkoutRunId),
+              ),
+            )
+            .returning({
+              id: issues.id,
+              status: issues.status,
+              assigneeAgentId: issues.assigneeAgentId,
+              checkoutRunId: issues.checkoutRunId,
+            })
+            .then((rows) => rows[0] ?? null);
+
+          if (adopted) {
+            return { ...adopted, adoptedFromRunId: null as string | null };
+          }
+        }
+      }
+
       throw conflict("Issue run ownership conflict", {
         issueId: current.id,
         status: current.status,
         assigneeAgentId: current.assigneeAgentId,
         checkoutRunId: current.checkoutRunId,
+        executionRunId: current.executionRunId,
         actorAgentId,
         actorRunId,
       });

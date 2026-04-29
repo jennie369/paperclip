@@ -12,6 +12,7 @@ import {
   createIssueSchema,
   linkIssueApprovalSchema,
   issueDocumentKeySchema,
+  isUuidLike,
   restoreIssueDocumentRevisionSchema,
   updateIssueWorkProductSchema,
   upsertIssueDocumentSchema,
@@ -197,8 +198,11 @@ export function issueRoutes(db: Db, storage: StorageService) {
       if (issue) {
         return issue.id;
       }
-      // shortId-shaped but not found → emit clean 404 instead of bubbling SQL error
-      // when downstream getById() runs WHERE issues.id=$1 with a non-UUID value.
+      throw notFound(`Issue not found: ${rawId}`);
+    }
+    if (!isUuidLike(rawId)) {
+      // Neither shortId (PREFIX-NNN) nor UUID — downstream WHERE id=$1 would
+      // raise a Postgres uuid-cast error and bubble up as 500. Emit clean 404.
       throw notFound(`Issue not found: ${rawId}`);
     }
     return rawId;
@@ -525,7 +529,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.put("/issues/:id/documents/:key", validate(upsertIssueDocumentSchema), async (req, res) => {
     const id = req.params.id as string;
-    const issue = await svc.getById(id);
+    const issue = await svc.getByIdOrIdentifier(id);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
       return;
@@ -1017,7 +1021,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       });
       return;
     }
-    const existing = await svc.getById(id);
+    const existing = await svc.getByIdOrIdentifier(id);
     if (!existing) {
       res.status(404).json({ error: "Issue not found" });
       return;
@@ -1092,7 +1096,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
     }
     let issue;
     try {
-      issue = await svc.update(id, updateFields);
+      issue = await svc.update(existing.id, updateFields);
     } catch (err) {
       if (err instanceof HttpError && err.status === 422) {
         logger.warn(
@@ -1382,7 +1386,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.post("/issues/:id/checkout", validate(checkoutIssueSchema), async (req, res) => {
     const id = req.params.id as string;
-    const issue = await svc.getById(id);
+    const issue = await svc.getByIdOrIdentifier(id);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
       return;
@@ -1415,7 +1419,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
     const checkoutRunId = requireAgentRunId(req, res);
     if (req.actor.type === "agent" && !checkoutRunId) return;
-    const updated = await svc.checkout(id, req.body.agentId, req.body.expectedStatuses, checkoutRunId);
+    const updated = await svc.checkout(issue.id, req.body.agentId, req.body.expectedStatuses, checkoutRunId);
     const actor = getActorInfo(req);
 
     await logActivity(db, {
@@ -1555,7 +1559,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       });
       return;
     }
-    const issue = await svc.getById(id);
+    const issue = await svc.getByIdOrIdentifier(id);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
       return;
@@ -1573,7 +1577,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
     let currentIssue = issue;
 
     if (reopenRequested && isClosed) {
-      const reopenedIssue = await svc.update(id, { status: "todo" });
+      const reopenedIssue = await svc.update(issue.id, { status: "todo" });
       if (!reopenedIssue) {
         res.status(404).json({ error: "Issue not found" });
         return;
