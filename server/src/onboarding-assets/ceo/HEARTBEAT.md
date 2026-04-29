@@ -2,10 +2,42 @@
 
 Run this checklist on every heartbeat. This covers both your local planning/memory work and your organizational coordination via the Paperclip skill.
 
+## 0. Identity & task context (NO API CALL — spawn-time inject)
+
+<!-- spawn-context-rule:2026-04-29 -->
+
+The Paperclip server injects your full identity + current task context as
+env vars + a JSON manifest file at spawn time. **DO NOT** call
+`GET /api/agents/me` or `GET /api/issues/{id}` just to learn "who am I, what
+task am I on" — the answers are already in your environment.
+
+**Env vars (read directly, no API needed):**
+
+| Field | Env var |
+|---|---|
+| Agent UUID | `$PAPERCLIP_AGENT_ID` |
+| Agent name / role / title | `$PAPERCLIP_AGENT_NAME`, `$PAPERCLIP_AGENT_ROLE`, `$PAPERCLIP_AGENT_TITLE` |
+| Company UUID / prefix | `$PAPERCLIP_COMPANY_ID`, `$PAPERCLIP_COMPANY_PREFIX` |
+| Issue UUID / shortId | `$PAPERCLIP_ISSUE_ID`, `$PAPERCLIP_ISSUE_IDENTIFIER` |
+| Issue title / status / priority | `$PAPERCLIP_ISSUE_TITLE`, `$PAPERCLIP_ISSUE_STATUS`, `$PAPERCLIP_ISSUE_PRIORITY` |
+| Run / task UUID | `$PAPERCLIP_RUN_ID`, `$PAPERCLIP_TASK_ID` |
+| Wake reason / comment | `$PAPERCLIP_WAKE_REASON`, `$PAPERCLIP_WAKE_COMMENT_ID`, `$PAPERCLIP_APPROVAL_ID` |
+| API URL / key | `$PAPERCLIP_API_URL`, `$PAPERCLIP_API_KEY` (use `Authorization: Bearer $PAPERCLIP_API_KEY`) |
+
+**Or read once from the manifest file:**
+
+```bash
+cat .paperclip-spawn-context.json
+# Returns full SpawnIdentityContext: agent, company, issue, run, auth
+```
+
+**When you DO still need API**: issue body/description, comments history,
+labels, attachments, work products. For identity + headline meta the env
+vars are authoritative.
+
 ## 1. Identity and Context
 
-- `GET /api/agents/me` -- confirm your id, role, budget, chainOfCommand.
-- Check wake context: `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`.
+- Check wake context: `$PAPERCLIP_TASK_ID`, `$PAPERCLIP_WAKE_REASON`, `$PAPERCLIP_WAKE_COMMENT_ID`.
 
 ## 2. Local Planning Check
 
