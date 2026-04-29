@@ -20,6 +20,7 @@ task am I on" — the answers are already in your environment.
 | Company UUID / prefix | `$PAPERCLIP_COMPANY_ID`, `$PAPERCLIP_COMPANY_PREFIX` |
 | Issue UUID / shortId | `$PAPERCLIP_ISSUE_ID`, `$PAPERCLIP_ISSUE_IDENTIFIER` |
 | Issue title / status / priority | `$PAPERCLIP_ISSUE_TITLE`, `$PAPERCLIP_ISSUE_STATUS`, `$PAPERCLIP_ISSUE_PRIORITY` |
+| Issue description (≤4KB env, full in manifest) | `$PAPERCLIP_ISSUE_DESCRIPTION` (set `$PAPERCLIP_ISSUE_DESCRIPTION_TRUNCATED=1` if body >4KB) |
 | Run / task UUID | `$PAPERCLIP_RUN_ID`, `$PAPERCLIP_TASK_ID` |
 | Wake reason / comment | `$PAPERCLIP_WAKE_REASON`, `$PAPERCLIP_WAKE_COMMENT_ID`, `$PAPERCLIP_APPROVAL_ID` |
 | API URL / key | `$PAPERCLIP_API_URL`, `$PAPERCLIP_API_KEY` (use `Authorization: Bearer $PAPERCLIP_API_KEY`) |

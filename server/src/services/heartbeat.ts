@@ -2129,6 +2129,7 @@ export function heartbeatService(db: Db) {
             id: issues.id,
             identifier: issues.identifier,
             title: issues.title,
+            description: issues.description,
             status: issues.status,
             priority: issues.priority,
             parentId: issues.parentId,
@@ -2158,6 +2159,7 @@ export function heartbeatService(db: Db) {
     if (issueContext) {
       context.issueIdentifier = issueContext.identifier ?? null;
       context.issueTitle = issueContext.title ?? null;
+      context.issueDescription = issueContext.description ?? null;
       context.issueStatus = issueContext.status ?? null;
       context.issuePriority = issueContext.priority ?? null;
       context.issueParentId = issueContext.parentId ?? null;

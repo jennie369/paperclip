@@ -251,6 +251,7 @@ export interface SpawnIdentityContext {
     id: string;
     identifier?: string | null;
     title?: string | null;
+    description?: string | null;
     status?: string | null;
     priority?: string | null;
     parentId?: string | null;
@@ -306,6 +307,17 @@ export function buildPaperclipEnv(
     vars.PAPERCLIP_ISSUE_ID = issue.id;
     if (issue.identifier) vars.PAPERCLIP_ISSUE_IDENTIFIER = issue.identifier;
     if (issue.title) vars.PAPERCLIP_ISSUE_TITLE = issue.title;
+    // Description truncated to 4KB for env var (Windows env block size guard).
+    // Manifest file has full description with no limit. If truncated, agent
+    // sees PAPERCLIP_ISSUE_DESCRIPTION_TRUNCATED=1 sentinel and knows to
+    // fall back to manifest or API for full body.
+    if (issue.description) {
+      const truncated = truncateUtf8ToBytes(issue.description, 4096);
+      vars.PAPERCLIP_ISSUE_DESCRIPTION = truncated.text;
+      if (truncated.wasTruncated) {
+        vars.PAPERCLIP_ISSUE_DESCRIPTION_TRUNCATED = "1";
+      }
+    }
     if (issue.status) vars.PAPERCLIP_ISSUE_STATUS = issue.status;
     if (issue.priority) vars.PAPERCLIP_ISSUE_PRIORITY = issue.priority;
     if (issue.assigneeAgentId) vars.PAPERCLIP_ISSUE_ASSIGNEE_AGENT_ID = issue.assigneeAgentId;
@@ -348,6 +360,30 @@ async function pathExists(candidate: string) {
 }
 
 /**
+ * Truncates a UTF-8 string to fit within `maxBytes` bytes, respecting
+ * multi-byte char boundaries (so Vietnamese diacritics / emoji aren't cut
+ * mid-codepoint and turned into garbage). Appends ellipsis if truncated.
+ *
+ * Returns both the truncated text + a flag indicating whether truncation
+ * happened, so callers can emit a sentinel env var and agents know to fetch
+ * full body from manifest or API.
+ */
+export function truncateUtf8ToBytes(input: string, maxBytes: number): { text: string; wasTruncated: boolean } {
+  const buf = Buffer.from(input, "utf8");
+  if (buf.length <= maxBytes) {
+    return { text: input, wasTruncated: false };
+  }
+  // Reserve 1 byte for the ellipsis (U+2026 = 3 UTF-8 bytes "…").
+  let end = Math.max(0, maxBytes - 3);
+  // Back off if we're in the middle of a multi-byte sequence (continuation
+  // bytes have 10xxxxxx pattern = 0x80..0xBF).
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) {
+    end--;
+  }
+  return { text: buf.subarray(0, end).toString("utf8") + "…", wasTruncated: true };
+}
+
+/**
  * Builds a SpawnIdentityContext from an agent record + the heartbeat-context
  * snapshot already populated by services/heartbeat.ts. Reusable across all
  * adapters so each one doesn't reimplement the same field plucking.
@@ -382,6 +418,7 @@ export function synthesizeSpawnIdentity(
           id: issueId,
           identifier: pickString(context.issueIdentifier),
           title: pickString(context.issueTitle),
+          description: pickString(context.issueDescription),
           status: pickString(context.issueStatus),
           priority: pickString(context.issuePriority),
           parentId: pickString(context.issueParentId),
@@ -437,6 +474,10 @@ export async function writeSpawnContextManifest(
           id: identity.issue.id,
           identifier: identity.issue.identifier ?? null,
           title: identity.issue.title ?? null,
+          // Manifest gets FULL description (no truncation — file has no size
+          // limit). The env var PAPERCLIP_ISSUE_DESCRIPTION is truncated to
+          // 4KB; agent reads manifest when full body is needed.
+          description: identity.issue.description ?? null,
           status: identity.issue.status ?? null,
           priority: identity.issue.priority ?? null,
           parentId: identity.issue.parentId ?? null,
