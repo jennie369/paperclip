@@ -1038,43 +1038,55 @@ function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentI
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : run.error ?? "";
 
-  // Derive issue from run's contextSnapshot (wake-context issueId) thay vì
-  // issues[0] (first assigned issue list). issues[0] có thể KHÁC issue mà
-  // run này thực sự touch — incident 28/04: latest run được wake by GEM-348
-  // nhưng issues[0] = GEM-308 → click "→ GEM-308" land sai issue.
+  // Derive issue from run's contextSnapshot (wake-context issueId). NO
+  // fallback to issues[0] — heartbeat runs may target a hidden thread issue
+  // not in assignedIssues; falling back lands user on the wrong issue.
+  // If no confirmed issue, card body links to RUN detail page (transcript).
   const runContext = asRecord(run.contextSnapshot);
   const runIssueId = runContext?.issueId as string | undefined;
   const linkedRunIssue = runIssueId && issues
     ? issues.find((i) => i.id === runIssueId || i.identifier === runIssueId)
     : null;
-  const targetIssue = linkedRunIssue ?? (issues && issues.length > 0 ? issues[0] : null);
-  const targetIssuePath = targetIssue
+  const targetIssue = linkedRunIssue;  // strict — no issues[0] fallback
+  const runDetailPath = `/${companyPrefix}/agents/${agentId}/runs/${run.id}`;
+  const issuePath = targetIssue
     ? `/${companyPrefix}/issues/${targetIssue.identifier ?? targetIssue.id}`
-    : `/${companyPrefix}/agents/${agentId}/runs/${run.id}`;
+    : null;
   const targetIssueLabel = targetIssue?.identifier ?? (targetIssue?.id ? targetIssue.id.slice(0, 8) : null);
 
   return (
     <div className="space-y-3">
       <div className="flex w-full items-center justify-between">
-        <h3 className="flex items-center gap-2 text-sm font-medium">
-          {isLive && (
-            <span className="relative flex h-2 w-2">
-              <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400" />
-            </span>
+        <div className="flex items-center gap-4">
+          {issuePath && targetIssueLabel ? (
+            <Link
+              to={issuePath}
+              className="shrink-0 text-sm font-semibold text-foreground hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors no-underline flex items-center gap-1"
+            >
+              {targetIssueLabel} <ChevronRight className="w-3.5 h-3.5" />
+            </Link>
+          ) : (
+            <Link
+              to={runDetailPath}
+              className="shrink-0 text-sm font-semibold text-foreground hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors no-underline flex items-center gap-1"
+            >
+              Run details <ChevronRight className="w-3.5 h-3.5" />
+            </Link>
           )}
-          {isLive ? "Live Run" : "Latest Run"}
-        </h3>
-        <Link
-          to={targetIssue ? targetIssuePath : `/${companyPrefix}/agents/${agentId}/runs`}
-          className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors no-underline"
-        >
-          {targetIssueLabel ? `${targetIssueLabel} →` : "View details →"}
-        </Link>
+          <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            {isLive && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400" />
+              </span>
+            )}
+            {isLive ? "Live Run" : "Latest Run"}
+          </h3>
+        </div>
       </div>
 
       <Link
-        to={targetIssuePath}
+        to={runDetailPath}
         className={cn(
           "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
@@ -1188,15 +1200,15 @@ function AgentOverview({
                   identifier={issue.identifier ?? issue.id.slice(0, 8)}
                   title={issue.title}
                   to={`/issues/${issue.identifier ?? issue.id}`}
-                  trailing={
-                    <div className="flex items-center gap-3">
+                  leading={
+                    <div className="flex items-center gap-3 w-[240px] shrink-0">
                       <span
-                        className="text-[11px] text-muted-foreground min-w-[80px] text-right truncate"
+                        className="text-[11px] text-muted-foreground min-w-[60px] truncate"
                         title={`Created by ${creatorLabel}`}
                       >
                         {creatorLabel}
                       </span>
-                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                      <span className="text-[11px] text-muted-foreground tabular-nums min-w-[40px]">
                         {createdLabel}
                       </span>
                       <StatusBadge status={issue.status} />
