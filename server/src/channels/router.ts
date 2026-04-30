@@ -33,7 +33,7 @@ export const streamEvents = new EventEmitter();
 streamEvents.setMaxListeners(100);
 
 const AGENT_TIMEOUT_MS = 300_000; // 300 seconds (5 min — Gemini CLI cold-start + large prompts)
-const DEFAULT_AGENT = 'customer-success';
+const DEFAULT_AGENT = 'sales-closer';
 const FALLBACK_REPLY = 'Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau.';
 
 // Cache channel → agent slug mapping for 60s
@@ -812,7 +812,22 @@ async function runViaGemini(
         }
         // Combine assistant chunks if no final reply
         if (!reply && assistantChunks.length > 0) reply = assistantChunks.join('');
-        if (!reply) reply = stdout.trim();
+
+        // SAFETY: NEVER return raw stdout to customer — leaks system prompt.
+        // Gemini stream-json may emit init+user frames before failing to produce
+        // assistant content. Falling back to stdout dumps the entire prompt
+        // (incident GEM-2026-04-30 sales-closer Zalo: customer received 22KB
+        // system prompt JSONL). Detect leak signature + return safe fallback.
+        const looksLikeRawJsonl = /^\s*\{"type":"(init|message)"|"role":"(user|system)"/m.test(reply);
+        if (!reply || looksLikeRawJsonl) {
+          if (looksLikeRawJsonl) {
+            console.error(`[Router/${config.provider}] ${config.slug}: REFUSED raw JSONL leak (${reply.length} chars stdout). assistantChunks=${assistantChunks.length}`);
+          } else {
+            console.warn(`[Router/${config.provider}] ${config.slug}: no assistant text in ${lines.length} lines (assistantChunks=${assistantChunks.length})`);
+          }
+          reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+        }
+
         if (newSessionId && !sessionId) {
           await saveAgentSession(config.slug, newSessionId);
         }
@@ -824,8 +839,10 @@ async function runViaGemini(
 
         // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] markers
         reply = postProcessReply(reply, config, mediaLib);
-      } catch {
-        reply = stdout.trim();
+      } catch (parseErr) {
+        console.warn(`[Router/${config.provider}] ${config.slug}: parse failed`, parseErr);
+        // NEVER return raw stdout — return safe fallback
+        reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
       }
 
       try {
@@ -1412,6 +1429,18 @@ function postProcessReply(
   mediaLib: MediaLibrary | null,
 ): string {
   if (!reply) return reply;
+
+  // ── Final defense: refuse raw JSONL leak (incident 2026-04-30 sales-closer
+  // Zalo, customer JN received 22KB of system prompt JSONL when Gemini failed
+  // to emit assistant content). Even if upstream stream parser missed it, this
+  // catches anything that smells like raw provider-stream output.
+  const jsonlLeakRegex = /^\s*\{"type":"(init|message|content|result)"|"role":"(user|system)"/m;
+  if (jsonlLeakRegex.test(reply)) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: postProcessReply REFUSED JSONL leak (${reply.length} chars). Returning safe fallback.`,
+    );
+    return 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+  }
 
   let cleaned = scrubBannedPhrases(reply, config.slug);
 
