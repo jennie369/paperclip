@@ -3,8 +3,9 @@
 // save mutation in one place so P6–P10 features (sort/group/column
 // reorder, smart search) only need to change one spot.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Copy } from "lucide-react";
+import { useNavigate } from "@/lib/router";
 import { useUpsertTimetableNote } from "@/hooks/useTimetable";
 import type {
   TimetableRow,
@@ -117,6 +118,7 @@ function agentColor(agentId: string | undefined): string {
 // ─── Cell subcomponents ────────────────────────────────────────────────────
 
 export function AgentCell({ row }: { row: TimetableRow }) {
+  const navigate = useNavigate();
   if (!row.agent) {
     return <span className="text-xs text-muted-foreground italic">— hệ thống —</span>;
   }
@@ -130,7 +132,16 @@ export function AgentCell({ row }: { row: TimetableRow }) {
         {agentInitials(row.agent.name)}
       </span>
       <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate text-xs font-medium">{row.agent.name}</span>
+        <span 
+          className="truncate text-xs font-medium hover:underline cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/agents/${row.agent!.id}`);
+          }}
+          title="Mở Agent Dashboard"
+        >
+          {row.agent.name}
+        </span>
         <span
           className="truncate rounded border border-border bg-muted/40 px-1 py-px text-[10px] text-muted-foreground font-mono"
           style={{ maxWidth: "120px" }}
@@ -290,12 +301,14 @@ export function TimetableTableRow({
   expanded,
   onToggle,
   visibleColumns,
+  isNearest = false,
 }: {
   row: TimetableRow;
   companyId: string;
   expanded: boolean;
   onToggle: () => void;
   visibleColumns?: VisibleColumns;
+  isNearest?: boolean;
 }) {
   const vis = visibleColumns ?? defaultVisibleSet();
   const time = formatTimeHCM(row.startsAt);
@@ -304,10 +317,11 @@ export function TimetableTableRow({
 
   // Per-cell expand state. Clicking a truncated cell toggles inline wrap;
   // stopPropagation keeps the row's onToggle (expand detail) from firing.
-  // Clicking ANYWHERE else (another row, toolbar, outside the table)
-  // clears the set — the document-level listener below only fires when
-  // stopPropagation did NOT run (i.e. the click was not on a cell).
+  // Click same cell again to collapse. Opening the row detail (or closing
+  // it) also resets cell expansions via the effect below — so users get
+  // consistent state without a fragile document-level listener.
   const [expandedCells, setExpandedCells] = useState<Set<ColumnKey>>(new Set());
+  const navigate = useNavigate();
   const toggleCell = (col: ColumnKey, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpandedCells((prev) => {
@@ -318,18 +332,12 @@ export function TimetableTableRow({
     });
   };
 
-  // Auto-close cell expansions on any click that bubbles to document.
+  // Reset cell expansions whenever the row detail toggles. Keeps cell
+  // state tied to row lifecycle — no stale expansions lingering.
   useEffect(() => {
-    if (expandedCells.size === 0) return;
-    const handler = () => setExpandedCells(new Set());
-    document.addEventListener("click", handler);
-    return () => document.removeEventListener("click", handler);
-  }, [expandedCells.size]);
-
-  // Closing the row detail also collapses any inline cell expansions.
-  useEffect(() => {
-    if (!expanded && expandedCells.size > 0) setExpandedCells(new Set());
-  }, [expanded, expandedCells.size]);
+    if (expandedCells.size > 0) setExpandedCells(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
   const cellClass = (col: ColumnKey, baseMaxWidth: string) =>
     expandedCells.has(col)
       ? "whitespace-normal break-words cursor-pointer"
@@ -349,9 +357,14 @@ export function TimetableTableRow({
   return (
     <>
       <tr
-        className="cursor-pointer border-b border-border hover:bg-accent/40"
-        onClick={onToggle}
+        className={`border-b border-border hover:bg-accent/40 ${
+          isNearest
+            ? "bg-amber-50 dark:bg-amber-950/30 border-l-2 border-l-amber-500"
+            : ""
+        }`}
         aria-expanded={expanded}
+        aria-current={isNearest ? "time" : undefined}
+        title={isNearest ? "Gần thời gian hiện tại nhất" : undefined}
       >
         {vis.has("time") && (
           <td className="px-3 py-2 font-mono text-muted-foreground w-16">{time}</td>
@@ -390,7 +403,23 @@ export function TimetableTableRow({
         )}
         {vis.has("status") && (
           <td className="px-3 py-2 w-32">
-            <StatusPill status={row.status} extra={row.statusExtra} />
+            <div
+              className={`inline-flex ${row.sourceTable !== "timetable_manual_rows" ? "cursor-pointer hover:opacity-80" : ""}`}
+              onClick={(e) => {
+                if (row.sourceTable === "timetable_manual_rows") return;
+                e.stopPropagation();
+                if (row.issueId) {
+                  navigate(`/issues/${row.issueId}`);
+                } else if (row.sourceTable === "issues") {
+                  navigate(`/issues/${row.sourceId}`);
+                } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_runs") && row.agent) {
+                  navigate(`/agents/${row.agent.id}/runs/${row.sourceId}`);
+                }
+              }}
+              title={row.sourceTable !== "timetable_manual_rows" ? "Xem chi tiết" : undefined}
+            >
+              <StatusPill status={row.status} extra={row.statusExtra} />
+            </div>
           </td>
         )}
         {vis.has("result") && (
@@ -434,11 +463,22 @@ export function TimetableTableRow({
             >
               <Copy size={12} />
             </button>
-            <ChevronRight
-              size={14}
-              className={`text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
-              aria-hidden
-            />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={expanded ? "Thu gọn chi tiết" : "Mở chi tiết · sửa note/kết quả"}
+              aria-label={expanded ? "Thu gọn chi tiết dòng" : "Mở chi tiết dòng"}
+            >
+              <ChevronRight
+                size={14}
+                className={`transition-transform ${expanded ? "rotate-90" : ""}`}
+                aria-hidden
+              />
+            </button>
           </span>
         </td>
       </tr>
@@ -470,6 +510,33 @@ const COLUMN_CLASS: Record<ColumnKey, string> = {
   note: "min-w-[120px] max-w-[180px]",
 };
 
+// Pick the row whose startsAt is closest to NOW. Used to highlight the
+// "current" row in the today timetable so the user can spot what's
+// happening now without scanning timestamps. Re-runs whenever rows or
+// the now-tick changes; ties go to the first row encountered (stable).
+function useNearestRowId(rows: TimetableRow[]): string | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return useMemo(() => {
+    if (!rows.length) return null;
+    let bestId: string | null = null;
+    let bestDelta = Infinity;
+    for (const r of rows) {
+      const t = new Date(r.startsAt).getTime();
+      if (Number.isNaN(t)) continue;
+      const delta = Math.abs(t - now);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestId = r.id;
+      }
+    }
+    return bestId;
+  }, [rows, now]);
+}
+
 export function TimetableTable({
   rows,
   companyId,
@@ -486,6 +553,7 @@ export function TimetableTable({
   minWidth?: number;
 }) {
   const vis = visibleColumns ?? defaultVisibleSet();
+  const nearestId = useNearestRowId(rows);
   return (
     <>
       {/* Mobile: card list — 9-col table is unreadable under 640px. */}
@@ -497,6 +565,7 @@ export function TimetableTable({
             companyId={companyId}
             expanded={!!expanded[row.id]}
             onToggle={() => onToggleRow(row.id)}
+            isNearest={row.id === nearestId}
           />
         ))}
       </div>
@@ -527,6 +596,7 @@ export function TimetableTable({
               expanded={!!expanded[row.id]}
               onToggle={() => onToggleRow(row.id)}
               visibleColumns={vis}
+              isNearest={row.id === nearestId}
             />
           ))}
         </tbody>
@@ -542,15 +612,18 @@ function TimetableCardRow({
   companyId,
   expanded,
   onToggle,
+  isNearest = false,
 }: {
   row: TimetableRow;
   companyId: string;
   expanded: boolean;
   onToggle: () => void;
+  isNearest?: boolean;
 }) {
   const time = formatTimeHCM(row.startsAt);
   const result = row.resultOverride ?? row.resultAuto;
   const note = row.note;
+  const navigate = useNavigate();
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -560,19 +633,40 @@ function TimetableCardRow({
   };
 
   return (
-    <div className="border-b border-border last:border-b-0">
+    <div
+      className={`border-b border-border last:border-b-0 ${
+        isNearest ? "bg-amber-50 dark:bg-amber-950/30 border-l-2 border-l-amber-500" : ""
+      }`}
+      aria-current={isNearest ? "time" : undefined}
+    >
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
         className="flex w-full flex-col gap-1.5 px-4 py-3 text-left hover:bg-accent/40"
+        title={isNearest ? "Gần thời gian hiện tại nhất" : undefined}
       >
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <span className="shrink-0 font-mono text-xs text-muted-foreground">{time}</span>
             <KindPill kind={row.kind} />
           </div>
-          <StatusPill status={row.status} extra={row.statusExtra} />
+          <div
+            className={row.sourceTable !== "timetable_manual_rows" ? "cursor-pointer hover:opacity-80" : ""}
+            onClick={(e) => {
+              if (row.sourceTable === "timetable_manual_rows") return;
+              e.stopPropagation();
+              if (row.issueId) {
+                navigate(`/issues/${row.issueId}`);
+              } else if (row.sourceTable === "issues") {
+                navigate(`/issues/${row.sourceId}`);
+              } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_runs") && row.agent) {
+                navigate(`/agents/${row.agent.id}/runs/${row.sourceId}`);
+              }
+            }}
+          >
+            <StatusPill status={row.status} extra={row.statusExtra} />
+          </div>
         </div>
 
         <div className="flex items-start gap-2 min-w-0">
