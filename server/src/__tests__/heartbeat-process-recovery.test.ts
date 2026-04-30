@@ -236,6 +236,44 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(issue?.checkoutRunId).toBe(runId);
   });
 
+  it("reaps a run when the runningProcesses Map entry is stale and the recorded pid is dead", async () => {
+    // Repro: child crashes externally (kill -9 / OOM / Windows TaskKill) — `child.on('close')`
+    // never fires for stdio drain reasons, leaving an orphan entry in `runningProcesses`.
+    // The reaper used to skip such runs forever because Map.has(runId) short-circuited
+    // before the OS-level pid check. With OS truth winning, the run must be reaped.
+    const { runId, agentId, issueId } = await seedRunFixture({
+      processPid: 999_999_999,
+    });
+
+    const exitedChild = spawn(process.execPath, ["-e", "process.exit(0)"]);
+    childProcesses.add(exitedChild);
+    await new Promise<void>((resolve) => exitedChild.once("exit", () => resolve()));
+    runningProcesses.set(runId, { child: exitedChild, graceSec: 5 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reapOrphanedRuns();
+
+    expect(result.reaped).toBe(1);
+    expect(result.runIds).toEqual([runId]);
+    expect(runningProcesses.has(runId)).toBe(false);
+
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    const failedRun = runs.find((row) => row.id === runId);
+    expect(failedRun?.status).toBe("failed");
+    expect(failedRun?.errorCode).toBe("process_lost");
+
+    const issue = await db
+      .select()
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0] ?? null);
+    // Lock either released (executionRunId null) or pointed at a queued retry — never the dead run.
+    expect(issue?.executionRunId).not.toBe(runId);
+  });
+
   it("clears the detached warning when the run reports activity again", async () => {
     const { runId } = await seedRunFixture({
       includeIssue: false,

@@ -1883,7 +1883,22 @@ export function heartbeatService(db: Db) {
     const reaped: string[] = [];
 
     for (const { run, adapterType } of activeRuns) {
-      if (runningProcesses.has(run.id) || activeRunExecutions.has(run.id)) continue;
+      const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
+      const hasMapEntry = runningProcesses.has(run.id) || activeRunExecutions.has(run.id);
+      if (hasMapEntry) {
+        // Map entries are advisory — they're maintained by adapter exit handlers
+        // (`runChildProcess` close/exit handler, `executeRun` finally). When a child
+        // crashes externally (kill -9, OOM, Windows TaskKill) those handlers can fail
+        // to fire if stdio doesn't drain, leaving an orphan entry. OS-level pid truth
+        // wins: if we have a tracked pid and the OS confirms it's gone, treat the
+        // Map entry as stale, drop it, and proceed to reap. Otherwise trust the Map
+        // (this server is actively executing the run).
+        const pidIsKnownDead =
+          tracksLocalChild && !!run.processPid && !isProcessAlive(run.processPid);
+        if (!pidIsKnownDead) continue;
+        runningProcesses.delete(run.id);
+        activeRunExecutions.delete(run.id);
+      }
 
       // Apply staleness threshold to avoid false positives
       if (staleThresholdMs > 0) {
@@ -1891,7 +1906,6 @@ export function heartbeatService(db: Db) {
         if (now.getTime() - refTime < staleThresholdMs) continue;
       }
 
-      const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
       if (tracksLocalChild && run.processPid && isProcessAlive(run.processPid)) {
         if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
           const detachedMessage = `Lost in-memory process handle, but child pid ${run.processPid} is still alive`;

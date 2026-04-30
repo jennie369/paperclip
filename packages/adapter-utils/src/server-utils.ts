@@ -1123,6 +1123,17 @@ export async function runChildProcess(
           reject(new Error(msg));
         });
 
+        // Defense in depth: `exit` fires when the child terminates, regardless of
+        // whether stdio has drained. `close` fires only after stdio drains, which
+        // can stall on Windows when a child is killed externally (kill -9, OOM,
+        // TaskKill) and the parent's pipe buffers aren't flushed. Clearing the
+        // Map on `exit` ensures the heartbeat reaper sees the OS truth promptly
+        // even if `close` is delayed; the promise itself still resolves on `close`
+        // for stdout/stderr correctness.
+        child.on("exit", () => {
+          runningProcesses.delete(runId);
+        });
+
         child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
           if (timeout) clearTimeout(timeout);
           runningProcesses.delete(runId);
