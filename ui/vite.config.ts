@@ -35,6 +35,11 @@ export default defineConfig({
   // Jennie 2026-04-19 — tạm disable esbuild-transpile để bypass Win temp access-denied bug.
   // Source là modern JSX + TS rất nhẹ; output esnext không cần downlevel. Rollup + @vitejs/plugin-react
   // (babel) vẫn handle JSX/TS. Revert khi fix được root cause filesystem.
+  // 2026-04-26 — REVERTED `optimizeDeps.disabled: true` + `commonjsOptions.ignore: react|scheduler`.
+  // Cả 2 cùng skip CJS-to-ESM transform cho react packages → bundle giữ nguyên
+  // `require("./cjs/react-jsx-runtime.production.js")` → browser fail
+  // "Uncaught ReferenceError: require is not defined" → trang trắng.
+  // Win temp lock cần fix qua antivirus exclude / OneDrive ignore, KHÔNG bypass CJS transform.
   build: {
     target: "esnext",
     minify: false,

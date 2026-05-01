@@ -89,9 +89,17 @@ function callGeminiCli(message: string): Promise<string> {
       `${EXTRACTION_PROMPT}\n\n${message}`,
     ];
 
+    // GEMRAL FIX 2026-04-30: Force Gemini CLI OAuth Ultra (defense in depth):
+    // 1. Strip API keys 2. Set GOOGLE_GENAI_USE_GCA=true (escape hatch — CLI
+    // getAuthTypeFromEnv() forces LOGIN_WITH_GOOGLE).
+    const cleanEnv = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([k]) => k !== 'GEMINI_API_KEY' && k !== 'GOOGLE_API_KEY' && k !== 'GOOGLE_GENAI_API_KEY'
+      )
+    );
     const proc = spawn('gemini', args, {
       timeout: 30_000,
-      env: { ...process.env },
+      env: { ...cleanEnv, GOOGLE_GENAI_USE_GCA: 'true' },
       windowsHide: true,
     });
 

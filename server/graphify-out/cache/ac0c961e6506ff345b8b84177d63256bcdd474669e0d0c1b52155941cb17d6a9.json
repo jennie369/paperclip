@@ -1,0 +1,1 @@
+{"nodes": [{"id": "film_jue_6vcn", "label": "film-jue-6vCn.js", "file_type": "code", "source_file": "ui-dist\\assets\\film-jue-6vCn.js", "source_location": "L1"}], "edges": [{"source": "film_jue_6vcn", "target": "index_bgpcnq1o_js", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "ui-dist\\assets\\film-jue-6vCn.js", "source_location": "L1", "weight": 1.0}]}

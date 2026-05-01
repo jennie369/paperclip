@@ -159,15 +159,18 @@ function imageBlock(url: string) {
 }
 
 function buildBlocks(row: CcScriptRow): any[] {
+  // 2026-04-27 — Bỏ TẤT CẢ section headings ('🎣 Hook', '📝 Full Content',
+  // '🎯 CTA', '🖼️ Hình ảnh đính kèm') khi push sang Notion. Lý do: chữ
+  // "Full Content" và các label khác làm content nhìn rối, body Notion chỉ
+  // cần nội dung thuần. Hook + CTA append liền mạch sau body — nếu chị muốn
+  // tách lại sau này, revert commit này.
   const blocks: any[] = [];
   const hook = String(row.hook ?? '').trim();
   if (hook) {
-    blocks.push(headingBlock('🎣 Hook'));
     blocks.push(paragraphBlock(hook));
   }
   const body = String(row.body ?? row.draft_body ?? '').trim();
   if (body) {
-    blocks.push(headingBlock('📝 Full Content'));
     for (const chunk of body.split('\n\n')) {
       const t = chunk.trim();
       if (!t) continue;
@@ -178,28 +181,21 @@ function buildBlocks(row: CcScriptRow): any[] {
   }
   const cta = String(row.cta ?? '').trim();
   if (cta) {
-    blocks.push(headingBlock('🎯 CTA'));
     blocks.push(paragraphBlock(cta));
   }
   const imgs = Array.isArray(row.image_urls) ? (row.image_urls as string[]) : [];
   if (imgs.length > 0) {
-    blocks.push(headingBlock('🖼️ Hình ảnh đính kèm'));
     for (const u of imgs) {
       if (typeof u === 'string' && (u.startsWith('http://') || u.startsWith('https://'))) {
         blocks.push(imageBlock(u));
       }
     }
   }
-  blocks.push(dividerBlock());
-  const meta: string[] = [];
-  for (const k of ['pillar', 'persona', 'track', 'writing_mode', 'session_id']) {
-    const v = row[k];
-    if (v) meta.push(`${k}: ${String(v)}`);
-  }
-  meta.push(`Script ID: ${String(row.id ?? '')}`);
-  meta.push(`CC Type: ${String(row.content_type ?? '')}`);
-  if (row.created_at) meta.push(`Generated: ${String(row.created_at)}`);
-  blocks.push(paragraphBlock(meta.join(' · ')));
+  // 2026-04-27 — Bỏ footer metadata block (`pillar · persona · track · writing_mode ·
+  // session_id · Script ID · CC Type · Generated: ...`) khi push sang Notion.
+  // Lý do: chị chỉ cần content thuần ở body Notion, các metadata này đã có ở
+  // Notion properties (Status, Pillar, Track, Posted Account, ...) — duplicate
+  // ở body làm rối content khi đọc.
   return blocks;
 }
 

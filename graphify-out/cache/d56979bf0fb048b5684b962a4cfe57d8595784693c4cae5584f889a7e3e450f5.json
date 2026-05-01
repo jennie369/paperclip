@@ -1,0 +1,1 @@
+{"nodes": [{"id": "plugin", "label": "plugin.ts", "file_type": "code", "source_file": "packages\\shared\\src\\types\\plugin.ts", "source_location": "L1"}], "edges": [{"source": "plugin", "target": "constants_js", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "packages\\shared\\src\\types\\plugin.ts", "source_location": "L1", "weight": 1.0}]}

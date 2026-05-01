@@ -12,7 +12,7 @@ import * as AgentRouter from './router.js';
 import type { AgentConfig } from './types.js';
 
 // Agent files directory — crypto-pattern-scanner/agents/
-const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/agents');
+const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner');
 const ALLOWED_FILES = ['AGENTS.md', 'HEARTBEAT.md', 'SOUL.md', 'TOOLS.md'];
 
 const router = Router();

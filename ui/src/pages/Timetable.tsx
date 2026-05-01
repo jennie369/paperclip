@@ -29,6 +29,8 @@ import {
   pushRecentSearch,
   loadVisibleColumns,
   saveVisibleColumns,
+  loadSavedQuery,
+  saveQuery,
   type ColumnKey,
 } from "../lib/timetableFilters";
 
@@ -157,11 +159,15 @@ export function Timetable() {
   const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
   const [group, setGroup] = useState<TimetableGroup>("none");
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => loadSavedQuery());
 
   useEffect(() => {
     saveVisibleColumns(visibleColumns);
   }, [visibleColumns]);
+
+  useEffect(() => {
+    saveQuery(query);
+  }, [query]);
 
   useEffect(() => {
     if (!query.trim()) return;
@@ -265,6 +271,13 @@ export function Timetable() {
             value={date}
             onChange={(e) => setDate(e.target.value || todayHCM())}
             aria-label="Chọn ngày"
+            onClick={(e) => {
+              if ('showPicker' in HTMLInputElement.prototype) {
+                try {
+                  (e.target as HTMLInputElement).showPicker();
+                } catch (err) {}
+              }
+            }}
           />
           <button
             type="button"

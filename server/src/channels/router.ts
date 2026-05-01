@@ -552,7 +552,7 @@ async function runViaClaude(
         console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars, session=${newSessionId?.substring(0, 8) || 'none'}`);
 
         // ── Provider-agnostic post-processing: scrub + parse media markers ──
-        reply = postProcessReply(reply, config, mediaLib);
+        reply = await postProcessReply(reply, config, mediaLib);
 
         // Track usage via RPC
         try {
@@ -838,7 +838,7 @@ async function runViaGemini(
         console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars`);
 
         // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] markers
-        reply = postProcessReply(reply, config, mediaLib);
+        reply = await postProcessReply(reply, config, mediaLib);
       } catch (parseErr) {
         console.warn(`[Router/${config.provider}] ${config.slug}: parse failed`, parseErr);
         // NEVER return raw stdout — return safe fallback
@@ -1280,10 +1280,10 @@ export interface MessageChunk {
   media?: MediaFile[];
 }
 
-function parseMediaMarkers(
+async function parseMediaMarkers(
   text: string,
   lib: MediaLibrary | null,
-): { cleanedText: string; media: MediaFile[]; chunks: MessageChunk[] } {
+): Promise<{ cleanedText: string; media: MediaFile[]; chunks: MessageChunk[] }> {
   if (!text) return { cleanedText: text, media: [], chunks: [{ text }] };
 
   // ── Step 1: Split on [[MSG_BREAK]] BEFORE any other marker processing ──
@@ -1303,34 +1303,66 @@ function parseMediaMarkers(
 
   for (const rawChunk of rawChunks) {
     const chunkMedia: MediaFile[] = [];
+    let chunkText = rawChunk;
 
     // Step 2a: extract SEND_MEDIA markers from THIS chunk
-    let chunkText = rawChunk.replace(SEND_MEDIA_RE, (_match, id: string) => {
-      if (!lib) {
-        console.warn(`[Router/media] [[SEND_MEDIA: ${id}]] but no media library loaded for this agent`);
-        return '';
+    const matches = Array.from(chunkText.matchAll(SEND_MEDIA_RE));
+    for (const match of matches) {
+      const fullMatch = match[0];
+      const id = match[1];
+
+      let mediaFile: MediaFile | null = null;
+
+      // 1. Local static library lookup
+      if (lib) {
+        const item = lib.items.find((x) => x.id === id);
+        if (item) {
+          mediaFile = {
+            url: item.url || undefined,
+            path: item.path || undefined,
+            mimeType: item.mimeType,
+            filename: item.name,
+            caption: item.description,
+          };
+        }
       }
-      const item = lib.items.find((x) => x.id === id);
-      if (!item) {
-        console.warn(`[Router/media] Marker [[SEND_MEDIA: ${id}]] — id not found in library "${lib.agent_slug}"`);
-        return '';
+
+      // 2. Supabase DB lookup if UUID format
+      if (!mediaFile && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        try {
+          const { data, error } = await supabase
+            .from('marketing_assets')
+            .select('id, title, description, file_path, type')
+            .eq('id', id)
+            .single();
+
+          if (data && !error && data.file_path) {
+            mediaFile = {
+              path: pathJoin(PROJECT_ROOT, data.file_path),
+              mimeType: data.type === 'video' ? 'video/mp4' : (data.type === 'document' ? 'application/pdf' : 'image/jpeg'),
+              filename: data.file_path.split('/').pop() || 'media',
+              caption: [data.title, data.description].filter(Boolean).join('\n'),
+            };
+          }
+        } catch (e) {
+          console.error(`[Router/media] Supabase query failed for ${id}:`, e);
+        }
       }
-      if (seenGlobal.has(id)) {
-        // Already added in a previous chunk — skip duplicate
-        return '';
+
+      if (!mediaFile) {
+        console.warn(`[Router/media] Marker [[SEND_MEDIA: ${id}]] — id not found in library or DB`);
+        chunkText = chunkText.replace(fullMatch, '');
+        continue;
       }
-      seenGlobal.add(id);
-      const mediaFile: MediaFile = {
-        url: item.url || undefined,
-        path: item.path || undefined,
-        mimeType: item.mimeType,
-        filename: item.name,
-        caption: item.description,
-      };
-      chunkMedia.push(mediaFile);
-      allMedia.push(mediaFile);
-      return '';
-    });
+
+      if (!seenGlobal.has(id)) {
+        seenGlobal.add(id);
+        chunkMedia.push(mediaFile);
+        allMedia.push(mediaFile);
+      }
+
+      chunkText = chunkText.replace(fullMatch, '');
+    }
 
     // Step 2b: scrub any leftover hallucinated markers
     const leakedMarkers = chunkText.match(HALLUCINATED_MARKER_RE);
@@ -1423,11 +1455,11 @@ function buildProviderOverride(agentSlug: string, mediaLib: MediaLibrary | null)
  *
  * Returns the cleaned reply text (without markers, safe to send to customer).
  */
-function postProcessReply(
+async function postProcessReply(
   reply: string,
   config: AgentConfig,
   mediaLib: MediaLibrary | null,
-): string {
+): Promise<string> {
   if (!reply) return reply;
 
   // ── Final defense: refuse raw JSONL leak (incident 2026-04-30 sales-closer
@@ -1444,18 +1476,16 @@ function postProcessReply(
 
   let cleaned = scrubBannedPhrases(reply, config.slug);
 
-  if (mediaLib) {
-    const mediaParsed = parseMediaMarkers(cleaned, mediaLib);
-    cleaned = mediaParsed.cleanedText;
-    if (mediaParsed.media.length > 0) {
-      (config as any)._outboundMedia = mediaParsed.media;
-      // MediaFile has `filename` (not `id` — id is on MediaLibraryItem).
-      // Log filename so we can see what's being dispatched in the logs.
-      console.log(
-        `[Router/${config.provider}] ${config.slug}: extracted ${mediaParsed.media.length} media file(s): `
-          + mediaParsed.media.map((m) => m.filename || m.url || '(unnamed)').join(', '),
-      );
-    }
+  const mediaParsed = await parseMediaMarkers(cleaned, mediaLib);
+  cleaned = mediaParsed.cleanedText;
+  if (mediaParsed.media.length > 0) {
+    (config as any)._outboundMedia = mediaParsed.media;
+    // MediaFile has `filename` (not `id` — id is on MediaLibraryItem).
+    // Log filename so we can see what's being dispatched in the logs.
+    console.log(
+      `[Router/${config.provider}] ${config.slug}: extracted ${mediaParsed.media.length} media file(s): `
+        + mediaParsed.media.map((m) => m.filename || m.url || '(unnamed)').join(', '),
+    );
   }
 
   return cleaned;

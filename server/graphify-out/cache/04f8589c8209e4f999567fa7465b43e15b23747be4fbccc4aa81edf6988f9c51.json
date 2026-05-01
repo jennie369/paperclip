@@ -1,0 +1,1 @@
+{"nodes": [{"id": "version", "label": "version.ts", "file_type": "code", "source_file": "src\\version.ts", "source_location": "L1"}], "edges": [{"source": "version", "target": "node_module", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "src\\version.ts", "source_location": "L1", "weight": 1.0}]}

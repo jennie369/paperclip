@@ -234,7 +234,7 @@ export const GLASSMORPHISM = {
     shadow: '0 10px 20px rgba(0, 0, 0, 0.7), 0 6px 30px rgba(140, 100, 255, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.03)',
     transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
     hover: {
-      transform: 'translateY(-3px)',
+      transform: 'none',
       shadow: '0 15px 30px rgba(0, 0, 0, 0.8), 0 10px 40px rgba(140, 100, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
     },
   },

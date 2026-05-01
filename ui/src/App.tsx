@@ -242,6 +242,7 @@ function boardRoutes() {
       <Route path="inbox/recent" element={<Inbox />} />
       <Route path="inbox/unread" element={<Inbox />} />
       <Route path="inbox/all" element={<Inbox />} />
+      <Route path="inbox/mine" element={<Navigate to="/inbox/recent" replace />} />
       <Route path="inbox/new" element={<Navigate to="/inbox/recent" replace />} />
       <Route path="war-room" element={<WarRoom />} />
       <Route path="crm" element={<CRMOverview />} />

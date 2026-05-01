@@ -1,0 +1,1 @@
+{"nodes": [{"id": "script_types", "label": "script.types.ts", "file_type": "code", "source_file": "ui\\src\\gem\\types\\script.types.ts", "source_location": "L1"}], "edges": [{"source": "script_types", "target": "common_types", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "ui\\src\\gem\\types\\script.types.ts", "source_location": "L9", "weight": 1.0}]}

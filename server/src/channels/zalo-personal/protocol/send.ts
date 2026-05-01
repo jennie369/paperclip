@@ -5,7 +5,9 @@ import axios from 'axios';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ZaloSession, ZALO_API } from './message';
+import sharp from 'sharp';
+import { ZaloSession, ZALO_API } from './message.js';
+import { ZaloListener } from './listener.js';
 
 /**
  * Decrypt response with session SecretKey (zpw_enk from getLoginInfo).
@@ -32,8 +34,13 @@ function decryptResponse(session: ZaloSession, data: string): string {
  * NOT the same as ZCID-based encryption used for getLoginInfo API.
  */
 function encryptPayload(session: ZaloSession, data: Record<string, any>): string {
-  // Escape non-ASCII chars to \uXXXX for Zalo server compatibility (fixes Vietnamese diacritics)
-  const payload = JSON.stringify(data).replace(/[\u0080-\uffff]/g, (c) => '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4));
+  // zca-js (canonical Zalo client) JSON.stringify-s directly without \uXXXX
+  // escape \u2014 Zalo server decodes UTF-8 JSON cleanly. The previous code
+  // escaped all non-ASCII chars to \uXXXX which works for the `message`
+  // field of /api/message/sms but causes `desc` in /photo_original/send to
+  // render as `?` on the recipient's Zalo Desktop (incident 2026-05-01).
+  // Pass raw UTF-8 JSON; AES-CBC encrypt over UTF-8 bytes.
+  const payload = JSON.stringify(data);
   const key = Buffer.from(session.loginInfo.zpw_enk, 'base64');
   const iv = Buffer.alloc(16, 0);
 
@@ -139,7 +146,8 @@ export async function sendDMText(
       }
     } catch (err: any) {
       console.error(`[ZaloSend] Error:`, err.message);
-      return { success: false, error: err.message };
+      console.log('[ZaloSend] sendDMFile error:', err.response?.data || err.message);
+      return { success: false, error: err.response?.data?.error_message || err.message };
     }
   }
 
@@ -242,16 +250,49 @@ export async function sendTyping(
 }
 
 /**
- * Upload image to Zalo file service.
- * Zalo file upload: POST multipart/form-data to file service URL.
- * Returns { fileUrl, fileId } on success.
+ * Read image dimensions and total size — needed for step 2 (photo_original/send)
+ * which requires width/height/hdSize in the encrypted msg metadata.
+ */
+async function readImageMeta(filePath: string): Promise<{ width: number; height: number; totalSize: number }> {
+  const stat = fs.statSync(filePath);
+  const meta = await sharp(filePath).metadata();
+  return {
+    width: meta.width || 0,
+    height: meta.height || 0,
+    totalSize: stat.size,
+  };
+}
+
+/**
+ * Upload an image to Zalo's CDN.
+ *
+ * Step 1 of the 2-step image-send protocol (zca-js photo_original flow):
+ *   POST {file_service}/api/message/photo_original/upload?type=2&params=<AES(metadata)>
+ *   Body: multipart with `chunkContent` field (NOT `fileContent`)
+ *
+ * Returns the photo metadata needed by step 2 (sendDMImage) to actually
+ * create the chat message: photoId, normalUrl, hdUrl, thumbUrl, clientFileId.
+ *
+ * NOTE: error_code:0 here only means CDN upload succeeded — the recipient does
+ * NOT see the photo until step 2 (photo_original/send) creates the chat message.
  */
 export async function uploadImage(
   session: ZaloSession,
   filePath: string,
   recipientId: string,
   isGroup: boolean
-): Promise<{ success: boolean; fileUrl?: string; fileId?: string; error?: string }> {
+): Promise<{
+  success: boolean;
+  photoId?: string;
+  normalUrl?: string;
+  hdUrl?: string;
+  thumbUrl?: string;
+  clientFileId?: string;
+  width?: number;
+  height?: number;
+  totalSize?: number;
+  error?: string;
+}> {
   const fileServiceUrl = session.loginInfo.zpw_service_map_v3.file?.[0];
   if (!fileServiceUrl) {
     return { success: false, error: 'No file service URL in session' };
@@ -261,35 +302,48 @@ export async function uploadImage(
     return { success: false, error: `File not found: ${filePath}` };
   }
 
-  const fileSize = fs.statSync(filePath).size;
-  if (fileSize > ZALO_API.MAX_FILE_SIZE) {
-    return { success: false, error: `File too large: ${fileSize} > ${ZALO_API.MAX_FILE_SIZE}` };
+  const { width, height, totalSize } = await readImageMeta(filePath);
+  if (totalSize > ZALO_API.MAX_FILE_SIZE) {
+    return { success: false, error: `File too large: ${totalSize} > ${ZALO_API.MAX_FILE_SIZE}` };
   }
 
   const fileName = path.basename(filePath);
+  const clientId = String(Date.now());
 
-  // Build multipart form data manually using axios + stream
+  const paramsObj: Record<string, any> = {
+    totalChunk: 1,
+    fileName,
+    clientId,
+    totalSize,
+    imei: (session as any).imei || (session as any).deviceId || 'paperclip-imei',
+    isE2EE: 0,
+    jxl: 0,
+    chunkId: 1,
+  };
+  if (isGroup) paramsObj.grid = recipientId;
+  else paramsObj.toid = recipientId;
+
+  const encParams = encryptPayload(session, paramsObj);
+  const typeParam = isGroup ? '11' : '2';
+  const baseEndpoint = `${fileServiceUrl}/api/${isGroup ? 'group' : 'message'}/photo_original/upload`;
+  const url = new URL(baseEndpoint);
+  // zpw_ver / zpw_type are mandatory on every Zalo file/chat endpoint —
+  // server returns "zpw_type bị thiếu hoặc không đúng" without them.
+  url.searchParams.set('zpw_ver', String(ZALO_API.ZPW_VER));
+  url.searchParams.set('zpw_type', String(ZALO_API.ZPW_TYPE));
+  url.searchParams.set('type', typeParam);
+  url.searchParams.set('params', encParams);
+  const uploadUrl = url.toString();
+
   const FD = (await import('form-data')).default;
   const form = new FD();
-  form.append('fileContent', fs.createReadStream(filePath), fileName);
-
-  // Build upload params
-  const params: Record<string, string> = {
-    zpw_ver: String(ZALO_API.ZPW_VER),
-    zpw_type: String(ZALO_API.ZPW_TYPE),
-    type: '2', // image type
-  };
-  if (isGroup) {
-    params.grid = recipientId;
-  } else {
-    params.toid = recipientId;
-  }
-  const qs = new URLSearchParams(params).toString();
-
-  const uploadUrl = `${fileServiceUrl}/api/message/${isGroup ? 'group/' : ''}photo?${qs}`;
+  form.append('chunkContent', fs.createReadStream(filePath), {
+    filename: fileName,
+    contentType: 'application/octet-stream',
+  });
 
   try {
-    console.log(`[ZaloSend] Uploading image: ${fileName} (${fileSize} bytes) → ${uploadUrl.split('?')[0]}`);
+    console.log(`[ZaloSend] uploadImage step1: ${fileName} (${totalSize} bytes, ${width}x${height}) → ${baseEndpoint}`);
 
     const res = await axios.post(uploadUrl, form, {
       headers: {
@@ -303,29 +357,151 @@ export async function uploadImage(
       maxContentLength: ZALO_API.MAX_FILE_SIZE,
     });
 
-    console.log(`[ZaloSend] Upload response:`, JSON.stringify(res.data).substring(0, 300));
-
-    if (res.data?.error_code === 0) {
+    if (res.data?.error_code !== 0) {
       return {
-        success: true,
-        fileUrl: res.data?.data?.thumb || res.data?.data?.url,
-        fileId: res.data?.data?.photoId || res.data?.data?.msgId,
+        success: false,
+        error: res.data?.error_message || `Upload failed (code: ${res.data?.error_code})`,
       };
     }
 
+    // Decrypt the encrypted blob. The decrypted payload wraps the actual
+    // photo metadata: { error_code, error_message, data: { photoId, normalUrl,
+    // hdUrl, thumbUrl, finished, clientFileId, ... } }
+    let decrypted: any = null;
+    if (typeof res.data?.data === 'string') {
+      try {
+        decrypted = JSON.parse(decryptResponse(session, res.data.data));
+      } catch (err: any) {
+        return { success: false, error: `Failed to decrypt upload response: ${err.message}` };
+      }
+    } else if (res.data?.data && typeof res.data.data === 'object') {
+      decrypted = res.data.data;
+    }
+
+    console.log(`[ZaloSend] uploadImage step1 decrypted:`, JSON.stringify(decrypted).substring(0, 300));
+
+    // Inner data field has the photo metadata. Sometimes Zalo nests one level
+    // (decrypted.data.photoId), sometimes flat (decrypted.photoId) — handle both.
+    const inner = decrypted?.data && typeof decrypted.data === 'object' ? decrypted.data : decrypted;
+    if (!inner?.photoId || inner.photoId === '-1') {
+      return { success: false, error: `Upload returned no photoId (resData=${JSON.stringify(decrypted)?.substring(0, 200)})` };
+    }
+
     return {
-      success: false,
-      error: res.data?.error_message || `Upload failed (code: ${res.data?.error_code})`,
+      success: true,
+      photoId: String(inner.photoId),
+      normalUrl: inner.normalUrl,
+      hdUrl: inner.hdUrl,
+      thumbUrl: inner.thumbUrl,
+      clientFileId: inner.clientFileId ? String(inner.clientFileId) : undefined,
+      width,
+      height,
+      totalSize,
     };
   } catch (err: any) {
-    console.error(`[ZaloSend] Upload error:`, err.message);
+    console.error(`[ZaloSend] uploadImage error:`, err.message);
     return { success: false, error: err.message };
   }
 }
 
 /**
- * Send image to DM using direct photo API.
- * Uses multipart upload that combines upload + send in one call.
+ * Step 2 of image-send: create the chat message attaching the uploaded photo.
+ *
+ * POST {file_service}/api/message/photo_original/send?nretry=0
+ * Body: form-encoded `params=<AES(msg metadata)>`
+ *
+ * The metadata references the photoId returned by step 1 + the urls + dims +
+ * a fresh clientId. `desc` is the customer-facing caption rendered under the
+ * photo (use empty string when the surrounding agent reply already explains it).
+ */
+async function sendUploadedPhoto(
+  session: ZaloSession,
+  recipientId: string,
+  isGroup: boolean,
+  uploaded: {
+    photoId: string;
+    normalUrl?: string;
+    hdUrl?: string;
+    thumbUrl?: string;
+    width?: number;
+    height?: number;
+    totalSize?: number;
+  },
+  desc: string,
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const fileServiceUrl = session.loginInfo.zpw_service_map_v3.file?.[0];
+  if (!fileServiceUrl) return { success: false, error: 'No file service URL' };
+
+  const clientId = String(Date.now());
+  const msgParams: Record<string, any> = {
+    photoId: uploaded.photoId,
+    clientId,
+    desc,
+    width: uploaded.width || 0,
+    height: uploaded.height || 0,
+    rawUrl: uploaded.normalUrl,
+    hdUrl: uploaded.hdUrl,
+    thumbUrl: uploaded.thumbUrl,
+    hdSize: String(uploaded.totalSize || 0),
+    zsource: -1,
+    ttl: 0,
+    jcp: '{"convertible":"jxl"}',
+  };
+  if (isGroup) {
+    msgParams.grid = String(recipientId);
+    msgParams.oriUrl = uploaded.normalUrl;
+  } else {
+    msgParams.toid = String(recipientId);
+    msgParams.normalUrl = uploaded.normalUrl;
+  }
+
+  const encParams = encryptPayload(session, msgParams);
+  const url = new URL(`${fileServiceUrl}/api/${isGroup ? 'group' : 'message'}/photo_original/send`);
+  url.searchParams.set('zpw_ver', String(ZALO_API.ZPW_VER));
+  url.searchParams.set('zpw_type', String(ZALO_API.ZPW_TYPE));
+  url.searchParams.set('nretry', '0');
+  const body = new URLSearchParams({ params: encParams }).toString();
+
+  try {
+    console.log(`[ZaloSend] sendUploadedPhoto step2: photoId=${uploaded.photoId} → ${url.pathname}`);
+    const res = await axios.post(url.toString(), body, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': session.userAgent,
+        'Cookie': buildCookieHeader(session),
+        'Origin': 'https://chat.zalo.me',
+        'Referer': 'https://chat.zalo.me/',
+      },
+      timeout: 30_000,
+    });
+
+    if (res.data?.error_code !== 0) {
+      return { success: false, error: res.data?.error_message || `step2 failed (code: ${res.data?.error_code})` };
+    }
+
+    let msgId: string | undefined;
+    if (typeof res.data?.data === 'string') {
+      try {
+        const dec = JSON.parse(decryptResponse(session, res.data.data));
+        msgId = dec?.msgId ? String(dec.msgId) : undefined;
+        console.log(`[ZaloSend] sendUploadedPhoto step2 OK: msgId=${msgId}`);
+      } catch {
+        // ok — server still returned error_code:0 even if decrypt failed
+      }
+    }
+    return { success: true, messageId: msgId };
+  } catch (err: any) {
+    console.error(`[ZaloSend] sendUploadedPhoto error:`, err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Send an image to a DM thread via the proper 2-step photo_original protocol.
+ *
+ * `caption` becomes the photo `desc` (customer-facing overlay caption). Pass
+ * empty / undefined when the surrounding agent reply already explains it —
+ * DO NOT pass the media-library item description, that is LLM meta info.
  */
 export async function sendDMImage(
   session: ZaloSession,
@@ -333,24 +509,26 @@ export async function sendDMImage(
   filePath: string,
   caption?: string
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  // Send typing first
   await sendTyping(session, recipientId, false);
 
-  const result = await uploadImage(session, filePath, recipientId, false);
-  if (!result.success) {
-    return { success: false, error: result.error };
+  const upload = await uploadImage(session, filePath, recipientId, false);
+  if (!upload.success || !upload.photoId) {
+    return { success: false, error: upload.error || 'Upload step failed' };
   }
 
-  // If caption provided, send it as a follow-up text message
-  if (caption) {
-    await sendDMText(session, recipientId, caption);
-  }
-
-  return { success: true, messageId: result.fileId };
+  return sendUploadedPhoto(session, recipientId, false, {
+    photoId: upload.photoId,
+    normalUrl: upload.normalUrl,
+    hdUrl: upload.hdUrl,
+    thumbUrl: upload.thumbUrl,
+    width: upload.width,
+    height: upload.height,
+    totalSize: upload.totalSize,
+  }, caption || '');
 }
 
 /**
- * Send image to group using direct photo API.
+ * Send an image to a group thread (same 2-step flow, group endpoints).
  */
 export async function sendGroupImage(
   session: ZaloSession,
@@ -360,16 +538,20 @@ export async function sendGroupImage(
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   await sendTyping(session, groupId, true);
 
-  const result = await uploadImage(session, filePath, groupId, true);
-  if (!result.success) {
-    return { success: false, error: result.error };
+  const upload = await uploadImage(session, filePath, groupId, true);
+  if (!upload.success || !upload.photoId) {
+    return { success: false, error: upload.error || 'Upload step failed' };
   }
 
-  if (caption) {
-    await sendGroupText(session, groupId, caption);
-  }
-
-  return { success: true, messageId: result.fileId };
+  return sendUploadedPhoto(session, groupId, true, {
+    photoId: upload.photoId,
+    normalUrl: upload.normalUrl,
+    hdUrl: upload.hdUrl,
+    thumbUrl: upload.thumbUrl,
+    width: upload.width,
+    height: upload.height,
+    totalSize: upload.totalSize,
+  }, caption || '');
 }
 
 // ─── File / PDF / Video upload (reverse engineered from zca-js) ──────────────
@@ -401,12 +583,53 @@ function detectFileKind(filename: string): 'image' | 'video' | 'others' {
  * EXPERIMENTAL: Zalo's encrypted params + chunked protocol changes regularly.
  * Caller should fall back to URL-append in manager.ts wrapLegacyChannel on err.
  */
+function getFileMd5(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const rs = fs.createReadStream(filePath);
+    rs.on('data', chunk => hash.update(chunk));
+    rs.on('end', () => resolve(hash.digest('hex')));
+    rs.on('error', err => reject(err));
+  });
+}
+
+function waitForFileDone(listener: ZaloListener | null, expectedFileId: string, timeoutMs = 60000): Promise<{ fileUrl: string; fileId: string }> {
+  if (!listener) return Promise.reject(new Error('No listener provided'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      listener.off('control_event', handler);
+      reject(new Error('WS timeout waiting for file_done'));
+    }, timeoutMs);
+
+    const handler = (parsed: any) => {
+      try {
+        const controls = parsed?.data?.controls || [];
+        for (const control of controls) {
+          if (control?.content?.act_type === 'file_done') {
+            const returnedFileId = String(control.content.fileId);
+            if (returnedFileId === expectedFileId) {
+              const fileUrl = control.content.data?.url || '';
+              clearTimeout(timer);
+              listener.off('control_event', handler);
+              resolve({ fileUrl, fileId: returnedFileId });
+              return;
+            }
+          }
+        }
+      } catch (e) {}
+    };
+
+    listener.on('control_event', handler);
+  });
+}
+
 export async function uploadFile(
   session: ZaloSession,
+  listener: ZaloListener | null,
   filePath: string,
   recipientId: string,
   isGroup: boolean,
-): Promise<{ success: boolean; fileUrl?: string; fileId?: string; clientId?: string; error?: string }> {
+): Promise<{ success: boolean; fileUrl?: string; fileId?: string; clientId?: string; error?: string; checksum?: string; totalSize?: number }> {
   const fileServiceUrl = session.loginInfo.zpw_service_map_v3.file?.[0];
   if (!fileServiceUrl) {
     return { success: false, error: 'No file service URL in session' };
@@ -428,103 +651,192 @@ export async function uploadFile(
     return { success: false, error: 'uploadFile called for image — use uploadImage instead' };
   }
 
-  // clientId binds the uploaded file to the follow-up text message
   const clientId = String(Date.now()) + String(Math.floor(Math.random() * 1000));
-
-  // Encrypted params (single-chunk for now — totalChunk=1, chunkId=1)
-  const paramsObj: Record<string, any> = {
-    totalChunk: 1,
-    fileName,
-    clientId,
-    totalSize: fileSize,
-    imei: (session as any).imei || (session as any).deviceId || 'paperclip-imei',
-    isE2EE: 0,
-    jxl: 0,
-    chunkId: 1,
-  };
-  if (isGroup) {
-    paramsObj.grid = recipientId;
-  } else {
-    paramsObj.toid = recipientId;
-  }
-
-  const encParams = encryptPayload(session, paramsObj);
-
-  const typeParam = isGroup ? '11' : '2';
-  const baseEndpoint = `${fileServiceUrl}/api/${isGroup ? 'group' : 'message'}/asyncfile/upload`;
-  const url = new URL(baseEndpoint);
-  url.searchParams.set('zpw_ver', String(ZALO_API.ZPW_VER));
-  url.searchParams.set('zpw_type', String(ZALO_API.ZPW_TYPE));
-  url.searchParams.set('type', typeParam);
-  url.searchParams.set('params', encParams);
-  const uploadUrl = url.toString();
-
+  const CHUNK_SIZE = 512 * 1024;
+  const totalChunk = Math.ceil(fileSize / CHUNK_SIZE);
+  const fileBuffer = fs.readFileSync(filePath);
+  // @ts-ignore
   const FD = (await import('form-data')).default;
-  const form = new FD();
-  form.append('chunkContent', fs.createReadStream(filePath), {
-    filename: fileName,
-    contentType: 'application/octet-stream',
-  });
 
-  try {
-    console.log(`[ZaloSend] uploadFile: ${fileName} (${fileSize} bytes, kind=${kind}) → ${baseEndpoint}`);
+  let lastDecData: any = {};
+  let lastResData: any = null;
+  let uploadFileId: string | null = null;
 
-    const res = await axios.post(uploadUrl, form, {
-      headers: {
-        ...form.getHeaders(),
-        'User-Agent': session.userAgent,
-        'Cookie': buildCookieHeader(session),
-        'Origin': 'https://chat.zalo.me',
-        'Referer': 'https://chat.zalo.me/',
-      },
-      timeout: 120_000,
-      maxContentLength: ZALO_API.MAX_FILE_SIZE,
+  for (let i = 1; i <= totalChunk; i++) {
+    const paramsObj: Record<string, any> = {
+      totalChunk,
+      fileName,
+      clientId,
+      totalSize: fileSize,
+      imei: (session as any).imei || (session as any).deviceId || 'paperclip-imei',
+      isE2EE: 0,
+      jxl: 0,
+      chunkId: i,
+    };
+    if (uploadFileId) {
+      paramsObj.fileId = uploadFileId;
+    }
+    if (isGroup) paramsObj.grid = recipientId;
+    else paramsObj.toid = recipientId;
+
+    const encParams = encryptPayload(session, paramsObj);
+    const typeParam = isGroup ? '11' : '2';
+    const baseEndpoint = `${fileServiceUrl}/api/${isGroup ? 'group' : 'message'}/asyncfile/upload`;
+    const url = new URL(baseEndpoint);
+    url.searchParams.set('zpw_ver', String(ZALO_API.ZPW_VER));
+    url.searchParams.set('zpw_type', String(ZALO_API.ZPW_TYPE));
+    url.searchParams.set('type', typeParam);
+    url.searchParams.set('params', encParams);
+    const uploadUrl = url.toString();
+
+    const form = new FD();
+    const start = (i - 1) * CHUNK_SIZE;
+    const end = Math.min(i * CHUNK_SIZE, fileSize);
+    const chunkBuffer = fileBuffer.subarray(start, end);
+
+    form.append('chunkContent', chunkBuffer, {
+      filename: fileName,
+      contentType: 'application/octet-stream',
     });
 
-    console.log(`[ZaloSend] uploadFile response:`, JSON.stringify(res.data).substring(0, 400));
+    try {
+      console.log(`[ZaloSend] uploadFile: chunk ${i}/${totalChunk} (${chunkBuffer.length} bytes) → ${baseEndpoint}`);
+      const res = await axios.post(uploadUrl, form, {
+        headers: {
+          ...form.getHeaders(),
+          'User-Agent': session.userAgent,
+          'Cookie': buildCookieHeader(session),
+          'Origin': 'https://chat.zalo.me',
+          'Referer': 'https://chat.zalo.me/',
+        },
+        timeout: 120_000,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      });
 
-    if (res.data?.error_code === 0) {
-      return {
-        success: true,
-        fileUrl: res.data?.data?.fileUrl || res.data?.data?.url || res.data?.data?.hdUrl,
-        fileId: res.data?.data?.fileId || res.data?.data?.msgId || res.data?.data?.photoId,
-        clientId,
-      };
+      lastResData = res.data;
+      if (res.data?.error_code !== 0) {
+        let decErrMsg = res.data?.error_message;
+        try {
+          if (typeof res.data?.data === 'string') {
+            decErrMsg = decryptResponse(session, res.data.data);
+          }
+        } catch {}
+        return { success: false, error: decErrMsg || 'Chunk upload failed' };
+      }
+
+      if (typeof res.data.data === 'string') {
+        try {
+          const dec = decryptResponse(session, res.data.data);
+          console.log(`[ZaloSend] uploadFile chunk ${i} decrypted:`, dec);
+          lastDecData = JSON.parse(dec);
+        } catch (e) {
+          console.warn(`[ZaloSend] chunk decrypt warn:`, e);
+        }
+      } else {
+        lastDecData = res.data.data || {};
+        console.log(`[ZaloSend] uploadFile chunk ${i} plain:`, lastDecData);
+      }
+
+      const extractedId = lastDecData?.data?.fileId || lastDecData?.fileId;
+      if (!uploadFileId && extractedId && extractedId !== '-1') {
+        uploadFileId = extractedId;
+        console.log(`[ZaloSend] Extracted fileId=${uploadFileId} from chunk ${i}`);
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  if (lastResData?.error_code === 0) {
+    const finalFileId = lastDecData?.data?.fileId || lastDecData?.fileId || lastDecData?.data?.msgId || lastDecData?.msgId || uploadFileId;
+    console.log(`[ZaloSend] uploadFile success. finalFileId=${finalFileId}`);
+    
+    let fileUrl = '';
+    let wsFileId = String(finalFileId);
+    if (listener && finalFileId) {
+      try {
+        const wsData = await waitForFileDone(listener, String(finalFileId), 60000);
+        fileUrl = wsData.fileUrl;
+        wsFileId = wsData.fileId;
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    } else {
+       return { success: false, error: 'No WS listener available to resolve file delivery or uploadFileId missing' };
     }
 
-    return {
-      success: false,
-      error: res.data?.error_message || `Upload failed (code: ${res.data?.error_code})`,
-    };
-  } catch (err: any) {
-    console.error(`[ZaloSend] uploadFile error:`, err.message);
-    return { success: false, error: err.message };
+    const checksum = await getFileMd5(filePath);
+    return { success: true, fileUrl, fileId: wsFileId, clientId, checksum, totalSize: fileSize };
   }
-}
 
-/**
- * Send a non-image file (PDF / doc / video) to a DM thread.
- *
- * Two-step: upload → caption text. If server auto-attaches via clientId,
- * the caption is plain text; otherwise the URL is appended as fallback.
- */
+  return { success: false, error: lastResData?.error_message || 'upload failed' };
+}
 export async function sendDMFile(
   session: ZaloSession,
+  listener: ZaloListener | null,
   recipientId: string,
   filePath: string,
   caption?: string,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   await sendTyping(session, recipientId, false);
 
-  const result = await uploadFile(session, filePath, recipientId, false);
-  if (!result.success) {
+  const result = await uploadFile(session, listener, filePath, recipientId, false);
+  if (!result.success || !result.fileId || !result.fileUrl) {
     return { success: false, error: result.error };
   }
 
-  const captionText = caption || `[Tệp đính kèm: ${path.basename(filePath)}]${result.fileUrl ? '\n' + result.fileUrl : ''}`;
-  await sendDMText(session, recipientId, captionText);
+  const fileName = path.basename(filePath);
+  const ext = path.extname(fileName).slice(1);
 
-  return { success: true, messageId: result.fileId };
+  const paramsObj: Record<string, any> = {
+      fileId: result.fileId,
+      checksum: result.checksum || '',
+      checksumSha: "",
+      extention: ext,
+      totalSize: result.totalSize || 0,
+      fileName: fileName,
+      clientId: result.clientId || '',
+      fType: 1,
+      fileCount: 0,
+      fdata: "{}",
+      toid: recipientId,
+      fileUrl: result.fileUrl,
+      zsource: -1,
+      ttl: 0,
+  };
+
+  const encParams = encryptPayload(session, paramsObj);
+  const url = new URL(`${session.loginInfo.zpw_service_map_v3.file?.[0] || 'https://tt-files-wpa.chat.zalo.me'}/api/message/asyncfile/msg`);
+  console.log(`[ZaloSend] sendDMFile url: ${url.toString()}`);
+  url.searchParams.set('nretry', '0');
+  url.searchParams.set('zpw_ver', String(ZALO_API.ZPW_VER));
+  url.searchParams.set('zpw_type', String(ZALO_API.ZPW_TYPE));
+
+  try {
+    const res = await axios.post(
+      url.toString(),
+      `params=${encodeURIComponent(encParams)}`,
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': session.userAgent,
+          'Cookie': buildCookieHeader(session),
+        },
+      }
+    );
+
+    if (caption) {
+      await sendDMText(session, recipientId, caption);
+    }
+
+    if (res.data?.error_code === 0) {
+      return { success: true, messageId: res.data?.data?.msgId };
+    }
+    return { success: false, error: res.data?.error_message || 'asyncfile/msg failed' };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 }
 
 /**
@@ -532,19 +844,66 @@ export async function sendDMFile(
  */
 export async function sendGroupFile(
   session: ZaloSession,
+  listener: ZaloListener | null,
   groupId: string,
   filePath: string,
   caption?: string,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   await sendTyping(session, groupId, true);
 
-  const result = await uploadFile(session, filePath, groupId, true);
-  if (!result.success) {
+  const result = await uploadFile(session, listener, filePath, groupId, true);
+  if (!result.success || !result.fileId || !result.fileUrl) {
     return { success: false, error: result.error };
   }
 
-  const captionText = caption || `[Tệp đính kèm: ${path.basename(filePath)}]${result.fileUrl ? '\n' + result.fileUrl : ''}`;
-  await sendGroupText(session, groupId, captionText);
+  const fileName = path.basename(filePath);
+  const ext = path.extname(fileName).slice(1);
 
-  return { success: true, messageId: result.fileId };
+  const paramsObj: Record<string, any> = {
+      fileId: result.fileId,
+      checksum: result.checksum || '',
+      checksumSha: "",
+      extention: ext,
+      totalSize: result.totalSize || 0,
+      fileName: fileName,
+      clientId: result.clientId || '',
+      fType: 1,
+      fileCount: 0,
+      fdata: "{}",
+      grid: groupId,
+      fileUrl: result.fileUrl,
+      zsource: -1,
+      ttl: 0,
+  };
+
+  const encParams = encryptPayload(session, paramsObj);
+  const url = new URL(`${session.loginInfo.zpw_service_map_v3.file?.[0] || 'https://tt-files-wpa.chat.zalo.me'}/api/group/asyncfile/msg`);
+  url.searchParams.set('nretry', '0');
+  url.searchParams.set('zpw_ver', String(ZALO_API.ZPW_VER));
+  url.searchParams.set('zpw_type', String(ZALO_API.ZPW_TYPE));
+
+  try {
+    const res = await axios.post(
+      url.toString(),
+      `params=${encodeURIComponent(encParams)}`,
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': session.userAgent,
+          'Cookie': buildCookieHeader(session),
+        },
+      }
+    );
+
+    if (caption) {
+      await sendGroupText(session, groupId, caption);
+    }
+
+    if (res.data?.error_code === 0) {
+      return { success: true, messageId: res.data?.data?.msgId };
+    }
+    return { success: false, error: res.data?.error_message || 'asyncfile/msg failed' };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
 }

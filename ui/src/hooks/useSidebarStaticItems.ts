@@ -4,6 +4,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 
 export const DEFAULT_STATIC_ITEMS: Record<string, string[]> = {
   "kenh-chat": [
+    "/inbox",
     "/channels/inbox",
     "/channels/settings",
     "/war-room",
@@ -33,7 +34,7 @@ export const DEFAULT_STATIC_ITEMS: Record<string, string[]> = {
     "/cc/funnels",
     "/cc/settings",
   ],
-  "cau-hinh": ["/ops/sop-registry", "/agents-config", "/config"],
+  "cau-hinh": ["/ops/sop-registry", "/agents/all", "/agents-config", "/config"],
   "crm": [
     "/crm",
     "/crm/customers",

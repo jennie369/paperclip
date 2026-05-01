@@ -1,0 +1,9 @@
+
+# Build cache (Node.js compile cache — 721+ files)
+.build-tmp/
+
+# Session backup files (not for version control)
+*.tsx.bak
+*.tsx.head-version
+build.log
+result.txt

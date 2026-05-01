@@ -122,6 +122,7 @@ export function Sidebar() {
 
   const itemMap: Record<string, React.ReactNode> = useMemo(() => ({
     // Kênh Chat
+    "/inbox": <SidebarNavItem to="/inbox" label="Inbox (Agents)" icon={Inbox} />,
     "/channels/inbox": <SidebarNavItem to="/channels/inbox" label="Hộp thư" icon={Inbox} badge={totalUnread > 0 ? totalUnread : inboxBadge.inbox} badgeTone={totalUnread > 0 ? "danger" : inboxBadge.failedRuns > 0 ? "danger" : "default"} alert={totalUnread > 0 || inboxBadge.failedRuns > 0} />,
     "/channels/settings": <SidebarNavItem to="/channels/settings" label="Cài đặt kênh" icon={Settings} />,
     "/war-room": <SidebarNavItem to="/war-room" label="War Room" icon={Zap} />,
@@ -153,6 +154,7 @@ export function Sidebar() {
 
     // Cấu hình
     "/ops/sop-registry": <SidebarNavItem to="/ops/sop-engine" label="Registry Marketplace" icon={Database} />,
+    "/agents/all": <SidebarNavItem to="/agents/all" label="Tất cả Agents" icon={Boxes} />,
     "/agents-config": <SidebarNavItem to="/agents-config" label="Agent LLM (→ Registry)" icon={Database} textBadge="Deprecated" textBadgeTone="amber" />,
     "/config": <SidebarNavItem to="/config" label="Trung tâm Cấu hình (→ Registry)" icon={Settings} textBadge="Deprecated" textBadgeTone="amber" />,
 

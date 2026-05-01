@@ -237,7 +237,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => {
-      ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
+      ref.current?.focus();
     },
   }), []);
 
@@ -267,7 +267,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 ref.current?.setMarkdown(updated);
                 onChange(updated);
                 requestAnimationFrame(() => {
-                  ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
+                  ref.current?.focus();
                 });
               }
             }, 100);

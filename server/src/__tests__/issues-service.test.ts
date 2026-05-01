@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import {
   activityLog,
   agents,
   companies,
   createDb,
   executionWorkspaces,
+  heartbeatRuns,
   instanceSettings,
   issueComments,
   issueInboxArchives,
@@ -675,6 +677,155 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     expect(followUp.executionWorkspacePreference).toBe("reuse_existing");
     expect(followUp.executionWorkspaceSettings).toEqual({
       mode: "operator_branch",
+    });
+  });
+});
+
+describeEmbeddedPostgres("issueService.assertCheckoutOwner null-checkout adoption", () => {
+  let db!: ReturnType<typeof createDb>;
+  let svc!: ReturnType<typeof issueService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issues-ownership-");
+    db = createDb(tempDb.connectionString);
+    svc = issueService(db);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(issueComments);
+    await db.delete(issueInboxArchives);
+    await db.delete(activityLog);
+    await db.delete(issues);
+    await db.delete(heartbeatRuns);
+    await db.delete(executionWorkspaces);
+    await db.delete(projectWorkspaces);
+    await db.delete(projects);
+    await db.delete(agents);
+    await db.delete(instanceSettings);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  // GEM-401: heartbeat agents assigned via execution path get executionRunId set
+  // but checkoutRunId stays null. Posting a comment / patching the issue went
+  // through assertCheckoutOwner and threw 409. Fix: when the actor's run id
+  // already matches executionRunId and checkoutRunId is null, adopt instead of reject.
+  it("adopts null checkoutRunId when actor run id matches executionRunId", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Heartbeat Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "running",
+      startedAt: new Date(),
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Heartbeat-assigned issue",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      checkoutRunId: null,
+      executionRunId: runId,
+      executionLockedAt: new Date(),
+    });
+
+    const result = await svc.assertCheckoutOwner(issueId, agentId, runId);
+    expect(result.checkoutRunId).toBe(runId);
+    expect(result.adoptedFromRunId).toBeNull();
+
+    const [row] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(row?.checkoutRunId).toBe(runId);
+    expect(row?.executionRunId).toBe(runId);
+  });
+
+  it("still rejects when assignee agent does not match", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values([
+      {
+        id: agentId,
+        companyId,
+        name: "Owner Agent",
+        role: "engineer",
+        status: "active",
+        adapterType: "claude_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+      },
+      {
+        id: otherAgentId,
+        companyId,
+        name: "Intruder Agent",
+        role: "engineer",
+        status: "active",
+        adapterType: "claude_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+      },
+    ]);
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "running",
+      startedAt: new Date(),
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Owned-by-other issue",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      checkoutRunId: null,
+      executionRunId: runId,
+      executionLockedAt: new Date(),
+    });
+
+    await expect(svc.assertCheckoutOwner(issueId, otherAgentId, runId)).rejects.toMatchObject({
+      status: 409,
     });
   });
 });

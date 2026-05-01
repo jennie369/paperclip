@@ -1,0 +1,1 @@
+{"nodes": [{"id": "channels", "label": "channels.ts", "file_type": "code", "source_file": "ui\\src\\api\\channels.ts", "source_location": "L1"}], "edges": [{"source": "channels", "target": "client", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "ui\\src\\api\\channels.ts", "source_location": "L1", "weight": 1.0}]}

@@ -1,5 +1,6 @@
 import React, { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate } from '@/lib/router';
 import {
   ArrowLeft,
   FileText,
@@ -208,7 +209,12 @@ function isHtmlContent(text) {
   const stripped = trimmed.startsWith('```')
     ? trimmed.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim()
     : trimmed;
-  return /^<!DOCTYPE html>/i.test(stripped) || /^<html/i.test(stripped) || (stripped.includes('<body') && stripped.includes('</body>'));
+  return /^<!DOCTYPE html>/i.test(stripped) || 
+         /^<html/i.test(stripped) || 
+         (stripped.includes('<body') && stripped.includes('</body>')) ||
+         (stripped.includes('<table') && stripped.includes('</table>')) ||
+         /^<meta/i.test(stripped) || 
+         /^<div/i.test(stripped);
 }
 
 // --- Strip markdown code fences ---
@@ -491,10 +497,11 @@ export default function ScriptDetailPage() {
 
 function ScriptDetailContent() {
   const params = useParams();
-  const searchParams = useSearchParams();
-  const router = useRouter();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const addToast = useToast((s) => s.addToast);
-  const scriptId = params?.id;
+  const isNew = params?.id === 'new';
+  const scriptId = isNew ? null : params?.id;
   const isSocialPost = searchParams?.get('source') === 'social_post';
 
   // --- Data Hooks (switch by source type) ---
@@ -506,10 +513,17 @@ function ScriptDetailContent() {
   const { data: rawData, isLoading: scriptLoading, error: scriptError } = scriptQuery;
   const { data: postData, isLoading: postLoading, error: postError } = postQuery;
 
-  const script = isSocialPost ? postData : (rawData ?? postData);
-  const isLoading = isSocialPost ? postLoading : (scriptLoading || (!rawData && postLoading));
-  const error = isSocialPost ? postError : (rawData ? null : (scriptError && postError ? scriptError : null));
-  const resolvedIsSocialPost = isSocialPost || (!rawData && !!postData);
+  const defaultNewScript = {
+    title: 'Kịch Bản Mới',
+    content_type: 'latc',
+    status: 'draft',
+    body: '',
+  };
+
+  const script = isNew ? defaultNewScript : (isSocialPost ? postData : (rawData ?? postData));
+  const isLoading = isNew ? false : (isSocialPost ? postLoading : (scriptLoading || (!rawData && postLoading)));
+  const error = isNew ? null : (isSocialPost ? postError : (rawData ? null : (scriptError && postError ? scriptError : null)));
+  const resolvedIsSocialPost = isSocialPost || (!rawData && !!postData && !isNew);
   const updateMutation = resolvedIsSocialPost ? updatePostMutation : updateScriptMutation;
 
   // --- Local State ---
@@ -517,7 +531,7 @@ function ScriptDetailContent() {
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(isNew);
   const [showVersions, setShowVersions] = useState(false);
   const [showLogPanel, setShowLogPanel] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -573,6 +587,55 @@ function ScriptDetailContent() {
   const [newsScheduleDate, setNewsScheduleDate] = useState('');
   const [newsScheduleTime, setNewsScheduleTime] = useState('08:00');
 
+  // --- Metadata Edit State ---
+  const [metaFields, setMetaFields] = useState({
+    content_type: 'latc',
+    job_type: 'script',
+    pillar: 'trading',
+    track: 'wealth',
+    persona: 'jennie_mentor',
+    writing_mode: 'mode_1_calm',
+    brand_voice: 'jennie',
+    publish_mode: 'scheduled',
+    posted_account: 'default',
+    model: '',
+    provider: '',
+    sop_id: '',
+  });
+
+  // Sync metaFields from script
+  useEffect(() => {
+    if (script && !isDirty) {
+      const extraMeta = script.metadata || {};
+      setMetaFields(prev => ({
+        ...prev,
+        content_type: script.content_type || 'latc',
+        job_type: script.job_type || 'script',
+        pillar: script.pillar || 'trading',
+        track: script.track || 'wealth',
+        persona: script.persona || 'jennie_mentor',
+        writing_mode: script.writing_mode || 'mode_1_calm',
+        brand_voice: script.brand_voice || 'jennie',
+        publish_mode: script.publish_mode || 'scheduled',
+        posted_account: script.posted_account || 'default',
+        model: script.model || '',
+        provider: script.provider || '',
+        sop_id: script.sop_id || '',
+        email_day: extraMeta.email_day || '',
+        from_email: extraMeta.from_email || '',
+        email_template: extraMeta.email_template || '',
+        audience_type: extraMeta.audience_type || '',
+        preview_text: extraMeta.preview_text || '',
+        campaign_type: extraMeta.campaign_type || '',
+      }));
+    }
+  }, [script, isDirty]);
+
+  const handleMetaChange = (field, value) => {
+    setMetaFields(prev => ({ ...prev, [field]: value }));
+    setIsDirty(true);
+  };
+
   // --- Email Send State ---
   const [emailTo, setEmailTo] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
@@ -609,7 +672,7 @@ function ScriptDetailContent() {
 
   // --- Auto-save every 30 seconds ---
   useEffect(() => {
-    if (!isDirty || !scriptId) return;
+    if (!isDirty || !scriptId || isNew) return;
 
     autoSaveRef.current = setInterval(async () => {
       try {
@@ -629,7 +692,7 @@ function ScriptDetailContent() {
         clearInterval(autoSaveRef.current);
       }
     };
-  }, [isDirty, scriptId, body, updateMutation]);
+  }, [isDirty, scriptId, isNew, body, updateMutation, resolvedIsSocialPost]);
 
   // --- Derived Values ---
   const wordCount = useMemo(() => countWords(body), [body]);
@@ -734,30 +797,78 @@ function ScriptDetailContent() {
   }, [body]);
 
   const handleSaveTitle = useCallback(async () => {
-    if (!scriptId || !editableTitle.trim()) { setIsEditingTitle(false); return; }
+    if (isNew || !scriptId || !editableTitle.trim()) { setIsEditingTitle(false); return; }
+    if (resolvedIsSocialPost) { setIsEditingTitle(false); return; }
     try {
       await updateMutation.mutateAsync({ id: scriptId, updates: { title: editableTitle.trim() } });
       addToast({ type: 'success', message: 'Đã cập nhật tiêu đề.' });
     } catch { addToast({ type: 'error', message: 'Không thể lưu tiêu đề.' }); }
     setIsEditingTitle(false);
-  }, [scriptId, editableTitle, updateMutation, addToast]);
+  }, [isNew, scriptId, editableTitle, updateMutation, addToast, resolvedIsSocialPost]);
 
   const handleSave = useCallback(async () => {
-    if (!scriptId) return;
     setIsSaving(true);
     try {
-      const fieldName = resolvedIsSocialPost ? 'content' : 'body';
-      await updateMutation.mutateAsync({
-        id: scriptId,
-        updates: { [fieldName]: body },
+      // Chỉ gửi những trường có trong schema cc_scripts
+      const validFields = ['content_type', 'pillar', 'track', 'persona', 'writing_mode', 'publish_mode', 'posted_account', 'brand_voice'];
+      const metadataKeys = ['email_day', 'from_email', 'email_template', 'audience_type', 'preview_text', 'campaign_type'];
+      const validMetaFields = {};
+      const extraMetadataFields = {};
+      Object.keys(metaFields).forEach(k => {
+        if (validFields.includes(k)) {
+          validMetaFields[k] = metaFields[k];
+        } else if (metadataKeys.includes(k)) {
+          extraMetadataFields[k] = metaFields[k];
+        }
       });
-      setIsDirty(false);
-      addToast({ type: 'success', message: 'Đã lưu nội dung.' });
-    } catch {
-      addToast({ type: 'error', message: 'Không thể lưu nội dung.' });
+
+      if (isNew) {
+        const res = await fetch('/api/ops/content-pipeline/scripts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: editableTitle || 'Kịch Bản Mới',
+            body: body,
+            ...validMetaFields,
+            metadata: extraMetadataFields,
+            status: 'draft',
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.id) {
+          setIsDirty(false);
+          addToast({ type: 'success', message: 'Đã tạo nội dung mới.' });
+          navigate(`/GEM/cc/scripts/${data.id}`, { replace: true });
+        } else {
+          console.error('[CCScriptDetail] Insert Error:', data.error);
+          addToast({ type: 'error', message: data.error || 'Không thể tạo nội dung.' });
+        }
+      } else {
+        if (!scriptId) return;
+        const fieldName = resolvedIsSocialPost ? 'content' : 'body';
+        const updates = { 
+          [fieldName]: body,
+          ...(resolvedIsSocialPost ? {} : validMetaFields),
+          metadata: {
+            ...(script?.metadata || {}),
+            ...extraMetadataFields
+          }
+        };
+        await updateMutation.mutateAsync({
+          id: scriptId,
+          updates,
+        });
+        setIsDirty(false);
+        addToast({ type: 'success', message: 'Đã lưu nội dung.' });
+      }
+    } catch (err) {
+      console.error('[CCScriptDetail] Save Exception:', err);
+      const msg = err instanceof Error ? err.message : 'Lỗi không xác định';
+      addToast({ type: 'error', message: `Không thể lưu nội dung: ${msg}` });
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
-  }, [scriptId, body, updateMutation, resolvedIsSocialPost, addToast]);
+  }, [isNew, scriptId, body, editableTitle, updateMutation, resolvedIsSocialPost, addToast, navigate, metaFields]);
 
   // ═══ Iterate — Sửa script trong cùng session ═══
   const scriptSessionId = script?.session_id || null;
@@ -831,10 +942,15 @@ function ScriptDetailContent() {
     async (newStatus) => {
       if (!scriptId) return;
       try {
-        await updateMutation.mutateAsync({
-          id: scriptId,
-          updates: { status: newStatus },
-        });
+        if (newStatus === 'approved') {
+          const { opsApi } = await import('../../api/ops');
+          await opsApi.approveScript(scriptId);
+        } else {
+          await updateMutation.mutateAsync({
+            id: scriptId,
+            updates: { status: newStatus },
+          });
+        }
         addToast({
           type: 'success',
           message: `Trạng thái chuyển sang: ${STATUS_CONFIG[newStatus].label}`,
@@ -1203,7 +1319,7 @@ function ScriptDetailContent() {
     return (
       <div className="space-y-4">
         <button
-          onClick={() => router.push('/scripts')}
+          onClick={() => navigate('..')}
           className="flex items-center gap-2 text-sm text-txt-2 hover:text-txt transition-button"
         >
           <ArrowLeft size={16} />
@@ -1214,7 +1330,7 @@ function ScriptDetailContent() {
             <AlertTriangle size={40} className="mx-auto mb-3 text-danger" />
             <p className="text-sm text-danger mb-2">Không thể tải kịch bản</p>
             <p className="text-xxs text-txt-3">{error.message}</p>
-            <Button variant="outline" className="mt-4" onClick={() => router.back()}>
+            <Button variant="outline" className="mt-4" onClick={() => navigate(-1)}>
               Quay Lại
             </Button>
           </div>
@@ -1249,7 +1365,7 @@ function ScriptDetailContent() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <button
-            onClick={() => router.back()}
+            onClick={() => navigate(-1)}
             className="flex items-center gap-1.5 text-sm text-txt-2 hover:text-txt transition-button shrink-0"
           >
             <ArrowLeft size={16} />
@@ -1275,13 +1391,15 @@ function ScriptDetailContent() {
                 <h1 className="font-heading text-lg font-semibold text-txt truncate">
                   {scriptTitle}
                 </h1>
-                <button
-                  onClick={() => setIsEditingTitle(true)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-txt-3 hover:text-gold"
-                  title="Sửa tiêu đề"
-                >
-                  <Pencil size={13} />
-                </button>
+                {!resolvedIsSocialPost && (
+                  <button
+                    onClick={() => setIsEditingTitle(true)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-txt-3 hover:text-gold"
+                    title="Sửa tiêu đề"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1427,6 +1545,19 @@ function ScriptDetailContent() {
                 {statusConfig.nextLabel}
               </Button>
             )}
+
+            {/* Direct Approve Button for fast-track workflow */}
+            {status !== 'approved' && status !== 'published' && (
+              <Button
+                variant="success"
+                size="sm"
+                icon={CheckCircle}
+                onClick={() => handleStatusChange('approved')}
+                loading={updateMutation.isPending}
+              >
+                Duyệt (Trực tiếp)
+              </Button>
+            )}
           </div>
         </div>
 
@@ -1475,14 +1606,166 @@ function ScriptDetailContent() {
 
         {/* Content Area */}
         {isEditing ? (
-          <textarea
-            value={body}
-            onChange={handleBodyChange}
-            style={{ minHeight: `${textareaMinHeight}px` }}
-            className="w-full p-5 bg-transparent text-sm text-txt font-body leading-relaxed resize-y focus:outline-none placeholder:text-txt-3"
-            placeholder="Bắt đầu viết kịch bản tại đây..."
-            spellCheck={false}
-          />
+          <div className="flex flex-col border-t border-border">
+            {/* Metadata Editor */}
+            <div className="bg-bg-2/50 p-4 border-b border-border grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Job Type</label>
+                <select disabled value={metaFields.job_type || ''} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold opacity-50 cursor-not-allowed">
+                  <option value="">N/A</option>
+                  <option value="script">Script</option>
+                  <option value="email">Email</option>
+                  <option value="social_post">Social Post</option>
+                  <option value="batch_generate">Batch Generate</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Content Type</label>
+                <select value={metaFields.content_type || ''} onChange={e => handleMetaChange('content_type', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="latc">LATC</option>
+                  <option value="tmt">TMT</option>
+                  <option value="short_clip">Short Clip</option>
+                  <option value="social_post">Social Post</option>
+                  <option value="news">News</option>
+                  <option value="banner">Banner</option>
+                  <option value="push_notification">Push Notification</option>
+                  <option value="inapp_story">In-app Story</option>
+                  <option value="sms">SMS</option>
+                  <option value="chatbot_script">Chatbot Script</option>
+                  <option value="email">Email</option>
+                  <option value="content_planner">Content Planner</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Pillar</label>
+                <select value={metaFields.pillar || ''} onChange={e => handleMetaChange('pillar', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="trading">Trading</option>
+                  <option value="wealth">Wealth</option>
+                  <option value="spiritual">Spiritual</option>
+                  <option value="integration">Integration</option>
+                  <option value="education">Education</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Track</label>
+                <select value={metaFields.track || ''} onChange={e => handleMetaChange('track', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="wealth">Wealth</option>
+                  <option value="spiritual">Spiritual</option>
+                  <option value="integration">Integration</option>
+                  <option value="education">Education</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Persona</label>
+                <select value={metaFields.persona || ''} onChange={e => handleMetaChange('persona', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="jennie_mentor">Jennie Mentor</option>
+                  <option value="jennie_provocateur">Jennie Provocateur</option>
+                  <option value="jennie_storyteller">Jennie Storyteller</option>
+                  <option value="jennie_analyst">Jennie Analyst</option>
+                  <option value="jennie_motivator">Jennie Motivator</option>
+                  <option value="jennie_confidante">Jennie Confidante</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Writing Mode</label>
+                <select value={metaFields.writing_mode || ''} onChange={e => handleMetaChange('writing_mode', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="mode_1_calm">Mode 1: Calm</option>
+                  <option value="mode_2_provocative">Mode 2: Provocative</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Publish Mode</label>
+                <select value={metaFields.publish_mode || ''} onChange={e => handleMetaChange('publish_mode', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="scheduled">Lên lịch tự động (Scheduled)</option>
+                  <option value="immediate">Đăng ngay (Immediate)</option>
+                  <option value="threshold_5">Gom đủ 5 bài (Threshold)</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Posted Account</label>
+                <select value={metaFields.posted_account || ''} onChange={e => handleMetaChange('posted_account', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                  <option value="page_jennie">Page Jennie Chu</option>
+                  <option value="page_gemral">Page Gemral Official</option>
+                  <option value="profile_jennie">Profile Uyen Chu</option>
+                  <option value="forum_gemral">Forum Gemral</option>
+                  <option value="telegram_channel">Telegram Channel</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Model</label>
+                <input disabled value={metaFields.model || ''} placeholder="claude-3-5-sonnet..." className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold opacity-50 cursor-not-allowed" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Provider</label>
+                <select disabled value={metaFields.provider || ''} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold opacity-50 cursor-not-allowed">
+                  <option value="">(None)</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Gemini</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">Brand Voice</label>
+                <input value={metaFields.brand_voice || ''} onChange={e => handleMetaChange('brand_voice', e.target.value)} placeholder="jennie" className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gold">SOP ID</label>
+                <input disabled value={metaFields.sop_id || ''} placeholder="UUID..." className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold opacity-50 cursor-not-allowed" />
+              </div>
+
+              {metaFields.content_type === 'email' && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gold">Email Day</label>
+                    <input type="number" value={metaFields.email_day || ''} onChange={e => handleMetaChange('email_day', e.target.value)} placeholder="VD: 1" className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gold">From Email</label>
+                    <input value={metaFields.from_email || ''} onChange={e => handleMetaChange('from_email', e.target.value)} placeholder="hello@gemral.com" className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gold">Email Template</label>
+                    <input value={metaFields.email_template || ''} onChange={e => handleMetaChange('email_template', e.target.value)} placeholder="custom" className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gold">Audience Type</label>
+                    <select value={metaFields.audience_type || ''} onChange={e => handleMetaChange('audience_type', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                      <option value="">N/A</option>
+                      <option value="all">All</option>
+                      <option value="paid">Paid</option>
+                      <option value="free">Free</option>
+                      <option value="tier1">Tier 1</option>
+                      <option value="tier2">Tier 2</option>
+                      <option value="tier3">Tier 3</option>
+                      <option value="students">Students</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gold">Preview Text</label>
+                    <input value={metaFields.preview_text || ''} onChange={e => handleMetaChange('preview_text', e.target.value)} placeholder="Preview Text..." className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gold">Campaign Type</label>
+                    <select value={metaFields.campaign_type || ''} onChange={e => handleMetaChange('campaign_type', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
+                      <option value="">N/A</option>
+                      <option value="one_time">One Time</option>
+                      <option value="automated">Automated</option>
+                      <option value="drip">Drip Campaign</option>
+                    </select>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <textarea
+              value={body}
+              onChange={handleBodyChange}
+              style={{ minHeight: `${textareaMinHeight}px` }}
+              className="w-full p-5 bg-transparent text-sm text-txt font-body leading-relaxed resize-y focus:outline-none placeholder:text-txt-3"
+              placeholder="Bắt đầu viết kịch bản tại đây..."
+              spellCheck={false}
+            />
+          </div>
         ) : isHtmlContent(mainContent) ? (
           <div className="overflow-hidden" style={{ minHeight: 300 }}>
             <iframe
@@ -2139,7 +2422,7 @@ function ScriptDetailContent() {
                 </div>
               </div>
               <button
-                onClick={() => router.push(`/scripts/${parentScriptId}`)}
+                onClick={() => navigate(`../${parentScriptId}`)}
                 className="w-full flex items-center gap-3 p-2 rounded-card bg-glass-bg hover:bg-bg-4 transition-all text-left"
               >
                 <BookOpen size={14} className="text-purple shrink-0" />

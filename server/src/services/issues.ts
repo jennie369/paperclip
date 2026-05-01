@@ -1450,15 +1450,21 @@ export function issueService(db: Db) {
         }
       }
 
-      // Handle case where checkoutRunId is null (execution-path assignment or legacy state)
-      // but executionRunId is stale/terminal — allow adoption so the agent can continue.
+      // Handle case where checkoutRunId is null (execution-path assignment or legacy state).
+      // Adopt when:
+      //   (a) executionRunId already matches actorRunId — proof of ownership equivalent
+      //       to holding checkoutRunId (mirrors acquire() at the equivalent branch).
+      //   (b) executionRunId is missing or stale/terminal — caller can take over.
       if (
         actorRunId &&
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
         !current.checkoutRunId
       ) {
-        const staleExecution = !current.executionRunId || await isTerminalOrMissingHeartbeatRun(current.executionRunId);
+        const staleExecution =
+          !current.executionRunId ||
+          current.executionRunId === actorRunId ||
+          (await isTerminalOrMissingHeartbeatRun(current.executionRunId));
         if (staleExecution) {
           const now = new Date();
           const adopted = await db

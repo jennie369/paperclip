@@ -107,6 +107,21 @@ router.post('/send', async (req, res) => {
 });
 
 /**
+ * POST /api/channels/zalo-personal/test-file
+ */
+router.post('/test-file', async (req, res) => {
+  const { channel_name, thread_id, filepath } = req.body;
+  const channel = activeChannels.get(channel_name);
+  if (!channel) return res.status(404).json({ error: 'Channel not connected' });
+  try {
+    const result = await channel.sendFile(thread_id, filepath, 'dm', 'Dạ test file đính kèm');
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/channels/zalo-personal/:name/start
  * Start channel from saved credentials
  */

@@ -20,6 +20,7 @@ export const updateCompanySchema = createCompanySchema
     requireBoardApprovalForNewAgents: z.boolean().optional(),
     brandColor: brandColorSchema,
     logoAssetId: logoAssetIdSchema,
+    sidebarConfig: z.any().optional(),
   });
 
 export type UpdateCompany = z.infer<typeof updateCompanySchema>;
@@ -30,6 +31,7 @@ export const updateCompanyBrandingSchema = z
     description: z.string().nullable().optional(),
     brandColor: brandColorSchema,
     logoAssetId: logoAssetIdSchema,
+    sidebarConfig: z.any().optional(),
   })
   .strict()
   .refine(
@@ -37,7 +39,8 @@ export const updateCompanyBrandingSchema = z
       value.name !== undefined
       || value.description !== undefined
       || value.brandColor !== undefined
-      || value.logoAssetId !== undefined,
+      || value.logoAssetId !== undefined
+      || value.sidebarConfig !== undefined,
     "At least one branding field must be provided",
   );
 

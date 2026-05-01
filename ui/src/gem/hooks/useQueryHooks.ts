@@ -171,16 +171,24 @@ export function useUpdateScript() {
 
   return useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: Record<string, unknown> }) => {
-      const supabase = getSupabase();
-      const { data, error } = await supabase
-        .from('cc_scripts')
-        .update({ ...updates, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .select()
-        .single();
+      const response = await fetch(`/api/ops/content-pipeline/scripts/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
 
-      if (error) throw new Error(error.message);
-      return data;
+      if (!response.ok) {
+        let errorMsg = `Failed to update script`;
+        try {
+          const errData = await response.json();
+          if (errData.error) errorMsg = errData.error;
+        } catch (e) {}
+        throw new Error(errorMsg);
+      }
+
+      return await response.json();
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.scripts.all });

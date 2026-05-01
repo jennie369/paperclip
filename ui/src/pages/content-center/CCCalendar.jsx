@@ -22,7 +22,7 @@ import {
 import { calendarService } from '@gem/services';
 import { useCalendarEvents, useScripts } from '@gem/hooks/useQueryHooks';
 import CCSelect from './CCSelect';
-
+import { Link, useNavigate } from 'react-router-dom';
 // ============================================================================
 // Constants
 // ============================================================================
@@ -176,6 +176,7 @@ const DEFAULT_FORM = {
 // ============================================================================
 
 export default function CalendarPage() {
+  const navigate = useNavigate();
   const today = formatISO(new Date());
   const [viewMode, setViewMode] = useState('month');
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -424,7 +425,26 @@ export default function CalendarPage() {
         <div className="flex items-center gap-2">
           <button onClick={goToday} className="btn btn-gh text-xs">Hôm nay</button>
           <button onClick={navigatePrev} className="btn btn-gh p-2"><ChevronLeft size={16} /></button>
-          <span className="text-sm font-medium text-txt min-w-[180px] text-center">{headerTitle}</span>
+          <div className="relative flex items-center justify-center min-w-[180px]">
+            <input
+              type="date"
+              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+              value={currentDate.toISOString().slice(0, 10)}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setCurrentDate(new Date(e.target.value));
+                }
+              }}
+              onClick={(e) => {
+                if ('showPicker' in HTMLInputElement.prototype) {
+                  try {
+                    e.target.showPicker();
+                  } catch (err) {}
+                }
+              }}
+            />
+            <span className="text-sm font-medium text-txt text-center pointer-events-none relative z-10">{headerTitle}</span>
+          </div>
           <button onClick={navigateNext} className="btn btn-gh p-2"><ChevronRight size={16} /></button>
           <div className="h-5 w-px bg-border mx-1" />
           <button
@@ -813,6 +833,13 @@ export default function CalendarPage() {
                     type="date"
                     value={form.scheduled_date}
                     onChange={(e) => updateField('scheduled_date', e.target.value)}
+                    onClick={(e) => {
+                      if ('showPicker' in HTMLInputElement.prototype) {
+                        try {
+                          e.target.showPicker();
+                        } catch (err) {}
+                      }
+                    }}
                     className="fi text-sm w-full"
                   />
                 </div>

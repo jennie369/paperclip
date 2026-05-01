@@ -539,7 +539,17 @@ export class ZaloPersonalChannel {
           const kind = isImageMedia(item) ? 'image' : 'file';
 
           try {
-            const result = await sendFn(outMsg.chatId, localPath, threadType, item.caption, agentSlug);
+            // Don't pass item.caption — router.ts parseMediaMarkers currently
+            // populates it from media-library `description`, which is LLM meta
+            // (system-prompt hint to help the agent pick an id), not customer-
+            // facing text. Leaking the description into Zalo as photo `desc`
+            // (or as a follow-up text bubble) looks like a tooling glitch.
+            // The agent's surrounding reply already explains the image.
+            // Incident 2026-05-01: customer received "Hình đá thạch anh tím
+            // (Amethyst) - cụm crystal tím hộ thân, gửi khi khách hỏi xem
+            // ảnh đá thạch anh tím / amethyst / crystal tím" as a separate
+            // text bubble after the photo. Pass undefined → empty desc.
+            const result = await sendFn(outMsg.chatId, localPath, threadType, undefined, agentSlug);
             if (result.success) {
               console.log(`${this.tag} ✅ Sent ${kind}: ${pathBasename(localPath)}`);
             } else {
@@ -720,8 +730,8 @@ export class ZaloPersonalChannel {
     if (!this.session) return { success: false, error: 'Not connected' };
 
     const result = threadType === 'group'
-      ? await sendGroupFile(this.session, threadId, filePath, caption)
-      : await sendDMFile(this.session, threadId, filePath, caption);
+      ? await sendGroupFile(this.session, this.listener, threadId, filePath, caption)
+      : await sendDMFile(this.session, this.listener, threadId, filePath, caption);
 
     await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,

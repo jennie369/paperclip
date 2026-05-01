@@ -16,7 +16,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { NavLink, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Plus, Filter } from "lucide-react";
+import { ChevronRight, Plus, Filter, Inbox, Users } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,57 +36,21 @@ import { queryKeys } from "../lib/queryKeys";
 import { cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { useAgentOrder } from "../hooks/useAgentOrder";
 import { AgentIcon } from "./AgentIconPicker";
+import { SortableAgentItem } from "./SortableAgentItem";
+import { SidebarSection } from "./SidebarSection";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import type { Agent } from "@paperclipai/shared";
-export function SidebarAgents({ label = "Agents", onLabelChange }: { label?: string, onLabelChange?: (label: string) => void }) {
-  const [open, setOpen] = useState(true);
-  
-  const [isEditing, setIsEditing] = useState(false);
-  const [editValue, setEditValue] = useState(label);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!isEditing) setEditValue(label);
-  }, [label, isEditing]);
-
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setIsEditing(true);
-  };
-
-  const handleBlur = () => {
-    setIsEditing(false);
-    if (editValue.trim() !== "" && editValue !== label && onLabelChange) {
-      onLabelChange(editValue);
-    } else {
-      setEditValue(label);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.stopPropagation();
-      inputRef.current?.blur();
-    }
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      setEditValue(label);
-      setIsEditing(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [isEditing]);
-  
+export function SidebarAgents({
+  label = "Agents",
+  onLabelChange,
+  dragHandleListeners,
+  dragHandleAttributes
+}: {
+  label?: string,
+  onLabelChange?: (label: string) => void,
+  dragHandleListeners?: any,
+  dragHandleAttributes?: any
+}) {
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialog();
   const { isMobile, setSidebarOpen } = useSidebar();
@@ -171,86 +135,79 @@ export function SidebarAgents({ label = "Agents", onLabelChange }: { label?: str
 
       persistOrder(arrayMove(ids, oldIndex, newIndex));
     },
-    [orderedAgents, persistOrder],
+    [orderedAgents, persistOrder, sortOrder],
   );
 
+  const actionButtons = (
+    <div className="flex items-center">
+      <span className="opacity-70 font-sans normal-case text-[10px] mr-1">({visibleAgents.length})</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          openNewAgent();
+        }}
+        className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors"
+        aria-label="New agent"
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors ml-1"
+            aria-label="Sort agents"
+          >
+            <Filter className="h-3 w-3" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenuLabel>Sắp xếp Agents</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuRadioGroup value={sortOrder} onValueChange={(v) => setSortOrder(v as any)}>
+            <DropdownMenuRadioItem value="custom">Tùy chỉnh (Kéo thả)</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="role">Theo loại (Role)</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="name">Theo tên (A-Z)</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="group">
-        <div className="flex items-center px-3 py-1.5">
-          <CollapsibleTrigger className="flex items-center gap-1 flex-1 min-w-0">
-            <ChevronRight
-              className={cn(
-                "h-3 w-3 text-muted-foreground/60 transition-transform opacity-0 group-hover:opacity-100",
-                open && "rotate-90"
-              )}
-            />
-            <span className="text-[10px] font-medium uppercase tracking-widest font-mono text-muted-foreground/60">
-              Agents <span className="opacity-70 font-sans normal-case text-[10px]">({visibleAgents.length})</span>
-            </span>
-          </CollapsibleTrigger>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openNewAgent();
-            }}
-            className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors"
-            aria-label="New agent"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                onClick={(e) => e.stopPropagation()}
-                className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors ml-1"
-                aria-label="Sort agents"
-              >
-                <Filter className="h-3 w-3" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuLabel>Sắp xếp Agents</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuRadioGroup value={sortOrder} onValueChange={(v) => setSortOrder(v as any)}>
-                <DropdownMenuRadioItem value="custom">Tùy chỉnh (Kéo thả)</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="role">Theo loại (Role)</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="name">Theo tên (A-Z)</DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-
-      <CollapsibleContent>
-        <DndContext
-          id="agents-context"
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext items={displayAgents.map((a: Agent) => a.id)} strategy={verticalListSortingStrategy}>
-            <div className="flex flex-col gap-0.5 mt-0.5">
-              {displayAgents.map((agent: Agent) => {
-                const runCount = liveCountByAgent.get(agent.id) ?? 0;
-                return (
-                  <SortableAgentItem
-                    key={agent.id}
-                    agent={agent}
-                    activeTab={activeTab}
-                    isMobile={isMobile}
-                    setSidebarOpen={setSidebarOpen}
-                    activeAgentId={activeAgentId}
-                    runCount={runCount}
-                  />
-                );
-              })}
-            </div>
-          </SortableContext>
-        </DndContext>
-      </CollapsibleContent>
-    </Collapsible>
+    <SidebarSection
+      label={label}
+      onLabelChange={onLabelChange}
+      dragHandleListeners={dragHandleListeners}
+      dragHandleAttributes={dragHandleAttributes}
+      action={actionButtons}
+    >
+      <DndContext
+        id="agents-context"
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={displayAgents.map((a: Agent) => a.id)} strategy={verticalListSortingStrategy}>
+          <div className="flex flex-col gap-0.5 mt-0.5 mb-2">
+            {displayAgents.map((agent: Agent) => {
+              const runCount = liveCountByAgent.get(agent.id) ?? 0;
+              return (
+                <SortableAgentItem
+                  key={agent.id}
+                  agent={agent}
+                  activeTab={activeTab}
+                  isMobile={isMobile}
+                  setSidebarOpen={setSidebarOpen}
+                  activeAgentId={activeAgentId}
+                  runCount={runCount}
+                />
+              );
+            })}
+          </div>
+        </SortableContext>
+      </DndContext>
+    </SidebarSection>
   );
 }
 

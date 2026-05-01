@@ -1,0 +1,14 @@
+=== NODE PROCESSES ===
+﻿node.exe                    148656 Console                    1     87,700 K
+node.exe                     65512 Console                    1     85,540 K
+node.exe                     89700 Console                    1     51,764 K
+node.exe                    142756 Console                    1    198,524 K
+node.exe                    120072 Console                    1     84,068 K
+node.exe                     94596 Console                    1     83,944 K
+node.exe                     96136 Console                    1     84,064 K
+node.exe                     80312 Console                    1     73,272 K
+node.exe                     77676 Console                    1     98,624 K
+node.exe                     87928 Console                    1     63,216 K
+
+=== INTERESTING PORTS (3000, 3100, 3101, 5432, 6543) ===
+  TCP    127.0.0.1:3101         0.0.0.0:0              LISTENING       142756

@@ -201,6 +201,47 @@ export function saveVisibleColumns(cols: ColumnKey[]): void {
   }
 }
 
+// ─── localStorage helpers for filter state ───────────────────────────────
+
+const QUERY_KEY = "timetable.query.v1";
+const BUCKET_KEY = "timetable.bucket.v1";
+
+export function loadSavedQuery(): string {
+  try {
+    return localStorage.getItem(QUERY_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveQuery(q: string): void {
+  try {
+    localStorage.setItem(QUERY_KEY, q);
+  } catch {
+    // ignore
+  }
+}
+
+export function loadSavedBucket(): TimeBucket | "now" | "all" {
+  try {
+    const val = localStorage.getItem(BUCKET_KEY);
+    if (val === "now" || val === "morning" || val === "afternoon" || val === "evening" || val === "all") {
+      return val;
+    }
+    return "now";
+  } catch {
+    return "now";
+  }
+}
+
+export function saveBucket(b: TimeBucket | "now" | "all"): void {
+  try {
+    localStorage.setItem(BUCKET_KEY, b);
+  } catch {
+    // ignore
+  }
+}
+
 // ─── Smart search parser + applier ───────────────────────────────────────
 
 export type SearchTimeBucket = "morning" | "afternoon" | "evening" | "upcoming";

@@ -451,11 +451,42 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
   border-radius: calc(var(--radius) - 2px);
 }
 
-/* Responsive tables: scroll horizontally on narrow viewports (mobile) */
+/* Tables: Obsidian-like rendering with borders and proper layout */
 .paperclip-mdxeditor-content table {
+  border-collapse: collapse;
+  margin: 1.1em 0;
+  width: auto;
+  max-width: 100%;
+  font-size: 0.9em;
+}
+
+/* Horizontal scroll on narrow viewports — applied to the MDXEditor table element */
+.paperclip-mdxeditor-content [class*="_tableEditor_"] {
   display: block;
   overflow-x: auto;
   max-width: 100%;
+}
+
+.paperclip-mdxeditor-content th,
+.paperclip-mdxeditor-content td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.75em;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+  min-width: 4rem;
+}
+
+.paperclip-mdxeditor-content thead th,
+.paperclip-mdxeditor-content thead td {
+  background-color: color-mix(in oklab, var(--muted) 70%, transparent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.paperclip-mdxeditor-content tbody tr:nth-child(even) td,
+.paperclip-mdxeditor-content tbody tr:nth-child(even) th {
+  background-color: color-mix(in oklab, var(--muted) 25%, transparent);
 }
 
 .paperclip-mdxeditor-content blockquote {
@@ -727,20 +758,28 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
 .paperclip-markdown td {
   border: none;
   border-bottom: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
-  padding: 0.5em 1em;
-  vertical-align: middle;
+  border-right: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent);
+  padding: 0.45em 0.9em;
+  vertical-align: top;
   text-align: left;
-  white-space: nowrap;
+  word-break: break-word;
+}
+
+.paperclip-markdown th:last-child,
+.paperclip-markdown td:last-child {
+  border-right: none;
 }
 
 .paperclip-markdown th {
   font-weight: 600;
-  font-size: 0.8em;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: color-mix(in oklab, var(--foreground) 70%, transparent);
+  font-size: 0.875em;
+  color: var(--foreground);
   background-color: color-mix(in oklab, var(--accent) 60%, transparent);
-  border-bottom: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+  border-bottom: 2px solid color-mix(in oklab, var(--foreground) 18%, transparent);
+}
+
+.paperclip-markdown tbody tr:nth-child(even) td {
+  background-color: color-mix(in oklab, var(--accent) 15%, transparent);
 }
 
 .paperclip-markdown tbody tr:last-child td {
@@ -748,17 +787,17 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
 }
 
 .paperclip-markdown tbody tr:hover td {
-  background-color: color-mix(in oklab, var(--accent) 30%, transparent);
+  background-color: color-mix(in oklab, var(--accent) 35%, transparent);
 }
 
 .paperclip-markdown td:first-child,
 .paperclip-markdown th:first-child {
-  padding-left: 1.25em;
+  padding-left: 1.1em;
 }
 
 .paperclip-markdown td:last-child,
 .paperclip-markdown th:last-child {
-  padding-right: 1.25em;
+  padding-right: 1.1em;
 }
 
 .paperclip-mermaid {

@@ -1036,6 +1036,27 @@ export async function runChildProcess(
       delete rawMerged[key];
     }
 
+    // GEMRAL FIX 2026-04-30: Force Gemini CLI use OAuth Ultra subscription
+    // (defense in depth):
+    //   1. Strip API key env vars (GEMINI_API_KEY / GOOGLE_API_KEY /
+    //      GOOGLE_GENAI_API_KEY) so CLI doesn't pick api-key auth.
+    //   2. Set GOOGLE_GENAI_USE_GCA=true — explicit escape hatch in CLI
+    //      getAuthTypeFromEnv() that forces AuthType.LOGIN_WITH_GOOGLE
+    //      even if API keys somehow remain.
+    // Source verified: gemini-cli bundle/chunk-IWSCP2GY.js line 278443.
+    // Without this, CLI fallback to free tier API → 429 quota exceeded on
+    // cloudcode-pa.googleapis.com. Affects all heartbeat agents (gemini-local
+    // adapter) + chatbot router + kg-extractor + training-orchestrator.
+    const GEMINI_API_KEY_VARS = [
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "GOOGLE_GENAI_API_KEY",
+    ] as const;
+    for (const key of GEMINI_API_KEY_VARS) {
+      delete rawMerged[key];
+    }
+    rawMerged["GOOGLE_GENAI_USE_GCA"] = "true";
+
     const mergedEnv = ensurePathInEnv(rawMerged);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv)
       .then((target) => {

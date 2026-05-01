@@ -176,8 +176,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // selection is already handled via the --model CLI flag.  Set after the
   // envConfig loop so user overrides cannot disable this guard.
   env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
-  if (!hasExplicitApiKey && authToken) {
+  if (authToken) {
     env.PAPERCLIP_API_KEY = authToken;
+  } else if (!hasExplicitApiKey) {
+    // Prevent parent process PAPERCLIP_API_KEY from leaking into the agent subprocess.
+    env.PAPERCLIP_API_KEY = "";
   }
   const preparedRuntimeConfig = await prepareOpenCodeRuntimeConfig({ env, config });
   try {

@@ -21,11 +21,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { cn, projectRouteRef } from "../lib/utils";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { SidebarSection } from "./SidebarSection";
 import { PluginSlotMount, usePluginSlots } from "@/plugins/slots";
 import type { Project } from "@paperclipai/shared";
 
@@ -115,8 +111,17 @@ function SortableProjectItem({
   );
 }
 
-export function SidebarProjects({ label = "Projects", onLabelChange }: { label?: string, onLabelChange?: (label: string) => void }) {
-  const [open, setOpen] = useState(true);
+export function SidebarProjects({
+  label = "Projects",
+  onLabelChange,
+  dragHandleListeners,
+  dragHandleAttributes
+}: {
+  label?: string,
+  onLabelChange?: (label: string) => void,
+  dragHandleListeners?: any,
+  dragHandleAttributes?: any
+}) {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { openNewProject } = useDialog();
   const { isMobile, setSidebarOpen } = useSidebar();
@@ -174,62 +179,53 @@ export function SidebarProjects({ label = "Projects", onLabelChange }: { label?:
     [orderedProjects, persistOrder],
   );
 
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="group">
-        <div className="flex items-center px-3 py-1.5">
-          <CollapsibleTrigger className="flex items-center gap-1 flex-1 min-w-0">
-            <ChevronRight
-              className={cn(
-                "h-3 w-3 text-muted-foreground/60 transition-transform opacity-0 group-hover:opacity-100",
-                open && "rotate-90"
-              )}
-            />
-            <span className="text-[10px] font-medium uppercase tracking-widest font-mono text-muted-foreground/60">
-              Projects
-            </span>
-          </CollapsibleTrigger>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openNewProject();
-            }}
-            className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors"
-            aria-label="New project"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
+  const actionButton = (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        openNewProject();
+      }}
+      className="flex items-center justify-center h-4 w-4 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent/50 transition-colors ml-1"
+      aria-label="New project"
+    >
+      <Plus className="h-3 w-3" />
+    </button>
+  );
 
-      <CollapsibleContent>
-        <DndContext
-          id="projects-context"
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
+  return (
+    <SidebarSection
+      label={label}
+      onLabelChange={onLabelChange}
+      dragHandleListeners={dragHandleListeners}
+      dragHandleAttributes={dragHandleAttributes}
+      action={actionButton}
+    >
+      <DndContext
+        id="projects-context"
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={orderedProjects.map((project) => project.id)}
+          strategy={verticalListSortingStrategy}
         >
-          <SortableContext
-            items={orderedProjects.map((project) => project.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="flex flex-col gap-0.5 mt-0.5">
-              {orderedProjects.map((project: Project) => (
-                <SortableProjectItem
-                  key={project.id}
-                  activeProjectRef={activeProjectRef}
-                  companyId={selectedCompanyId}
-                  companyPrefix={selectedCompany?.issuePrefix ?? null}
-                  isMobile={isMobile}
-                  project={project}
-                  projectSidebarSlots={projectSidebarSlots}
-                  setSidebarOpen={setSidebarOpen}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
-      </CollapsibleContent>
-    </Collapsible>
+          <div className="flex flex-col gap-0.5 mt-0.5">
+            {orderedProjects.map((project: Project) => (
+              <SortableProjectItem
+                key={project.id}
+                activeProjectRef={activeProjectRef}
+                companyId={selectedCompanyId}
+                companyPrefix={selectedCompany?.issuePrefix ?? null}
+                isMobile={isMobile}
+                project={project}
+                projectSidebarSlots={projectSidebarSlots}
+                setSidebarOpen={setSidebarOpen}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+    </SidebarSection>
   );
 }

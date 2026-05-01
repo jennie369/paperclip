@@ -8,6 +8,8 @@ import { Link } from "@/lib/router";
 import {
   ArrowRight,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   Plus,
   RotateCw,
 } from "lucide-react";
@@ -26,6 +28,10 @@ import {
   pushRecentSearch,
   loadVisibleColumns,
   saveVisibleColumns,
+  loadSavedQuery,
+  saveQuery,
+  loadSavedBucket,
+  saveBucket,
   currentTimeBucket,
   filterByBucket,
   type ColumnKey,
@@ -44,24 +50,43 @@ const BUCKET_TABS: Array<{ key: BucketFilter; label: string; hint: string }> = [
   { key: "all", label: "Tất cả", hint: "Cả ngày · có thể group/sort tuỳ chọn" },
 ];
 
-function todayLabelHCM(): string {
-  const now = new Date();
-  const weekday = now.toLocaleDateString("vi-VN", { timeZone: HCM_TZ, weekday: "short" });
-  const dmy = now.toLocaleDateString("vi-VN", {
-    timeZone: HCM_TZ,
+function todayHCM(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: HCM_TZ });
+}
+
+function shiftDay(date: string, days: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const dt = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1)));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function isToday(date: string): boolean {
+  return date === todayHCM();
+}
+
+function formatDateLabel(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const dt = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1)));
+  const weekday = dt.toLocaleDateString("vi-VN", { timeZone: "UTC", weekday: "short" });
+  const dmy = dt.toLocaleDateString("vi-VN", {
+    timeZone: "UTC",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
-  return `${weekday}, ${dmy}`;
+  const weekdayCap = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  return `${weekdayCap}, ${dmy}`;
 }
 
 export default function TimetableWidget() {
   const { selectedCompanyId } = useCompany();
   const companyId = selectedCompanyId ?? "";
 
+  const [date, setDate] = useState<string>(todayHCM());
+
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } =
-    useTimetable(companyId);
+    useTimetable(companyId, { date });
   const rows = data?.rows ?? [];
   const totalRows = rows.length;
 
@@ -71,15 +96,23 @@ export default function TimetableWidget() {
   const [sort, setSort] = useState<TimetableSort>({ field: "time", dir: "asc" });
   const [group, setGroup] = useState<TimetableGroup>("none");
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => loadVisibleColumns());
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => loadSavedQuery());
   // View tabs: morning · afternoon · evening · now · all.
   // Default 'now' = bucket containing current HCM hour — so at 18:35 the
   // widget opens on evening, not on morning rows.
-  const [bucketFilter, setBucketFilter] = useState<BucketFilter>("now");
+  const [bucketFilter, setBucketFilter] = useState<BucketFilter>(() => loadSavedBucket());
 
   useEffect(() => {
     saveVisibleColumns(visibleColumns);
   }, [visibleColumns]);
+
+  useEffect(() => {
+    saveQuery(query);
+  }, [query]);
+
+  useEffect(() => {
+    saveBucket(bucketFilter);
+  }, [bucketFilter]);
 
   // Persist once user pauses typing for 700ms.
   useEffect(() => {
@@ -108,10 +141,43 @@ export default function TimetableWidget() {
 
   const processedSections = useMemo(() => {
     const sorted = sortRows(filteredRows, sort);
-    // Cap before grouping so "Hiện thêm" still targets the overall count.
-    const capped = sorted.slice(0, visibleCount);
+    // Window-around-now: when sorted ascending by time AND user hasn't
+    // expanded pagination, center the 6-row window around the row whose
+    // startsAt is closest to current time (2 past + 4 upcoming). Fixes
+    // the case where at 16:19 the widget showed rows from 12:00 onward.
+    // useTimetable refetches every 30s so this recomputes automatically.
+    const centerOnNow =
+      sort.field === "time" &&
+      sort.dir === "asc" &&
+      visibleCount === DEFAULT_VISIBLE &&
+      sorted.length > visibleCount;
+    let capped;
+    if (centerOnNow) {
+      const nowMs = Date.now();
+      let nearestIdx = 0;
+      let bestDiff = Infinity;
+      for (let i = 0; i < sorted.length; i += 1) {
+        const diff = Math.abs(new Date(sorted[i].startsAt).getTime() - nowMs);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          nearestIdx = i;
+        }
+      }
+      const PAST_ROWS = 2;
+      const start = Math.max(
+        0,
+        Math.min(sorted.length - visibleCount, nearestIdx - PAST_ROWS),
+      );
+      capped = sorted.slice(start, start + visibleCount);
+    } else {
+      // Cap before grouping so "Hiện thêm" still targets the overall count.
+      capped = sorted.slice(0, visibleCount);
+    }
     return groupRows(capped, effectiveGroup);
-  }, [filteredRows, sort, effectiveGroup, visibleCount]);
+    // dataUpdatedAt included so the window recomputes on every 30s refetch,
+    // even when rows are reference-stable via React Query structural sharing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredRows, sort, effectiveGroup, visibleCount, dataUpdatedAt]);
 
   const visibleRowsCount = Math.min(visibleCount, filteredCount);
 
@@ -139,11 +205,54 @@ export default function TimetableWidget() {
     <div className="rounded-lg border border-border bg-card">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <CalendarDays className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-semibold uppercase tracking-wide">Lịch hôm nay</h3>
-          <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-            {todayLabelHCM()}
+          <h3 className="text-sm font-semibold uppercase tracking-wide">
+            {isToday(date) ? "Lịch hôm nay" : "Lịch theo ngày"}
+          </h3>
+          <div className="flex items-center gap-1.5 ml-1">
+            <button
+              type="button"
+              onClick={() => setDate((d) => shiftDay(d, -1))}
+              className="rounded border border-border p-0.5 text-muted-foreground hover:bg-accent"
+              title="Hôm trước"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <input
+              type="date"
+              className="rounded border border-border bg-background px-1.5 py-0.5 text-xs"
+              value={date}
+              onChange={(e) => setDate(e.target.value || todayHCM())}
+              aria-label="Chọn ngày"
+              onClick={(e) => {
+                if ('showPicker' in HTMLInputElement.prototype) {
+                  try {
+                    (e.target as HTMLInputElement).showPicker();
+                  } catch (err) {}
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setDate((d) => shiftDay(d, 1))}
+              className="rounded border border-border p-0.5 text-muted-foreground hover:bg-accent"
+              title="Hôm sau"
+            >
+              <ChevronRight size={14} />
+            </button>
+            {!isToday(date) && (
+              <button
+                type="button"
+                onClick={() => setDate(todayHCM())}
+                className="rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent"
+              >
+                Hôm nay
+              </button>
+            )}
+          </div>
+          <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground ml-1">
+            {formatDateLabel(date)}
           </span>
           <span className="inline-flex items-center gap-1 rounded bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-800 dark:bg-sky-950 dark:text-sky-300">
             <RotateCw size={10} className={isFetching ? "animate-spin" : ""} aria-hidden />
@@ -304,6 +413,7 @@ export default function TimetableWidget() {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         companyId={companyId}
+        defaultDate={date}
       />
 
       {/* Footer */}

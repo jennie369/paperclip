@@ -1,0 +1,1 @@
+{"nodes": [{"id": "companies", "label": "companies.ts", "file_type": "code", "source_file": "packages\\db\\src\\schema\\companies.ts", "source_location": "L1"}], "edges": [{"source": "companies", "target": "pg_core", "relation": "imports_from", "confidence": "EXTRACTED", "source_file": "packages\\db\\src\\schema\\companies.ts", "source_location": "L1", "weight": 1.0}]}

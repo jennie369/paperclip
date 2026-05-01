@@ -10,6 +10,7 @@ import {
   TerminalSquare,
   User,
   Wrench,
+  Copy,
 } from "lucide-react";
 
 /** Attempt to parse value as JSON; return parsed object or null */
@@ -48,6 +49,30 @@ function JsonTokens({ json }: { json: unknown }) {
  * - JSON → syntax-highlighted, collapsible if large
  * - Plain text → human-readable pre block
  */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="absolute top-2 right-2 p-1.5 bg-background/95 hover:bg-muted rounded-md text-muted-foreground hover:text-foreground transition-colors border border-border/50 shadow-sm opacity-0 group-hover:opacity-100 z-10"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
+/**
+ * Smart renderer for tool input/result payloads.
+ * - JSON → syntax-highlighted, collapsible if large
+ * - Plain text → human-readable pre block
+ */
 function SmartPayload({
   value,
   isError = false,
@@ -65,13 +90,77 @@ function SmartPayload({
   const isTall = lines.length > 14;
   const errorColor = "text-red-700 dark:text-red-300";
 
+  let copyText = text;
+
   if (!text.trim()) {
     return <span className="text-[11px] italic text-muted-foreground">&lt;empty&gt;</span>;
   }
 
   if (isJson) {
+    const isObject = typeof parsed === "object" && !Array.isArray(parsed) && parsed !== null;
+    
+    if (isObject) {
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj.thought === "string") {
+        copyText = obj.thought;
+      } else if (typeof obj.content === "string") {
+        const innerJson = tryParseJson(obj.content);
+        if (innerJson && typeof innerJson === "object" && innerJson !== null && typeof (innerJson as any).body === "string") {
+          copyText = (innerJson as any).body;
+        } else {
+          copyText = obj.content;
+        }
+      } else if (typeof obj.body === "string") {
+        copyText = obj.body;
+      }
+    }
+
+    const hasMultilineString = isObject && Object.values(parsed as Record<string, unknown>).some(v => {
+      if (typeof v === "string") {
+        if (v.includes("\n")) return true;
+        const inner = tryParseJson(v);
+        if (inner && typeof inner === "object" && !Array.isArray(inner) && inner !== null) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (hasMultilineString) {
+      return (
+        <div className="relative group">
+          <CopyButton text={copyText} />
+          <div className={cn("space-y-3 rounded-lg border border-border/40 bg-muted/30 px-3 py-3", isError ? errorColor : "")}>
+            {Object.entries(parsed as Record<string, unknown>).map(([k, v]) => {
+              const isMultiline = typeof v === "string" && v.includes("\n");
+              const innerJson = typeof v === "string" ? tryParseJson(v) : null;
+              const isInnerJsonObj = innerJson && typeof innerJson === "object" && !Array.isArray(innerJson) && innerJson !== null;
+
+              return (
+                <div key={k} className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">{k}</span>
+                  {isInnerJsonObj ? (
+                    <SmartPayload value={innerJson} />
+                  ) : isMultiline ? (
+                    <div className={cn("text-sm border-l-2 border-primary/20 pl-3 py-1.5 bg-background/50 rounded-r-md max-w-none", isError ? errorColor : "")}>
+                      <MarkdownBody>{v as string}</MarkdownBody>
+                    </div>
+                  ) : (
+                    <pre className={cn("text-[11px] whitespace-pre-wrap break-words", isError ? errorColor : "")}>
+                      <JsonTokens json={v} />
+                    </pre>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className="relative">
+      <div className="relative group">
+        <CopyButton text={copyText} />
         <div
           className={cn(
             "overflow-x-auto rounded-lg border border-border/40 bg-muted/30 px-3 py-2",
@@ -98,14 +187,18 @@ function SmartPayload({
 
   if (asMarkdown) {
     return (
-      <MarkdownBody className={cn("text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", isError && errorColor)}>
-        {text}
-      </MarkdownBody>
+      <div className="relative group">
+        <CopyButton text={text} />
+        <MarkdownBody className={cn("text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", isError ? errorColor : "")}>
+          {text}
+        </MarkdownBody>
+      </div>
     );
   }
 
   return (
-    <div className="relative">
+    <div className="relative group">
+      <CopyButton text={text} />
       <pre
         className={cn(
           "overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px]",
@@ -744,7 +837,7 @@ function TranscriptMessageBlock({
 
   if (!isAssistant) {
     return (
-      <details className="group" open>
+      <details className="group">
         <summary className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground cursor-pointer list-none select-none focus:outline-none [&::-webkit-details-marker]:hidden">
           <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90 text-muted-foreground/70" />
           <User className={compact ? "h-3.5 w-3.5 -ml-1" : "h-4 w-4 -ml-1"} />
@@ -1326,6 +1419,77 @@ function RawTranscriptView({
   );
 }
 
+function extractMeaningfulText(obj: unknown): string[] {
+  if (!obj || typeof obj !== "object") return [];
+  const lines: string[] = [];
+  const keys = ['thought', 'intent', 'research', 'result', 'sequence', 'show', 'thinking', 'description', 'content', 'summary', 'title', 'body'];
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (keys.includes(k.toLowerCase())) {
+      let textVal = "";
+      if (typeof v === "string") {
+        const innerObj = tryParseJson(v);
+        if (innerObj && typeof innerObj === "object" && !Array.isArray(innerObj)) {
+          const innerLines = extractMeaningfulText(innerObj);
+          if (innerLines.length > 0) {
+            lines.push(...innerLines);
+            continue;
+          }
+        }
+        textVal = v;
+      } else {
+        textVal = JSON.stringify(v, null, 2);
+      }
+      lines.push(`[${k.toUpperCase()}]:\n${textVal}\n`);
+    } else if (typeof v === "object" && v !== null) {
+      lines.push(...extractMeaningfulText(v));
+    }
+  }
+  return lines;
+}
+
+function generateCleanTranscript(blocks: TranscriptBlock[]): string {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (block.type === "message") {
+      parts.push(`--- ${block.role.toUpperCase()} ---\n${block.text}`);
+    } else if (block.type === "thinking") {
+      parts.push(`--- THINKING ---\n${block.text}`);
+    } else if (block.type === "tool" || block.type === "tool_group") {
+      const items = block.type === "tool" ? [block] : block.items;
+      for (const item of items) {
+        if (item.status === "error") continue;
+        const inputLines = extractMeaningfulText(tryParseJson(item.input));
+        if (inputLines.length > 0) parts.push(inputLines.join("\n").trim());
+        
+        if (item.result) {
+          const resLines = extractMeaningfulText(tryParseJson(item.result));
+          if (resLines.length > 0) parts.push(resLines.join("\n").trim());
+        }
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
+}
+
+function CopyTranscriptButton({ blocks }: { blocks: TranscriptBlock[] }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const text = generateCleanTranscript(blocks);
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted border border-border/50 rounded-md transition-colors"
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+      {copied ? "Copied Transcript" : "Copy Clean Transcript"}
+    </button>
+  );
+}
+
 export function RunTranscriptView({
   entries,
   mode = "nice",
@@ -1358,27 +1522,32 @@ export function RunTranscriptView({
   }
 
   return (
-    <div className={cn("space-y-3", className)}>
-      {visibleBlocks.map((block, index) => (
-        <div
-          key={`${block.type}-${block.ts}-${index}`}
-          className={cn(index === visibleBlocks.length - 1 && streaming && "animate-in fade-in slide-in-from-bottom-1 duration-300")}
-        >
-          {block.type === "message" && <TranscriptMessageBlock block={block} density={density} />}
-          {block.type === "thinking" && (
-            <TranscriptThinkingBlock block={block} density={density} className={thinkingClassName} />
-          )}
-          {block.type === "tool" && <TranscriptToolCard block={block} density={density} />}
-          {block.type === "command_group" && <TranscriptCommandGroup block={block} density={density} />}
-          {block.type === "tool_group" && <TranscriptToolGroup block={block} density={density} />}
-          {block.type === "stderr_group" && <TranscriptStderrGroup block={block} density={density} />}
-          {block.type === "stdout" && (
-            <TranscriptStdoutRow block={block} density={density} collapseByDefault={collapseStdout} />
-          )}
-          {block.type === "activity" && <TranscriptActivityRow block={block} density={density} />}
-          {block.type === "event" && <TranscriptEventRow block={block} density={density} />}
-        </div>
-      ))}
+    <div className={cn("flex flex-col gap-4", className)}>
+      <div className="flex justify-end">
+        <CopyTranscriptButton blocks={blocks} />
+      </div>
+      <div className="space-y-3">
+        {visibleBlocks.map((block, index) => (
+          <div
+            key={`${block.type}-${block.ts}-${index}`}
+            className={cn(index === visibleBlocks.length - 1 && streaming && "animate-in fade-in slide-in-from-bottom-1 duration-300")}
+          >
+            {block.type === "message" && <TranscriptMessageBlock block={block} density={density} />}
+            {block.type === "thinking" && (
+              <TranscriptThinkingBlock block={block} density={density} className={thinkingClassName} />
+            )}
+            {block.type === "tool" && <TranscriptToolCard block={block} density={density} />}
+            {block.type === "command_group" && <TranscriptCommandGroup block={block} density={density} />}
+            {block.type === "tool_group" && <TranscriptToolGroup block={block} density={density} />}
+            {block.type === "stderr_group" && <TranscriptStderrGroup block={block} density={density} />}
+            {block.type === "stdout" && (
+              <TranscriptStdoutRow block={block} density={density} collapseByDefault={collapseStdout} />
+            )}
+            {block.type === "activity" && <TranscriptActivityRow block={block} density={density} />}
+            {block.type === "event" && <TranscriptEventRow block={block} density={density} />}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

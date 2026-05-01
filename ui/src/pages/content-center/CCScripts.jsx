@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useNavigate } from '@/lib/router';
 import {
   FileText,
   Search,
@@ -28,6 +28,7 @@ import { EmptyState } from '@gem/ui';
 import { useToast } from '@gem/ui';
 import { useScripts, useDeleteScript } from '@gem/hooks/useQueryHooks';
 import CCSelect from './CCSelect';
+import CCImportModal from './CCImportModal';
 
 // ============================================================================
 // Constants
@@ -98,7 +99,7 @@ function estimateDuration(wordCount) {
 // ============================================================================
 
 export default function ScriptsListPage() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const addToast = useToast((s) => s.addToast);
   const deleteMutation = useDeleteScript();
 
@@ -111,6 +112,7 @@ export default function ScriptsListPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [sortBy, setSortBy] = useState('newest');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // --- Build filter object ---
   const filters = useMemo(() => ({
@@ -196,8 +198,8 @@ export default function ScriptsListPage() {
 
   const handleDuplicate = useCallback(async (_script) => {
     addToast({ type: 'info', message: 'Đang chuyển đến Trình Tạo Nội Dung AI...' });
-    router.push('/ai-gen');
-  }, [router, addToast]);
+    navigate('../ai-gen');
+  }, [navigate, addToast]);
 
   // --- Stats summary ---
   const statsSummary = useMemo(() => {
@@ -247,15 +249,31 @@ export default function ScriptsListPage() {
             )}
           </Button>
           <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsImportModalOpen(true)}
+          >
+            Import
+          </Button>
+          <Button
             variant="gold"
             size="sm"
             icon={Plus}
-            onClick={() => router.push('/ai-gen')}
+            onClick={() => navigate('./new')}
           >
             Tạo Mới
           </Button>
         </div>
       </div>
+
+      <CCImportModal 
+        isOpen={isImportModalOpen} 
+        onClose={() => setIsImportModalOpen(false)} 
+        onImportSuccess={() => {
+          // You could refetch here. With react-query, queryClient.invalidateQueries would be ideal.
+          // Since useScripts probably returns a refetch or we can just let it auto-refresh on focus.
+        }} 
+      />
 
       {/* Search Bar */}
       <Card variant="glass" padding="md">
@@ -392,7 +410,7 @@ export default function ScriptsListPage() {
               : 'Bắt đầu tạo kịch bản đầu tiên bằng Trình Tạo Nội Dung AI.'
           }
           actionLabel={search || hasActiveFilters ? 'Xóa Bộ Lọc' : 'Tạo Kịch Bản'}
-          onAction={search || hasActiveFilters ? handleClearFilters : () => router.push('/ai-gen')}
+          onAction={search || hasActiveFilters ? handleClearFilters : () => navigate('./720bd1a5-5934-431f-a323-41aa95e989ff')}
         />
       )}
 
@@ -402,10 +420,15 @@ export default function ScriptsListPage() {
           {scripts.map((script) => {
             // Auto-detect analysis scripts (job_type=analysis or wrongly tagged short_clip with analysis content)
             let contentType = script.content_type ?? 'latc';
-            if (script.job_type === 'analysis' || (contentType === 'short_clip' && script.job_type === 'analysis')) {
-              contentType = 'analysis';
+            let contentTypeStr = contentType.toLowerCase();
+            if (script.job_type === 'analysis' || (contentTypeStr === 'short_clip' && script.job_type === 'analysis')) {
+              contentTypeStr = 'analysis';
             }
-            const typeConfig = CONTENT_TYPE_CONFIG[contentType] ?? CONTENT_TYPE_CONFIG.latc;
+            const typeConfig = CONTENT_TYPE_CONFIG[contentTypeStr] ?? { 
+              label: contentType.toUpperCase(), 
+              icon: FileText, 
+              color: 'text-gold' 
+            };
             const TypeIcon = typeConfig.icon;
             const track = script.track ?? '';
             const trackConfig = TRACK_CONFIG[track];
@@ -424,7 +447,7 @@ export default function ScriptsListPage() {
               >
                 <div
                   className="flex items-center gap-4 px-5 py-4 cursor-pointer"
-                  onClick={() => router.push(`/scripts/${id}`)}
+                  onClick={() => navigate(`./${id}`)}
                 >
                   {/* Type Icon */}
                   <div className={`shrink-0 w-10 h-10 rounded-card bg-glass-bg flex items-center justify-center ${typeConfig.color}`}>
@@ -433,15 +456,24 @@ export default function ScriptsListPage() {
 
                   {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="text-sm font-semibold text-txt truncate">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <h3 className="text-sm font-semibold text-txt truncate max-w-full">
                         {title}
                       </h3>
-                      <Badge
-                        text={typeConfig.label}
-                        variant={contentType === 'latc' ? 'gold' : contentType === 'tmt' ? 'key' : 'default'}
-                        size="sm"
-                      />
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Badge
+                          text={typeConfig.label}
+                          variant={contentTypeStr === 'latc' ? 'gold' : contentTypeStr === 'tmt' ? 'key' : 'default'}
+                          size="sm"
+                        />
+                        {script.job_type && script.job_type.toLowerCase() !== contentTypeStr && (
+                          <Badge
+                            text={script.job_type.toUpperCase()}
+                            variant="outline"
+                            size="sm"
+                          />
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-3 text-xxs text-txt-3">
                       {trackConfig && (
@@ -470,7 +502,7 @@ export default function ScriptsListPage() {
                     {/* Action buttons */}
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <button
-                        onClick={() => router.push(`/scripts/${id}`)}
+                        onClick={() => navigate(`./${id}`)}
                         className="p-1.5 rounded-badge text-txt-3 hover:text-txt hover:bg-bg-4 transition-all"
                         title="Xem chi tiết"
                       >

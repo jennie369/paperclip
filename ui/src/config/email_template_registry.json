@@ -1,0 +1,72 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "updated": "2026-04-19",
+    "ssot": true,
+    "description": "Single source of truth cho email marketing: senders, segments, templates + DOC-* defaults. UI / BE / Notion webhook đều đọc file này.",
+    "ref_report": "memory/reports/2026-04-19-resend-email-schema.md"
+  },
+  "senders": [
+    {"key": "hello", "from_name": "GEM", "from_email": "hello@gemral.com", "group": "Brand", "usage": "Bulk / broadcast / newsletter"},
+    {"key": "info", "from_name": "GEM", "from_email": "info@gemral.com", "group": "Brand", "usage": "Announcement"},
+    {"key": "no_reply", "from_name": "GEM", "from_email": "no_reply@gemral.com", "group": "Brand", "usage": "System notifications"},
+    {"key": "support", "from_name": "GEM Support", "from_email": "support@gemral.com", "group": "Brand", "usage": "CC campaigns, support"},
+    {"key": "jennie", "from_name": "Jennie Uyen Chu", "from_email": "jennie@gemral.com", "group": "Personal", "usage": "Newsletter cá nhân"},
+    {"key": "jennieuyenchu", "from_name": "Jennie Uyen Chu", "from_email": "jennieuyenchu@gemral.com", "group": "Personal", "usage": "Personal 2"},
+    {"key": "partnership", "from_name": "GEM Partnership", "from_email": "partnership@gemral.com", "group": "Partnership", "usage": "CTV/KOL emails"}
+  ],
+  "segments": [
+    {"key": "all", "label": "Tất cả users", "group": "All", "priority": 0, "description": "Gửi toàn bộ user có email"},
+    {"key": "manual", "label": "Paste manual list (CSV)", "group": "All", "priority": 0, "description": "Người nhận truyền thủ công"},
+    {"key": "free", "label": "Free tier (chưa mua)", "group": "Paying Tier", "priority": 2, "sql_filter": "scanner_tier IS NULL AND course_tier IS NULL"},
+    {"key": "tier1", "label": "Tier 1 students", "group": "Paying Tier", "priority": 5, "sql_filter": "scanner_tier='tier1' OR course_tier='tier1'"},
+    {"key": "tier2", "label": "Tier 2 students", "group": "Paying Tier", "priority": 6, "sql_filter": "scanner_tier='tier2' OR course_tier='tier2'"},
+    {"key": "tier3", "label": "Tier 3 Elite", "group": "Paying Tier", "priority": 7, "sql_filter": "scanner_tier='tier3' OR course_tier='tier3'"},
+    {"key": "paid", "label": "Paid buyers (mọi tier)", "group": "Paying Tier", "priority": 8, "sql_filter": "scanner_tier IS NOT NULL OR course_tier IS NOT NULL"},
+    {"key": "ctv", "label": "CTV partners", "group": "Role", "priority": 9, "sql_filter": "partnership_role='ctv'"},
+    {"key": "affiliate", "label": "Affiliates", "group": "Role", "priority": 3, "sql_filter": "partnership_role='affiliate'"},
+    {"key": "students", "label": "Course enrollments (active)", "group": "Stage", "priority": 4, "join_table": "course_enrollments"},
+    {"key": "waitlist", "label": "Waitlist leads", "group": "Stage", "priority": 1, "source_table": "waitlist_leads"}
+  ],
+  "templates": [
+    {"key": "ctv_day0_welcome", "group": "Active Drip", "subgroup": "CTV Onboarding", "default_segment": "ctv", "default_sender": "partnership", "_active": true},
+    {"key": "ctv_day3_training", "group": "Active Drip", "subgroup": "CTV Onboarding", "default_segment": "ctv", "default_sender": "partnership", "_active": true},
+    {"key": "ctv_day7_proof", "group": "Active Drip", "subgroup": "CTV Onboarding", "default_segment": "ctv", "default_sender": "partnership", "_active": true},
+    {"key": "ctv_day14_tier", "group": "Active Drip", "subgroup": "CTV Onboarding", "default_segment": "ctv", "default_sender": "partnership", "_active": true},
+    {"key": "ctv_day30_reengagement", "group": "Active Drip", "subgroup": "CTV Onboarding", "default_segment": "ctv", "default_sender": "partnership", "_active": true},
+    {"key": "welcome_student", "group": "Event Triggered", "default_segment": "students", "default_sender": "jennie", "_active": true, "_trigger": "shopify-webhook (course purchased)"},
+    {"key": "order_thank_you", "group": "Event Triggered", "default_segment": "paid", "default_sender": "support", "_active": true, "_trigger": "shopify-webhook (order success)"},
+    {"key": "commission_summary", "group": "Event Triggered", "default_segment": "ctv", "default_sender": "partnership", "_active": true, "_trigger": "partnership-cron (monthly payout)"},
+    {"key": "waitlist_day0", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "waitlist_day1_trading", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "waitlist_day1_spiritual", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "jennie", "_active": true},
+    {"key": "waitlist_day1_courses", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "waitlist_day1_affiliate", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "partnership", "_active": true},
+    {"key": "waitlist_day1_general", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "waitlist_day3", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "waitlist_day7", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "waitlist_day14", "group": "Active Drip", "subgroup": "Waitlist Nurture", "default_segment": "waitlist", "default_sender": "hello", "_active": true},
+    {"key": "custom", "group": "Custom", "default_segment": "manual", "default_sender": "hello"},
+    {"key": "daily_newsletter_trading", "group": "Daily Newsletter", "default_segment": "all", "default_sender": "hello", "dynamic_body": true, "description": "Daily trading tips/news — body từ cc_script, wrap brand shell"},
+    {"key": "daily_newsletter_spiritual", "group": "Daily Newsletter", "default_segment": "all", "default_sender": "jennie", "dynamic_body": true, "description": "Daily spiritual message — body từ cc_script, wrap brand shell"},
+    {"key": "daily_newsletter_general", "group": "Daily Newsletter", "default_segment": "all", "default_sender": "hello", "dynamic_body": true, "description": "Daily general broadcast — body từ cc_script, wrap brand shell"}
+  ],
+  "doc_defaults": {
+    "DOC-ONB-001": {"sender": "hello", "template": "new_user_day0", "segment": "students", "track": "wealth"},
+    "DOC-ONB-002": {"sender": "hello", "template": "new_user_day0", "segment": "tier1", "track": "wealth"},
+    "DOC-ONB-003": {"sender": "hello", "template": "new_user_day0", "segment": "tier2", "track": "wealth"},
+    "DOC-ONB-004": {"sender": "hello", "template": "new_user_day0", "segment": "tier3", "track": "wealth"},
+    "DOC-ONB-005": {"sender": "jennie", "template": "welcome_student", "segment": "students", "track": "spiritual"},
+    "DOC-ONB-006": {"sender": "jennie", "template": "welcome_student", "segment": "students", "track": "wealth"},
+    "DOC-ONB-007": {"sender": "jennie", "template": "welcome_student", "segment": "students", "track": "spiritual"},
+    "DOC-AFF-001": {"sender": "partnership", "template": "welcome_ctv", "segment": "ctv", "track": "wealth"},
+    "DOC-AFF-003": {"sender": "partnership", "template": "welcome_kol", "segment": "ctv", "track": "wealth"},
+    "DOC-AFF-004": {"sender": "partnership", "template": "ctv_training_kit", "segment": "ctv", "track": "wealth"},
+    "DOC-AFF-005": {"sender": "partnership", "template": "ctv_training_kit", "segment": "ctv", "track": "wealth"},
+    "DOC-CS-011": {"sender": "support", "template": "order_thank_you", "segment": "paid", "track": "wealth"}
+  },
+  "segment_priority_rule": {
+    "_note": "Khi 1 user match nhiều segment, chỉ gửi 1 lần theo highest priority",
+    "order": ["ctv", "paid", "tier3", "tier2", "tier1", "students", "affiliate", "free", "waitlist"]
+  }
+}

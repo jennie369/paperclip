@@ -23,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { CircleDot, Plus, Filter, ArrowUpDown, Layers, Check, X, ChevronRight, List, Columns3, User, Search } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
+import { useNavigate } from "@/lib/router";
 import type { Issue } from "@paperclipai/shared";
 
 /* ── Helpers ── */
@@ -231,6 +232,7 @@ export function IssuesList({
 }: IssuesListProps) {
   const { selectedCompanyId } = useCompany();
   const { openNewIssue } = useDialog();
+  const navigate = useNavigate();
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -731,7 +733,7 @@ export function IssuesList({
                         />
                       </span>
                       <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                        {issue.identifier ?? issue.id.slice(0, 8)}
+                        {issue.identifier ?? issue.id.slice(0, 8)} · {formatDate(issue.createdAt)}
                       </span>
                       {liveIssueIds?.has(issue.id) && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 sm:gap-1.5 sm:px-2">
@@ -786,7 +788,16 @@ export function IssuesList({
                               : "Unknown creator"
                         }
                       >
-                        <span className="truncate">
+                        <span 
+                          className={cn("truncate", issue.createdByAgentId && "cursor-pointer hover:underline hover:text-foreground")}
+                          onClick={(e) => {
+                            if (issue.createdByAgentId) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              navigate(`/agents/${issue.createdByAgentId}`);
+                            }
+                          }}
+                        >
                           {issue.createdByAgentId
                             ? (agentName(issue.createdByAgentId) ?? issue.createdByAgentId.slice(0, 8))
                             : issue.createdByUserId

@@ -44,13 +44,13 @@ interface ToastContextValue {
 }
 
 const DEFAULT_TTL_BY_TONE: Record<ToastTone, number> = {
-  info: 4000,
-  success: 3500,
-  warn: 8000,
-  error: 10000,
+  info: 8000,
+  success: 8000,
+  warn: 10000,
+  error: 12000,
 };
-const MIN_TTL_MS = 1500;
-const MAX_TTL_MS = 15000;
+const MIN_TTL_MS = 4000;
+const MAX_TTL_MS = 20000;
 const MAX_TOASTS = 5;
 const DEDUPE_WINDOW_MS = 3500;
 const DEDUPE_MAX_AGE_MS = 20000;

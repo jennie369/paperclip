@@ -195,10 +195,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  if (!hasExplicitApiKey && authToken) {
+  if (authToken) {
     env.PAPERCLIP_API_KEY = authToken;
+  } else if (!hasExplicitApiKey) {
+    // Prevent parent process PAPERCLIP_API_KEY from leaking into the agent subprocess.
+    env.PAPERCLIP_API_KEY = "";
   }
-  
+
   const runtimeEnv = Object.fromEntries(
     Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",

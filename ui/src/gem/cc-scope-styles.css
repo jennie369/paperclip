@@ -171,11 +171,10 @@
   transition: var(--transition-glass);
 }
 .cc-scope .glass-card:hover {
-  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-  transform: translateY(-2px);
+  box-shadow: var(--glass-shadow);
 }
 .cc-scope.dark .glass-card:hover {
-  box-shadow: 0 15px 30px rgba(0,0,0,0.8), 0 10px 40px rgba(140,100,255,0.35), inset 0 1px 0 rgba(255,255,255,0.05);
+  box-shadow: var(--glass-shadow);
 }
 
 /* Simple Card */
@@ -189,7 +188,7 @@
 }
 .cc-scope .card:hover {
   border-color: var(--border-2);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 .cc-scope.dark .card {
   background: rgba(15, 16, 48, 0.55);
