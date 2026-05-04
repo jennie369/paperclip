@@ -457,6 +457,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   const env: Record<string, string> = { ...buildPaperclipEnv(agent, spawnIdentity) };
   env.PAPERCLIP_RUN_ID = runId;
+  // Rivalry channel inject (added 2026-05-04 — Pháp Sư ⇄ PTĐV battle channel).
+  // Both agents need to know parent battle issue + their opponent's agent UUID
+  // so scripts/rivalry-channel.py can fire/pull challenges qua heartbeat tick.
+  // KHÔNG hardcode UUIDs in agent prompt — adapter inject ở spawn time.
+  const RIVALRY_PARENT_ID = "2f8e5a74-feca-4a68-91c6-381d34913b2e";
+  const RIVALRY_OPPONENTS: Record<string, string> = {
+    "phap-su": "2def0181-96f1-4de2-88d8-d7529fb4cc91",                  // → PTĐV
+    "phong-thuy-de-vuong": "d166e24f-2569-4201-9406-20dffc53a843",      // → Pháp Sư
+  };
+  const agentSlug = (agent as { slug?: string | null }).slug ?? null;
+  if (agentSlug && RIVALRY_OPPONENTS[agentSlug]) {
+    env.PAPERCLIP_RIVALRY_BATTLE_PARENT_ID = RIVALRY_PARENT_ID;
+    env.PAPERCLIP_RIVALRY_OPPONENT_AGENT_ID = RIVALRY_OPPONENTS[agentSlug];
+  }
   const wakeTaskId =
     (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
     (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||
