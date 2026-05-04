@@ -450,9 +450,21 @@ async function runViaClaude(
     });
 
     // Send prompt via stdin (matches execute.ts --print -)
+    // Subprocess can die mid-write (e.g. CLI exits early on error). Without
+    // the 'error' listener, EOF on the stdin pipe crashes the entire server.
     if (child.stdin) {
-      child.stdin.write(userPrompt);
-      child.stdin.end();
+      child.stdin.on('error', (err) => {
+        console.error(`[Router] Claude stdin error for ${config.slug}: ${err.message}`);
+        streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: `stdin: ${err.message}` });
+      });
+      try {
+        if (child.stdin.writable) {
+          child.stdin.write(userPrompt);
+          child.stdin.end();
+        }
+      } catch (err: any) {
+        console.error(`[Router] Claude stdin write threw for ${config.slug}: ${err?.message || err}`);
+      }
     }
 
     let stdout = '';
@@ -742,11 +754,26 @@ async function runViaGemini(
     });
 
     // Pipe prompt content via stdin (Gemini -p "" reads from stdin)
+    // Subprocess can die mid-write — e.g. gemini-2.5-pro returns 429
+    // RESOURCE_EXHAUSTED, CLI retries, then exits. Closing stdin pipe
+    // mid-write triggers EOF; without the 'error' listener this becomes
+    // an unhandled error event and crashes the entire Node server (incident
+    // 2026-05-04: every Zalo DM crashed paperclip-server, no agent reply).
     const pf = (config as any)._promptFile;
     if (pf && child.stdin) {
-      const promptContent = readFileSync(pf, 'utf-8');
-      child.stdin.write(promptContent);
-      child.stdin.end();
+      child.stdin.on('error', (err) => {
+        console.error(`[Router] Gemini stdin error for ${config.slug}: ${err.message}`);
+        streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: `stdin: ${err.message}` });
+      });
+      try {
+        if (child.stdin.writable) {
+          const promptContent = readFileSync(pf, 'utf-8');
+          child.stdin.write(promptContent);
+          child.stdin.end();
+        }
+      } catch (err: any) {
+        console.error(`[Router] Gemini stdin write threw for ${config.slug}: ${err?.message || err}`);
+      }
     }
 
     // Clean up temp file after process exits
