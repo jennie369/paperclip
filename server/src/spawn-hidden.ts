@@ -107,14 +107,31 @@ export function spawnHidden(
   // /d  → ignore AutoRun
   // /s  → modify quoted-string handling for embedded quotes
   // /c  → carry out command and terminate
-  // Pass the .cmd path + args as additional argv elements to cmd.exe; Node
-  // joins them with spaces internally for Windows-style command line.
+  //
+  // CRITICAL: When `resolved` contains spaces (e.g.
+  // C:\Users\Jennie Chu\AppData\Roaming\npm\gemini.cmd) cmd.exe splits on the
+  // first space → "'C:\\Users\\Jennie' is not recognized" → subprocess exits 1.
+  // Fix: build a single command line with the .cmd path quoted, and use
+  // `windowsVerbatimArguments: true` so Node passes it verbatim to cmd.exe.
+  // The `/s` flag strips exactly the outermost quotes, leaving the inner
+  // quoting intact — the standard pattern for cmd.exe /c with quoted paths.
   const comspec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
-  return nodeSpawn(comspec, ['/d', '/s', '/c', resolved, ...args], {
+  const escapeArg = (a: string): string => {
+    if (a === '') return '""';
+    if (!/[\s"]/.test(a)) return a;
+    // Escape backslashes-before-quote per Windows rules, then wrap in quotes.
+    return `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
+  };
+  // cmd.exe /s rule: if entire command-after-/c is wrapped in quotes, strip
+  // exactly the first and last ". So we need DOUBLED outer quotes:
+  //   /d /s /c ""C:\path with spaces\app.cmd" arg1 arg2"
+  // → /s strips outer "" → cmd.exe sees `"C:\path..."`  arg1 arg2 → runs OK.
+  // Without the outer wrapping, cmd.exe parses the inner quoted path as the
+  // command but the surrounding spaces still split the original command line.
+  const inner = `"${resolved}"` + (args.length ? ' ' + args.map(escapeArg).join(' ') : '');
+  return nodeSpawn(comspec, ['/d', '/s', '/c', `"${inner}"`], {
     ...optsWithHide,
     shell: false,
-    // Required so cmd.exe parses the embedded command line literally
-    // (preserves quotes/spaces in args without re-escaping).
-    windowsVerbatimArguments: false,
+    windowsVerbatimArguments: true,
   }) as ChildProcessWithoutNullStreams;
 }

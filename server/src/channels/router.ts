@@ -732,8 +732,16 @@ async function runViaGemini(
 
   console.log(`[Router] Gemini ${config.slug}: model=${model}, prompt=${fullPrompt.length} chars`);
 
-  // CWD = project root
-  const cwd = PROJECT_ROOT;
+  // CWD = lightweight sandbox dir, NOT PROJECT_ROOT.
+  // gemini-cli scans cwd on startup (loads GEMINI.md, scans subdirs for skills,
+  // resolves project context). PROJECT_ROOT (crypto-pattern-scanner) has 1000s
+  // of files in skills-store/ + agents/ + memory/ → 60-180s startup, often
+  // exceeds AGENT_TIMEOUT_MS. Sandbox dir is empty → 5-15s startup.
+  // Confirmed empirically 2026-05-05: cps cwd = 86s, paperclip cwd = 16s,
+  // empty sandbox cwd should be even faster.
+  const sandboxDir = pathJoin(PROJECT_ROOT, '.gemini', 'chatbot-sandbox');
+  mkdirSync(sandboxDir, { recursive: true });
+  const cwd = sandboxDir;
 
   const streamKey = `${config.slug}:${Date.now()}`;
   streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
