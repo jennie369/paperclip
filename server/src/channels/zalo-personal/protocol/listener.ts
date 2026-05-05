@@ -186,11 +186,13 @@ export class ZaloListener extends EventEmitter {
       this.socket = socket;
       this.rawBuffer = Buffer.alloc(0);
 
-      if (head.length > 0) {
-        this.onSocketData(head);
-      }
-
-      socket.on('data', (chunk: Buffer) => this.onSocketData(chunk));
+      // Attach error/close handlers BEFORE any write
+      // (onSocketData below can trigger auto-PONG/CLOSE write — race-fix prevents
+      //  unhandled 'error' event on Socket if peer already closed)
+      socket.on('error', (err: Error) => {
+        console.error('[ZaloListener] Socket error:', err.message);
+        this.emit('error', err);
+      });
 
       socket.on('close', () => {
         console.log('[ZaloListener] Socket closed');
@@ -198,10 +200,11 @@ export class ZaloListener extends EventEmitter {
         if (!this.stopped) this.handleReconnect(1006);
       });
 
-      socket.on('error', (err: Error) => {
-        console.error('[ZaloListener] Socket error:', err.message);
-        this.emit('error', err);
-      });
+      if (head.length > 0) {
+        this.onSocketData(head);
+      }
+
+      socket.on('data', (chunk: Buffer) => this.onSocketData(chunk));
 
       this.startPing();
       this.startStableTimer();
