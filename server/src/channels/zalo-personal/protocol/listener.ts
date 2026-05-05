@@ -269,21 +269,17 @@ export class ZaloListener extends EventEmitter {
     if (frame.opcode === WS_OPCODE.CLOSE) {
       const code = frame.payload.length >= 2 ? frame.payload.readUInt16BE(0) : 1000;
       console.log(`[ZaloListener] Close frame: code=${code}`);
-      // Send close reply
-      if (this.socket) {
-        const reply = Buffer.alloc(2);
-        reply.writeUInt16BE(code, 0);
-        this.socket.write(buildFrame(WS_OPCODE.CLOSE, reply));
-      }
-      this.socket?.end();
+      // Send close reply (race-safe — peer may have RST already)
+      const reply = Buffer.alloc(2);
+      reply.writeUInt16BE(code, 0);
+      this.safeWrite(buildFrame(WS_OPCODE.CLOSE, reply));
+      try { this.socket?.end(); } catch { /* peer already closed */ }
       return;
     }
 
     if (frame.opcode === WS_OPCODE.PING) {
-      // Reply with pong
-      if (this.socket) {
-        this.socket.write(buildFrame(WS_OPCODE.PONG, frame.payload));
-      }
+      // Reply with pong (race-safe)
+      this.safeWrite(buildFrame(WS_OPCODE.PONG, frame.payload));
       return;
     }
 
@@ -427,8 +423,35 @@ export class ZaloListener extends EventEmitter {
       zaloBuf.writeUInt8(WS_CMD.PING.subCmd, 3);
       zaloBuf.write(jsonPayload, 4);
 
-      this.socket.write(buildFrame(WS_OPCODE.BINARY, zaloBuf));
+      this.safeWrite(buildFrame(WS_OPCODE.BINARY, zaloBuf));
     }, ZALO_API.PING_INTERVAL);
+  }
+
+  /**
+   * Race-safe socket write — defends against Zalo peer RST mid-write.
+   * Catches both sync throws and async 'error' events that bypass the upgrade-time
+   * `socket.on('error')` listener (Node may emit on underlying socket before
+   * upgrade-attached listener fires). Returns false if write was skipped/failed.
+   *
+   * Reason: 6 server crashes 2026-05-05 in WriteWrap.onWriteComplete with
+   * "Error: write EOF" → unhandled error event → Node exit code 1 → pm2 restart
+   * → all heartbeat agent runs reaped as orphans (e.g. Pháp Sư run c3fb8e18).
+   */
+  private safeWrite(buf: Buffer): boolean {
+    const sock = this.socket;
+    if (!sock || sock.destroyed || !sock.writable) return false;
+    try {
+      sock.write(buf, (err) => {
+        if (err) {
+          console.error('[ZaloListener] write callback error:', err.message);
+          // Don't re-throw — listener at line ~192 + this catch suffice.
+        }
+      });
+      return true;
+    } catch (err) {
+      console.error('[ZaloListener] safeWrite sync throw:', (err as Error).message);
+      return false;
+    }
   }
 
   stop(): void {
@@ -449,10 +472,9 @@ export class ZaloListener extends EventEmitter {
     return 1; // OPEN
   }
 
-  // Send raw binary data as a WebSocket frame
+  // Send raw binary data as a WebSocket frame (race-safe)
   send(data: Buffer): void {
-    if (!this.socket || this.socket.destroyed) return;
-    this.socket.write(buildFrame(WS_OPCODE.BINARY, data));
+    this.safeWrite(buildFrame(WS_OPCODE.BINARY, data));
   }
 
   private startStableTimer(): void {
