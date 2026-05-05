@@ -1,4 +1,26 @@
 /// <reference path="./types/express.d.ts" />
+
+// Global safety net for socket-layer unhandled errors (Zalo TLS WS, Telegram bot,
+// outbound webhooks). Without this, a single unhandled 'error' event on any socket
+// → process exit code 1 → pm2 restart loop. Pattern 2026-05-05: "Error: write EOF
+// at WriteWrap.onWriteComplete" crashed paperclip-server 6+ times until this guard.
+// Per-socket listeners (commits 465139ba + 8fbc92d3) cover most cases but Node still
+// emits 'error' on the raw TCP socket layer in some peer-RST race paths that bypass
+// per-socket handlers.
+process.on('uncaughtException', (err: Error & { code?: string }) => {
+  console.error('[uncaughtException]', err.code || '', err.message);
+  if (err.stack) console.error(err.stack);
+  // Swallow benign peer-disconnect codes — non-fatal, should NOT crash server.
+  // Real bugs (DB corruption, OOM) still crash via setImmediate re-throw below.
+  const benignSocketCodes = new Set(['EOF', 'EPIPE', 'ECONNRESET', 'ENOTCONN', 'EBADF']);
+  if (err.code && benignSocketCodes.has(err.code)) return;
+  setImmediate(() => { throw err; });
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
