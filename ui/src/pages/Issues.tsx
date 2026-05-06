@@ -32,6 +32,13 @@ export function Issues() {
     const raw = params.get("hidden");
     return raw === "1" || raw === "true";
   });
+
+  const [onlyHeartbeats, setOnlyHeartbeats] = useState<boolean>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("heartbeats_only");
+    return raw === "1" || raw === "true";
+  });
+
   const handleSearchChange = useCallback((search: string) => {
     const trimmedSearch = search.trim();
     const currentSearch = new URLSearchParams(window.location.search).get("q") ?? "";
@@ -93,9 +100,14 @@ export function Issues() {
     queryKey: [
       ...queryKeys.issues.list(selectedCompanyId!),
       "participant-agent", participantAgentId ?? "__all__",
-      "hidden", includeHidden ? "1" : "0",
+      "hidden", includeHidden || onlyHeartbeats ? "1" : "0",
+      "heartbeats_only", onlyHeartbeats ? "1" : "0",
     ],
-    queryFn: () => issuesApi.list(selectedCompanyId!, { participantAgentId, includeHidden }),
+    queryFn: () => issuesApi.list(selectedCompanyId!, { 
+      participantAgentId, 
+      includeHidden: includeHidden || onlyHeartbeats,
+      originKind: onlyHeartbeats ? "heartbeat" : undefined
+    }),
     enabled: !!selectedCompanyId,
   });
 
@@ -125,6 +137,18 @@ export function Issues() {
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   };
 
+  const toggleOnlyHeartbeats = () => {
+    const next = !onlyHeartbeats;
+    setOnlyHeartbeats(next);
+    const url = new URL(window.location.href);
+    if (next) {
+      url.searchParams.set("heartbeats_only", "1");
+    } else {
+      url.searchParams.delete("heartbeats_only");
+    }
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 px-4 pt-3">
@@ -136,9 +160,21 @@ export function Issues() {
               ? "bg-gold/15 border-gold/40 text-gold"
               : "bg-transparent border-border text-txt-3 hover:text-txt hover:border-border-2"
           }`}
-          title="Bật để xem issues ẩn (Heartbeat Threads, system-generated)"
+          title="Bật để xem issues ẩn (thường là auto-generated)"
         >
-          {includeHidden ? "✓ Đang hiện issues ẩn" : "Hiện issues ẩn (Heartbeat Threads)"}
+          {includeHidden ? "✓ Đang hiện issues ẩn" : "Hiện issues ẩn"}
+        </button>
+        <button
+          type="button"
+          onClick={toggleOnlyHeartbeats}
+          className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
+            onlyHeartbeats
+              ? "bg-blue-500/15 border-blue-500/40 text-blue-500"
+              : "bg-transparent border-border text-txt-3 hover:text-txt hover:border-border-2"
+          }`}
+          title="Chỉ hiển thị các heartbeat thread của các agent"
+        >
+          {onlyHeartbeats ? "✓ Chỉ hiện Heartbeat Threads" : "Chỉ hiện Heartbeat Threads"}
         </button>
       </div>
       <IssuesList

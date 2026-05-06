@@ -12,7 +12,6 @@ const SKILL_FILES = [
   { name: "SKILL-FACEBOOK-POSTING-PLAYWRIGHT.md", desc: "Quy trình đăng Facebook qua Playwright" },
   { name: "SKILL-batch-processor.md", desc: "Batch processor usage guide" },
   { name: "SKILL-schedule-meta-business-suite.md", desc: "Meta Business Suite scheduling" },
-  { name: "SOP-CONTENT-PIPELINE.md", desc: "SOP pipeline V3" },
   { name: "social-channels.md", desc: "Danh sách kênh social" },
   { name: "IMPORTANT_LINKS.md", desc: "Links + CTA mapping" },
 ];
