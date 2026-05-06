@@ -285,26 +285,29 @@ const EMAIL_TYPE_OPTIONS = [
   { value: 'personal_note', label: 'Thư cá nhân từ Jennie' },
 ];
 
-// 2026-04-19 — Auto-map "Loại email" UI dropdown → template key trong email_template_registry.json.
+// 2026-05-06 — Resend MCP migration v3 (Stage A.17): segment values legacy → 5 plan v3 segments.
+// 11 legacy segments (all/free/paid/tier1/students/ctv/affiliate/...) → 5 lifecycle segments
+// (new_signup, active_customer, vip_high_spender, partner_ctv, dormant) + manual fallback.
+// SSOT segments: paperclip/ui/src/config/email_template_registry.json (v2.0.0).
 // Khi chị đổi emailType, UI tự set campaignTemplate + campaignSegment phù hợp.
 const EMAIL_TYPE_TO_TEMPLATE = {
-  newsletter: { template: 'daily_newsletter_general', segment: 'all' },
-  product_launch: { template: 'custom', segment: 'all' },
-  promotion: { template: 'custom', segment: 'paid' },
-  welcome: { template: 'welcome_new_user', segment: 'free' },
-  event: { template: 'webinar_confirmation', segment: 'all' },
-  educational: { template: 'daily_newsletter_trading', segment: 'all' },
-  reengagement: { template: 'new_user_day30', segment: 'free' },
-  tier_upgrade: { template: 'tier_upgrade', segment: 'tier1' },
-  course_enrollment: { template: 'welcome_student', segment: 'students' },
-  onboarding_series: { template: 'new_user_day0', segment: 'students' },
-  milestone: { template: 'custom', segment: 'paid' },
-  survey_feedback: { template: 'custom', segment: 'all' },
-  cart_abandonment: { template: 'custom', segment: 'all' },
-  referral: { template: 'custom', segment: 'paid' },
-  seasonal: { template: 'custom', segment: 'all' },
-  weekly_digest: { template: 'daily_newsletter_general', segment: 'all' },
-  personal_note: { template: 'custom', segment: 'all' },
+  newsletter: { template: 'daily_newsletter_general', segment: 'active_customer' },
+  product_launch: { template: 'custom', segment: 'active_customer' },
+  promotion: { template: 'custom', segment: 'active_customer' },
+  welcome: { template: 'welcome-free-signup-e1', segment: 'new_signup' },
+  event: { template: 'custom', segment: 'active_customer' },
+  educational: { template: 'daily_newsletter_trading', segment: 'active_customer' },
+  reengagement: { template: 'winback-dormant-e1', segment: 'dormant' },
+  tier_upgrade: { template: 'custom', segment: 'active_customer' },
+  course_enrollment: { template: 'custom', segment: 'active_customer' },
+  onboarding_series: { template: 'onb-trading-starter-e1', segment: 'active_customer' },
+  milestone: { template: 'custom', segment: 'active_customer' },
+  survey_feedback: { template: 'custom', segment: 'active_customer' },
+  cart_abandonment: { template: 'custom', segment: 'active_customer' },
+  referral: { template: 'custom', segment: 'partner_ctv' },
+  seasonal: { template: 'custom', segment: 'active_customer' },
+  weekly_digest: { template: 'daily_newsletter_general', segment: 'active_customer' },
+  personal_note: { template: 'vip-personal-touch', segment: 'vip_high_spender' },
 };
 
 // ============================================================================
@@ -1163,7 +1166,7 @@ export default function AiGenPage() {
   // SSOT: memory/config/email_template_registry.json (mirror ở ui/src/config).
   const [campaignFromKey, setCampaignFromKey] = useState('hello'); // sender.key trong registry
   const [campaignTemplate, setCampaignTemplate] = useState('custom');
-  const [campaignSegment, setCampaignSegment] = useState('all');
+  const [campaignSegment, setCampaignSegment] = useState('active_customer');
   const [campaignReplyTo, setCampaignReplyTo] = useState('hello@gemral.com');
   const [campaignPreviewText, setCampaignPreviewText] = useState('');
   const [campaignScheduledAt, setCampaignScheduledAt] = useState('');
@@ -4671,14 +4674,15 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                       </select>
                     </div>
                     <div>
-                      <FieldLabel label="Audience Segment" tip="Nhóm người nhận. All = toàn bộ user có email. Paying Tier = free/tier1-3/paid theo trạng thái mua. Role = ctv/affiliate. Stage = waitlist/students. Webhook sẽ query profiles theo segment này khi Approve, rồi bulk insert cc_email_sends. Khi user thuộc nhiều segment: priority ctv>paid>tier3>tier2>tier1>students>affiliate>free>waitlist." />
+                      <FieldLabel label="Audience Segment" tip="5 plan v3 segments (Resend MCP migration v3): new_signup / active_customer / vip_high_spender / partner_ctv / dormant + manual fallback. Notion-content-sync edge fn query Resend audience theo segment này khi Approve. Priority overlap: vip_high_spender > partner_ctv > active_customer > dormant > new_signup. VIP segment = manual 1-1 outreach KHÔNG vào automation drip." />
                       <select
                         className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt"
                         disabled={generating}
                         value={campaignSegment}
                         onChange={(e) => setCampaignSegment(e.target.value)}
                       >
-                        {['All', 'Paying Tier', 'Role', 'Stage'].map((g) => (
+                        {/* 2026-05-06 Stage A.18 — segment groups updated theo registry v2.0.0 (Lifecycle + Role + All) */}
+                        {['All', 'Lifecycle', 'Role'].map((g) => (
                           <optgroup key={g} label={g}>
                             {emailRegistry.segments.filter((s) => s.group === g).map((s) => (
                               <option key={s.key} value={s.key}>{s.label}</option>
@@ -5135,9 +5139,10 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
                     </select>
                   </div>
                   <div>
-                    <FieldLabel label="Audience Segment" tip="Nhóm người nhận. Priority overlap: ctv>paid>tier3>tier2>tier1>students>affiliate>free>waitlist." />
+                    <FieldLabel label="Audience Segment" tip="5 plan v3 segments + manual. Priority: vip_high_spender > partner_ctv > active_customer > dormant > new_signup. SSOT: email_template_registry.json v2.0.0." />
                     <select className="w-full text-[12px] px-2 py-2 rounded-md border border-border bg-bg-4 text-txt" disabled={generating} value={campaignSegment} onChange={(e) => setCampaignSegment(e.target.value)}>
-                      {['All', 'Paying Tier', 'Role', 'Stage'].map((g) => (
+                      {/* 2026-05-06 Stage A.18 — segment groups updated registry v2.0.0 */}
+                      {['All', 'Lifecycle', 'Role'].map((g) => (
                         <optgroup key={g} label={g}>{emailRegistry.segments.filter((s) => s.group === g).map((s) => (<option key={s.key} value={s.key}>{s.label}</option>))}</optgroup>
                       ))}
                     </select>

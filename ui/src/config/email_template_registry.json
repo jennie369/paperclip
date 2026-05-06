@@ -1,10 +1,11 @@
 {
   "_meta": {
-    "version": "1.0.0",
-    "updated": "2026-04-19",
+    "version": "2.0.0",
+    "updated": "2026-05-06",
     "ssot": true,
-    "description": "Single source of truth cho email marketing: senders, segments, templates + DOC-* defaults. UI / BE / Notion webhook đều đọc file này.",
-    "ref_report": "memory/reports/2026-04-19-resend-email-schema.md"
+    "description": "SSOT cho Resend MCP migration v3 — 5 segments (plan v3 § 3) + manual fallback. UI / BE / Notion webhook đều đọc file này.",
+    "ref_report": "memory/reports/2026-05-06-resend-mcp-migration-execution.md",
+    "previous_version": "1.0.0 (2026-04-19) — 11 segments legacy (free/tier1/tier2/tier3/paid/ctv/affiliate/students/waitlist), migrated to 5 plan v3 segments"
   },
   "senders": [
     {"key": "hello", "from_name": "GEM", "from_email": "hello@gemral.com", "group": "Brand", "usage": "Bulk / broadcast / newsletter"},
@@ -16,17 +17,12 @@
     {"key": "partnership", "from_name": "GEM Partnership", "from_email": "partnership@gemral.com", "group": "Partnership", "usage": "CTV/KOL emails"}
   ],
   "segments": [
-    {"key": "all", "label": "Tất cả users", "group": "All", "priority": 0, "description": "Gửi toàn bộ user có email"},
-    {"key": "manual", "label": "Paste manual list (CSV)", "group": "All", "priority": 0, "description": "Người nhận truyền thủ công"},
-    {"key": "free", "label": "Free tier (chưa mua)", "group": "Paying Tier", "priority": 2, "sql_filter": "scanner_tier IS NULL AND course_tier IS NULL"},
-    {"key": "tier1", "label": "Tier 1 students", "group": "Paying Tier", "priority": 5, "sql_filter": "scanner_tier='tier1' OR course_tier='tier1'"},
-    {"key": "tier2", "label": "Tier 2 students", "group": "Paying Tier", "priority": 6, "sql_filter": "scanner_tier='tier2' OR course_tier='tier2'"},
-    {"key": "tier3", "label": "Tier 3 Elite", "group": "Paying Tier", "priority": 7, "sql_filter": "scanner_tier='tier3' OR course_tier='tier3'"},
-    {"key": "paid", "label": "Paid buyers (mọi tier)", "group": "Paying Tier", "priority": 8, "sql_filter": "scanner_tier IS NOT NULL OR course_tier IS NOT NULL"},
-    {"key": "ctv", "label": "CTV partners", "group": "Role", "priority": 9, "sql_filter": "partnership_role='ctv'"},
-    {"key": "affiliate", "label": "Affiliates", "group": "Role", "priority": 3, "sql_filter": "partnership_role='affiliate'"},
-    {"key": "students", "label": "Course enrollments (active)", "group": "Stage", "priority": 4, "join_table": "course_enrollments"},
-    {"key": "waitlist", "label": "Waitlist leads", "group": "Stage", "priority": 1, "source_table": "waitlist_leads"}
+    {"key": "manual", "label": "Paste manual list (CSV)", "group": "All", "priority": 0, "description": "Người nhận truyền thủ công ad-hoc"},
+    {"key": "new_signup", "label": "New signup (chưa mua, < 7 ngày)", "group": "Lifecycle", "priority": 2, "resend_audience": "new_signup", "sql_filter": "created_at >= NOW() - interval '7 days' AND scanner_tier IS NULL AND course_tier IS NULL"},
+    {"key": "active_customer", "label": "Active customer (đã mua, mở email 30d, < ₫50M)", "group": "Lifecycle", "priority": 4, "resend_audience": "active_customer", "sql_filter": "(scanner_tier IS NOT NULL OR course_tier IS NOT NULL) AND last_email_open_at >= NOW() - interval '30 days' AND COALESCE(lifetime_value, 0) < 50000000"},
+    {"key": "vip_high_spender", "label": "VIP (lifetime ≥ ₫50M)", "group": "Lifecycle", "priority": 9, "resend_audience": "vip_high_spender", "sql_filter": "COALESCE(lifetime_value, 0) >= 50000000", "_note": "VIP = manual 1-1 outreach only, KHÔNG vào automation drip — xem SOP-EMAIL-VIP-OUTREACH.md"},
+    {"key": "partner_ctv", "label": "Partner (CTV/KOL/giảng viên)", "group": "Role", "priority": 7, "resend_audience": "partner_ctv", "sql_filter": "partnership_role IN ('ctv','kol','giang_vien')"},
+    {"key": "dormant", "label": "Dormant (không mở 60d hoặc không login 90d)", "group": "Lifecycle", "priority": 1, "resend_audience": "dormant", "sql_filter": "last_email_open_at < NOW() - interval '60 days' OR ((scanner_tier IS NOT NULL OR course_tier IS NOT NULL) AND last_login_at < NOW() - interval '90 days')"}
   ],
   "templates": [
     {"key": "ctv_day0_welcome", "group": "Active Drip", "subgroup": "CTV Onboarding", "default_segment": "ctv", "default_sender": "partnership", "_active": true},
@@ -52,21 +48,22 @@
     {"key": "daily_newsletter_general", "group": "Daily Newsletter", "default_segment": "all", "default_sender": "hello", "dynamic_body": true, "description": "Daily general broadcast — body từ cc_script, wrap brand shell"}
   ],
   "doc_defaults": {
-    "DOC-ONB-001": {"sender": "hello", "template": "new_user_day0", "segment": "students", "track": "wealth"},
-    "DOC-ONB-002": {"sender": "hello", "template": "new_user_day0", "segment": "tier1", "track": "wealth"},
-    "DOC-ONB-003": {"sender": "hello", "template": "new_user_day0", "segment": "tier2", "track": "wealth"},
-    "DOC-ONB-004": {"sender": "hello", "template": "new_user_day0", "segment": "tier3", "track": "wealth"},
-    "DOC-ONB-005": {"sender": "jennie", "template": "welcome_student", "segment": "students", "track": "spiritual"},
-    "DOC-ONB-006": {"sender": "jennie", "template": "welcome_student", "segment": "students", "track": "wealth"},
-    "DOC-ONB-007": {"sender": "jennie", "template": "welcome_student", "segment": "students", "track": "spiritual"},
-    "DOC-AFF-001": {"sender": "partnership", "template": "welcome_ctv", "segment": "ctv", "track": "wealth"},
-    "DOC-AFF-003": {"sender": "partnership", "template": "welcome_kol", "segment": "ctv", "track": "wealth"},
-    "DOC-AFF-004": {"sender": "partnership", "template": "ctv_training_kit", "segment": "ctv", "track": "wealth"},
-    "DOC-AFF-005": {"sender": "partnership", "template": "ctv_training_kit", "segment": "ctv", "track": "wealth"},
-    "DOC-CS-011": {"sender": "support", "template": "order_thank_you", "segment": "paid", "track": "wealth"}
+    "DOC-ONB-001": {"sender": "hello", "template": "onb-trading-starter-e1", "segment": "active_customer", "track": "wealth"},
+    "DOC-ONB-002": {"sender": "hello", "template": "onb-trading-tier1-e1", "segment": "active_customer", "track": "wealth"},
+    "DOC-ONB-003": {"sender": "hello", "template": "onb-trading-tier2-e1", "segment": "active_customer", "track": "wealth"},
+    "DOC-ONB-004": {"sender": "hello", "template": "onb-trading-tier3-e1", "segment": "active_customer", "track": "wealth"},
+    "DOC-ONB-005": {"sender": "jennie", "template": "onb-tinh-yeu-e1", "segment": "active_customer", "track": "spiritual"},
+    "DOC-ONB-006": {"sender": "jennie", "template": "onb-trieu-phu-e1", "segment": "active_customer", "track": "wealth"},
+    "DOC-ONB-007": {"sender": "jennie", "template": "onb-7-ngay-tan-so-goc-e1", "segment": "active_customer", "track": "spiritual"},
+    "DOC-ONB-008": {"sender": "partnership", "template": "onb-ctv-kol-e1", "segment": "partner_ctv", "track": "partnership"},
+    "DOC-AFF-001": {"sender": "partnership", "template": "onb-ctv-kol-e1", "segment": "partner_ctv", "track": "wealth"},
+    "DOC-AFF-003": {"sender": "partnership", "template": "onb-ctv-kol-e1", "segment": "partner_ctv", "track": "wealth"},
+    "DOC-AFF-004": {"sender": "partnership", "template": "onb-ctv-kol-e3", "segment": "partner_ctv", "track": "wealth"},
+    "DOC-AFF-005": {"sender": "partnership", "template": "onb-ctv-kol-e3", "segment": "partner_ctv", "track": "wealth"},
+    "DOC-CS-011": {"sender": "support", "template": "custom", "segment": "active_customer", "track": "wealth"}
   },
   "segment_priority_rule": {
-    "_note": "Khi 1 user match nhiều segment, chỉ gửi 1 lần theo highest priority",
-    "order": ["ctv", "paid", "tier3", "tier2", "tier1", "students", "affiliate", "free", "waitlist"]
+    "_note": "Khi 1 user match nhiều segment, chỉ gửi 1 lần theo highest priority. VIP cao nhất → manual 1-1 không vào automation drip.",
+    "order": ["vip_high_spender", "partner_ctv", "active_customer", "dormant", "new_signup"]
   }
 }
