@@ -178,7 +178,7 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
-function SectionHeader({ icon: Icon, title, right }: { icon: React.ElementType; title: string; right?: React.ReactNode }) {
+function SectionHeader({ icon: Icon, title, right }: { icon: React.ComponentType<any>; title: string; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between mb-3">
       <h3 className="font-semibold text-sm flex items-center gap-2">

@@ -1951,7 +1951,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
          ORDER BY closed_at ASC
          LIMIT ${limit}
       `);
-      res.json({ rows: rows.rows ?? rows });
+      res.json({ rows: (rows as any).rows ?? rows });
     } catch (err: any) {
       logger.warn({ err, agentId, status }, "lesson-queue read failed");
       res.status(500).json({ error: err.message || "lesson-queue read failed" });

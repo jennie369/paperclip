@@ -53,7 +53,7 @@ export const useToast = create<ToastStore>((set) => ({
    Cau hinh giao dien (UI Config)
    ═══════════════════════════════════════════════════════════ */
 
-const iconMap: Record<ToastData['type'], React.ElementType> = {
+const iconMap: Record<ToastData['type'], React.ComponentType<any>> = {
   success: CheckCircle,
   error: XCircle,
   info: Info,

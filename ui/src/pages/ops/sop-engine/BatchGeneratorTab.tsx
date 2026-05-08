@@ -58,6 +58,7 @@ interface BatchJob {
   error_message: string | null;
   started_at: string | null;
   completed_at: string | null;
+  generation_time_ms?: number | null;
   created_at: string;
   updated_at: string;
   input_params?: any;

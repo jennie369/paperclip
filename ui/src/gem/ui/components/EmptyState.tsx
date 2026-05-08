@@ -5,7 +5,7 @@ import { Inbox } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface EmptyStateProps {
-  icon?: React.ElementType;
+  icon?: React.ComponentType<any>;
   title: string;
   description?: string;
   actionLabel?: string;

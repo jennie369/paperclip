@@ -47,7 +47,7 @@ interface NotificationCenterProps {
 
 const TYPE_CONFIG: Record<
   NotificationType,
-  { icon: React.ElementType; color: string; bgColor: string }
+  { icon: React.ComponentType<any>; color: string; bgColor: string }
 > = {
   generation_complete: {
     icon: Sparkles,

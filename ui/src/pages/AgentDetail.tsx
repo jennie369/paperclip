@@ -539,6 +539,20 @@ export function AgentDetail() {
     enabled: !!resolvedCompanyId,
   });
 
+  // Query heartbeat thread issue riêng (hidden=true, originId filter)
+  // để LatestRunCard có thể link đúng trang heartbeat issue.
+  const heartbeatOriginId = agent?.id ? `heartbeat-thread:${agent.id}` : null;
+  const { data: heartbeatThreadIssues } = useQuery({
+    queryKey: [...queryKeys.issues.list(resolvedCompanyId!), "heartbeat-thread", agent?.id],
+    queryFn: () => issuesApi.list(resolvedCompanyId!, {
+      originKind: "system",
+      originId: heartbeatOriginId!,
+      includeHidden: true,
+    }),
+    enabled: !!resolvedCompanyId && !!heartbeatOriginId,
+  });
+  const heartbeatThreadIssue = heartbeatThreadIssues?.[0] ?? null;
+
   const { data: allAgents } = useQuery({
     queryKey: queryKeys.agents.list(resolvedCompanyId!),
     queryFn: () => agentsApi.list(resolvedCompanyId!),
@@ -971,6 +985,7 @@ export function AgentDetail() {
           agentId={agent.id}
           agentRouteId={canonicalAgentRef}
           allAgents={allAgents ?? []}
+          heartbeatThreadIssue={heartbeatThreadIssue}
         />
       )}
 
@@ -1042,7 +1057,17 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentId: string; issues?: { id: string; identifier?: string | null }[] }) {
+function LatestRunCard({
+  runs,
+  agentId,
+  issues,
+  heartbeatThreadIssue,
+}: {
+  runs: HeartbeatRun[];
+  agentId: string;
+  issues?: { id: string; identifier?: string | null }[];
+  heartbeatThreadIssue?: { id: string; identifier?: string | null } | null;
+}) {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   if (runs.length === 0) return null;
 
@@ -1059,16 +1084,24 @@ function LatestRunCard({ runs, agentId, issues }: { runs: HeartbeatRun[]; agentI
     ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
     : run.error ?? "";
 
-  // Derive issue from run's contextSnapshot (wake-context issueId). NO
-  // fallback to issues[0] — heartbeat runs may target a hidden thread issue
-  // not in assignedIssues; falling back lands user on the wrong issue.
-  // If no confirmed issue, card body links to RUN detail page (transcript).
+  // Derive issue from run's contextSnapshot (wake-context issueId).
+  // Priority 1: contextSnapshot.heartbeatThread=true → dùng heartbeatThreadIssue được truyền vào.
+  // Priority 2: match issueId trong assignedIssues.
+  // Không fallback sang issues[0] — dễ link sai trang.
   const runContext = asRecord(run.contextSnapshot);
   const runIssueId = runContext?.issueId as string | undefined;
-  const linkedRunIssue = runIssueId && issues
-    ? issues.find((i) => i.id === runIssueId || i.identifier === runIssueId)
-    : null;
-  const targetIssue = linkedRunIssue;  // strict — no issues[0] fallback
+  const isHeartbeatThread = runContext?.heartbeatThread === true;
+
+  let targetIssue: { id: string; identifier?: string | null } | null = null;
+  if (isHeartbeatThread && heartbeatThreadIssue) {
+    // Run thuộc heartbeat thread → link tới heartbeat thread issue
+    targetIssue = heartbeatThreadIssue;
+  } else if (runIssueId && issues) {
+    // Run thuộc issue thông thường → tìm trong assignedIssues
+    const found = issues.find((i) => i.id === runIssueId || i.identifier === runIssueId);
+    targetIssue = found ?? null;
+  }
+
   const runDetailPath = `/${companyPrefix}/agents/${agentId}/runs/${run.id}`;
   const issuePath = targetIssue
     ? `/${companyPrefix}/issues/${targetIssue.identifier ?? targetIssue.id}`
@@ -1149,19 +1182,21 @@ function AgentOverview({
   agentId,
   agentRouteId,
   allAgents,
+  heartbeatThreadIssue,
 }: {
   agent: Agent;
   runs: HeartbeatRun[];
-  assignedIssues: { id: string; title: string; status: string; priority: string; identifier?: string | null; createdAt: Date }[];
+  assignedIssues: { id: string; title: string; status: string; priority: string; identifier?: string | null; createdAt: Date; createdByAgentId?: string | null; createdByUserId?: string | null }[];
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
   allAgents: Agent[];
+  heartbeatThreadIssue?: { id: string; identifier?: string | null } | null;
 }) {
   return (
     <div className="space-y-8">
       {/* Latest Run */}
-      <LatestRunCard runs={runs} agentId={agentRouteId} issues={assignedIssues} />
+      <LatestRunCard runs={runs} agentId={agentRouteId} issues={assignedIssues} heartbeatThreadIssue={heartbeatThreadIssue} />
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1203,7 +1238,7 @@ function AgentOverview({
                 ? (allAgents ?? []).find((a) => a.id === issue.createdByAgentId)
                 : undefined;
               const creatorLabel = creatorAgent
-                ? (creatorAgent.displayName ?? creatorAgent.slug ?? "Agent")
+                ? (creatorAgent.name ?? creatorAgent.urlKey ?? "Agent")
                 : issue.createdByAgentId
                   ? issue.createdByAgentId.slice(0, 8)
                   : issue.createdByUserId

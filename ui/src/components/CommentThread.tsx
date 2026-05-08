@@ -815,6 +815,20 @@ export function CommentThread({
         </div>
       )}
 
+      <div className="sticky bottom-0 z-10 p-4 mt-6 border-t border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)]">
+        <CommentComposer
+          onAdd={onAdd}
+          draftKey={draftKey}
+          enableReassign={enableReassign}
+          reassignOptions={reassignOptions}
+          currentAssigneeValue={currentAssigneeValue}
+          suggestedAssigneeValue={suggestedAssigneeValue}
+          mentions={mentions}
+          imageUploadHandler={imageUploadHandler}
+          onAttachImage={onAttachImage}
+          agentMap={agentMap}
+        />
+      </div>
     </div>
   );
 }

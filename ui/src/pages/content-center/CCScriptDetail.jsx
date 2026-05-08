@@ -37,6 +37,7 @@ import {
   Undo2,
   Redo2,
   Pencil,
+  FileCode,
 } from 'lucide-react';
 import { Button } from '@gem/ui';
 import { Badge } from '@gem/ui';
@@ -1022,6 +1023,25 @@ function ScriptDetailContent() {
     addToast({ type: 'success', message: 'Đã tải xuống file DOCX.' });
   }, [mainContent, script, addToast]);
 
+  const handleExportHTML = useCallback(() => {
+    setShowExportMenu(false);
+    const t = (script?.title || 'Kịch Bản').replace(/^```\w*\s*/, '').replace(/```\s*$/, '').trim() || 'Kịch Bản';
+    const content = mainContent;
+    const htmlContent = content.startsWith('```html') ? content.replace(/^```html\s*/i, '').replace(/```\s*$/i, '') : content;
+    
+    const blob = new Blob(
+      [htmlContent],
+      { type: 'text/html;charset=utf-8' }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${t.slice(0, 60).replace(/[^a-zA-Z0-9\s-]/g, '')}.html`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', message: 'Đã tải xuống file HTML.' });
+  }, [mainContent, script, addToast]);
+
   const handleExportTeleprompter = useCallback(() => {
     const teleText = mainContent
       .split('\n')
@@ -1496,6 +1516,16 @@ function ScriptDetailContent() {
               {copied ? 'Đã chép' : 'Sao chép'}
             </Button>
 
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={FileCode}
+              onClick={handleExportHTML}
+              title="Xuất nội dung thành file HTML"
+            >
+              Xuất HTML
+            </Button>
+
             {/* Export dropdown */}
             <div className="relative">
               <Button
@@ -1508,7 +1538,10 @@ function ScriptDetailContent() {
                 {showExportMenu ? <ChevronUp size={12} className="ml-1" /> : <ChevronDown size={12} className="ml-1" />}
               </Button>
               {showExportMenu && (
-                <div className="absolute right-0 top-full mt-1 p-1 rounded-card bg-glass-bg border border-border space-y-0.5 z-10 min-w-[140px]">
+                <div className="absolute right-0 top-full mt-1 p-1 rounded-card bg-white dark:bg-zinc-900 shadow-xl border border-border space-y-0.5 z-50 min-w-[140px]">
+                  <button onClick={handleExportHTML} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-txt-2 hover:text-txt hover:bg-bg-4 rounded-badge transition-all">
+                    <FileCode size={14} /> Xuất HTML
+                  </button>
                   <button onClick={handleExportPDF} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-txt-2 hover:text-txt hover:bg-bg-4 rounded-badge transition-all">
                     <FileDown size={14} /> Xuất PDF
                   </button>

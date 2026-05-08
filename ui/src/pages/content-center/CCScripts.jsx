@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { useNavigate } from '@/lib/router';
+import { useNavigate, Link } from '@/lib/router';
 import {
   FileText,
   Search,
@@ -109,6 +109,7 @@ export default function ScriptsListPage() {
   const [trackFilter, setTrackFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage] = useState(0);
+  const [showAll, setShowAll] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [sortBy, setSortBy] = useState('newest');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
@@ -120,9 +121,9 @@ export default function ScriptsListPage() {
     ...(contentTypeFilter ? { content_type: contentTypeFilter } : {}),
     ...(trackFilter ? { track: trackFilter } : {}),
     ...(statusFilter ? { status: statusFilter } : {}),
-    page,
-    pageSize: PAGE_SIZE,
-  }), [search, contentTypeFilter, trackFilter, statusFilter, page]);
+    page: showAll ? 0 : page,
+    pageSize: showAll ? 1000 : PAGE_SIZE,
+  }), [search, contentTypeFilter, trackFilter, statusFilter, page, showAll]);
 
   const { data: scriptsData, isLoading, error } = useScripts(filters);
 
@@ -184,6 +185,7 @@ export default function ScriptsListPage() {
     setStatusFilter('');
     setSearch('');
     setPage(0);
+    setShowAll(false);
   }, []);
 
   const handleDelete = useCallback(async (id) => {
@@ -282,7 +284,7 @@ export default function ScriptsListPage() {
           <input
             type="text"
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); setShowAll(false); }}
             placeholder="Tìm kiếm kịch bản theo tiêu đề..."
             className="flex-1 bg-transparent text-sm text-txt placeholder:text-txt-3 focus:outline-none"
           />
@@ -333,7 +335,7 @@ export default function ScriptsListPage() {
               <label className="text-xxs text-txt-3 mb-1 block">Loại Nội Dung</label>
               <CCSelect
                 value={contentTypeFilter}
-                onChange={(e) => { setContentTypeFilter(e.target.value); setPage(0); }}
+                onChange={(e) => { setContentTypeFilter(e.target.value); setPage(0); setShowAll(false); }}
                 className="text-xs w-full"
               >
                 <option value="">Tất cả</option>
@@ -350,7 +352,7 @@ export default function ScriptsListPage() {
               <label className="text-xxs text-txt-3 mb-1 block">Track</label>
               <CCSelect
                 value={trackFilter}
-                onChange={(e) => { setTrackFilter(e.target.value); setPage(0); }}
+                onChange={(e) => { setTrackFilter(e.target.value); setPage(0); setShowAll(false); }}
                 className="text-xs w-full"
               >
                 <option value="">Tất cả</option>
@@ -365,7 +367,7 @@ export default function ScriptsListPage() {
               <label className="text-xxs text-txt-3 mb-1 block">Trạng Thái</label>
               <CCSelect
                 value={statusFilter}
-                onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
+                onChange={(e) => { setStatusFilter(e.target.value); setPage(0); setShowAll(false); }}
                 className="text-xs w-full"
               >
                 <option value="">Tất cả</option>
@@ -443,12 +445,13 @@ export default function ScriptsListPage() {
             return (
               <div
                 key={id}
-                className="rounded-card border border-border bg-glass-bg hover:border-gold/30 transition-colors"
+                className="rounded-card border border-border bg-glass-bg hover:border-gold/30 transition-colors relative"
               >
-                <div
-                  className="flex items-center gap-4 px-5 py-4 cursor-pointer"
-                  onClick={() => navigate(`./${id}`)}
-                >
+                <Link
+                  className="absolute inset-0 z-0 rounded-card"
+                  to={`./${id}`}
+                />
+                <div className="flex items-center gap-4 px-5 py-4 relative z-10 pointer-events-none">
                   {/* Type Icon */}
                   <div className={`shrink-0 w-10 h-10 rounded-card bg-glass-bg flex items-center justify-center ${typeConfig.color}`}>
                     <TypeIcon size={20} />
@@ -491,7 +494,7 @@ export default function ScriptsListPage() {
                   </div>
 
                   {/* Status + Actions */}
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-3 shrink-0 pointer-events-auto">
                     <Badge
                       text={statusCfg.label}
                       variant={statusCfg.variant}
@@ -500,23 +503,23 @@ export default function ScriptsListPage() {
                     />
 
                     {/* Action buttons */}
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => navigate(`./${id}`)}
-                        className="p-1.5 rounded-badge text-txt-3 hover:text-txt hover:bg-bg-4 transition-all"
+                    <div className="flex items-center gap-1">
+                      <Link
+                        to={`./${id}`}
+                        className="p-1.5 flex items-center justify-center rounded-badge text-txt-3 hover:text-txt hover:bg-bg-4 transition-all"
                         title="Xem chi tiết"
                       >
                         <Eye size={14} />
-                      </button>
+                      </Link>
                       <button
-                        onClick={() => handleDuplicate(script)}
+                        onClick={(e) => { e.preventDefault(); handleDuplicate(script); }}
                         className="p-1.5 rounded-badge text-txt-3 hover:text-txt hover:bg-bg-4 transition-all"
                         title="Tạo bản sao"
                       >
                         <Copy size={14} />
                       </button>
                       <button
-                        onClick={() => setDeleteConfirmId(id)}
+                        onClick={(e) => { e.preventDefault(); setDeleteConfirmId(id); }}
                         className="p-1.5 rounded-badge text-txt-3 hover:text-danger hover:bg-danger/10 transition-all"
                         title="Xóa"
                       >
@@ -562,27 +565,38 @@ export default function ScriptsListPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <span className="text-xs text-txt-3">
-            Trang {page + 1} / {totalPages} ({totalCount} kịch bản)
+            Trang {showAll ? 'Tất cả' : page + 1} / {showAll ? 'Tất cả' : totalPages} ({totalCount} kịch bản)
           </span>
           <div className="flex items-center gap-2">
+            {!showAll && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={ChevronLeft}
+                disabled={page === 0}
+                onClick={() => setPage(page - 1)}
+              >
+                Trước
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
-              icon={ChevronLeft}
-              disabled={page === 0}
-              onClick={() => setPage(page - 1)}
+              onClick={() => { setShowAll(!showAll); setPage(0); }}
             >
-              Trước
+              {showAll ? 'Phân trang' : 'Tất cả'}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={ChevronRight}
-              disabled={page >= totalPages - 1}
-              onClick={() => setPage(page + 1)}
-            >
-              Sau
-            </Button>
+            {!showAll && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={ChevronRight}
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage(page + 1)}
+              >
+                Sau
+              </Button>
+            )}
           </div>
         </div>
       )}

@@ -615,7 +615,7 @@ export function PlannerBoard() {
       if (!res.ok) throw new Error(d.error || "Lỗi");
       return d;
     },
-    onSuccess: () => { pushToast({ title: "Đã cập nhật", tone: "success" }); setEditingScript(null); invalidate(); },
+    onSuccess: () => { pushToast({ title: "Đã cập nhật", tone: "success" }); invalidate(); },
     onError: (e: any) => pushToast({ title: `Lỗi cập nhật: ${e.message}`, tone: "error" }),
   });
 

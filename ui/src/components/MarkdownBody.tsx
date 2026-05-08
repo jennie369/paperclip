@@ -138,6 +138,8 @@ function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: b
   );
 }
 
+import { remarkGemIssues } from "../lib/remark-gem-issues";
+
 export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownBodyProps) {
   const { theme } = useTheme();
   const components: Components = {
@@ -153,7 +155,7 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
         <table {...tableProps}>{tableChildren}</table>
       </div>
     ),
-    a: ({ href, children: linkChildren }) => {
+    a: ({ node: _node, href, children: linkChildren, className, ...props }: any) => {
       const parsed = href ? parseMentionChipHref(href) : null;
       if (parsed) {
         const targetHref = parsed.kind === "project"
@@ -166,16 +168,18 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
               "paperclip-mention-chip",
               `paperclip-mention-chip--${parsed.kind}`,
               parsed.kind === "project" && "paperclip-project-mention-chip",
+              className
             )}
             data-mention-kind={parsed.kind}
             style={mentionChipInlineStyle(parsed)}
+            {...props}
           >
             {linkChildren}
           </a>
         );
       }
       return (
-        <a href={href} rel="noreferrer">
+        <a href={href} rel="noreferrer" className={className} {...props}>
           {linkChildren}
         </a>
       );
@@ -209,7 +213,7 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
         className,
       )}
     >
-      <Markdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => url}>
+      <Markdown remarkPlugins={[remarkGfm, remarkGemIssues]} components={components} urlTransform={(url) => url}>
         {preprocessMarkdown(children)}
       </Markdown>
     </div>

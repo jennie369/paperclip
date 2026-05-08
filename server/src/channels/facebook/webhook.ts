@@ -17,7 +17,7 @@ const GRAPH_API = 'https://graph.facebook.com/v24.0';
 const PAGE_TOKENS: Record<string, string> = {};
 if (process.env.FB_PAGE_TOKEN_JENNIE) PAGE_TOKENS[process.env.FB_PAGE_ID_JENNIE || '101609408467458'] = process.env.FB_PAGE_TOKEN_JENNIE;
 if (process.env.FB_PAGE_TOKEN_GEMRAL) PAGE_TOKENS[process.env.FB_PAGE_ID_GEMRAL || '893324337205554'] = process.env.FB_PAGE_TOKEN_GEMRAL;
-if (process.env.FB_PAGE_TOKEN_YINYANG) PAGE_TOKENS[process.env.FB_PAGE_ID_YINYANG || '960900177100780'] = process.env.FB_PAGE_TOKEN_YINYANG;
+if (process.env.FB_PAGE_TOKEN_YINYANG) PAGE_TOKENS[process.env.FB_PAGE_ID_YINYANG || '844146582110162'] = process.env.FB_PAGE_TOKEN_YINYANG;
 
 // Page ID → channel name mapping (dynamic from env + hardcoded fallbacks)
 const PAGE_CHANNEL: Record<string, string> = {

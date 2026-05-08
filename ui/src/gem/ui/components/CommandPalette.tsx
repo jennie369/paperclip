@@ -48,7 +48,7 @@ interface CommandItem {
   label: string;
   description?: string;
   category: CommandCategory;
-  icon: React.ElementType;
+  icon: React.ComponentType<any>;
   /** Đường dẫn điều hướng */
   route?: string;
   /** Mã hành động */

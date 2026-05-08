@@ -8,7 +8,7 @@ interface StatCardProps {
   label: string;
   value: string | number;
   change?: number;
-  icon?: React.ElementType;
+  icon?: React.ComponentType<any>;
   color: 'gold' | 'purple' | 'blue' | 'emerald';
   tooltip?: string;
   loading?: boolean;

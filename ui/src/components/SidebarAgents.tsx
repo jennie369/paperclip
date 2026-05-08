@@ -36,7 +36,6 @@ import { queryKeys } from "../lib/queryKeys";
 import { cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { useAgentOrder } from "../hooks/useAgentOrder";
 import { AgentIcon } from "./AgentIconPicker";
-import { SortableAgentItem } from "./SortableAgentItem";
 import { SidebarSection } from "./SidebarSection";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
 import type { Agent } from "@paperclipai/shared";

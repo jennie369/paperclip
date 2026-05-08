@@ -154,12 +154,12 @@ export class ZaloListener extends EventEmitter {
     const parsed = new URL(url);
 
     const cookieHeader = this.session.cookies
-      .map(c => `${c.name}=${c.value}`)
+      .map((c: any) => `${c.name}=${c.value}`)
       .join('; ');
 
-    const hasZpwSek = this.session.cookies.some(c => c.name === 'zpw_sek');
+    const hasZpwSek = this.session.cookies.some((c: any) => c.name === 'zpw_sek');
     console.log(`[ZaloListener] Connecting to ${url}`);
-    console.log(`[ZaloListener] Cookies: ${this.session.cookies.map(c => c.name).join(', ')}`);
+    console.log(`[ZaloListener] Cookies: ${this.session.cookies.map((c: any) => c.name).join(', ')}`);
     console.log(`[ZaloListener] zpw_sek present: ${hasZpwSek}`);
 
     const wsKey = crypto.randomBytes(16).toString('base64');
@@ -245,9 +245,9 @@ export class ZaloListener extends EventEmitter {
       console.log(`[ZaloListener] First chunk (${chunk.length} bytes) hex: ${chunk.toString('hex').substring(0, 100)}`);
     }
 
-    this.rawBuffer = Buffer.concat([this.rawBuffer, chunk]);
+    this.rawBuffer = Buffer.concat([this.rawBuffer, chunk]) as any;
     const { frames, remainder } = parseFrames(this.rawBuffer);
-    this.rawBuffer = remainder;
+    this.rawBuffer = remainder as any;
 
     for (const frame of frames) {
       this.onFrame(frame);
@@ -441,7 +441,7 @@ export class ZaloListener extends EventEmitter {
     const sock = this.socket;
     if (!sock || sock.destroyed || !sock.writable) return false;
     try {
-      sock.write(buf, (err) => {
+      sock.write(buf, (err: Error | null | undefined) => {
         if (err) {
           console.error('[ZaloListener] write callback error:', err.message);
           // Don't re-throw — listener at line ~192 + this catch suffice.

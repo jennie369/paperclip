@@ -34,6 +34,7 @@ export const issuesApi = {
       includeRoutineExecutions?: boolean;
       includeHidden?: boolean;
       q?: string;
+      parentId?: string;
     },
   ) => {
     const params = new URLSearchParams();
@@ -49,6 +50,7 @@ export const issuesApi = {
     if (filters?.executionWorkspaceId) params.set("executionWorkspaceId", filters.executionWorkspaceId);
     if (filters?.originKind) params.set("originKind", filters.originKind);
     if (filters?.originId) params.set("originId", filters.originId);
+    if (filters?.parentId) params.set("parentId", filters.parentId);
     if (filters?.includeRoutineExecutions) params.set("includeRoutineExecutions", "true");
     if (filters?.includeHidden) params.set("includeHidden", "true");
     if (filters?.q) params.set("q", filters.q);

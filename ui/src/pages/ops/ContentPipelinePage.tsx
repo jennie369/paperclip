@@ -1,6 +1,7 @@
 // Content Pipeline Page — 6 tabs + clickable stats cards + quick actions
 
 import React, { useState, useCallback, useEffect } from "react";
+import { useUIOrder } from "@/hooks/useUIOrder";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
 import { Play, CheckCircle, RefreshCw, Loader2, Calendar as CalIcon } from "lucide-react";
@@ -16,6 +17,7 @@ import { SkillsMemoryTab } from "./tabs/SkillsMemoryTab";
 import { PlannerBoard } from "@/components/ops/PlannerBoard";
 import AiGenPage from "../content-center/CCAIGen";
 import BatchJobsView from "./sop-engine/BatchGeneratorTab";
+import { GenerationJobsBlock } from "./components/GenerationJobsBlock";
 
 // 2026-04-18 — TABS is now a mutable default; the live order lives in state so
 // the user can drag tabs to reorder. aigen moved in front of pipeline per
@@ -33,30 +35,6 @@ const DEFAULT_TABS = [
 type TabKey = typeof DEFAULT_TABS[number]["key"];
 type Tab = { key: TabKey; label: string };
 
-const TAB_ORDER_STORAGE_KEY = "paperclip.contentPipeline.tabOrder.v1";
-
-function loadSavedTabOrder(): Tab[] {
-  try {
-    const raw = localStorage.getItem(TAB_ORDER_STORAGE_KEY);
-    if (!raw) return [...DEFAULT_TABS];
-    const savedKeys = JSON.parse(raw) as TabKey[];
-    const byKey = new Map(DEFAULT_TABS.map((t) => [t.key, t]));
-    const ordered: Tab[] = [];
-    for (const key of savedKeys) {
-      const hit = byKey.get(key);
-      if (hit) {
-        ordered.push(hit);
-        byKey.delete(key);
-      }
-    }
-    // Append any new tabs added in code since the last save.
-    for (const tab of byKey.values()) ordered.push(tab);
-    return ordered;
-  } catch {
-    return [...DEFAULT_TABS];
-  }
-}
-
 // ─── Block IDs for top-level draggable sections ───────────────────────────────
 const DEFAULT_BLOCKS = [
   "publish-triggers",
@@ -66,69 +44,89 @@ const DEFAULT_BLOCKS = [
 ] as const;
 type BlockId = typeof DEFAULT_BLOCKS[number];
 
-const BLOCK_ORDER_KEY = "paperclip.contentPipeline.blockOrder.v1";
+// ─── AiGen tab section ordering ──────────────────────────────────────────────
+const DEFAULT_AIGEN_SECTIONS = ["batch-gen", "ai-gen", "gen-jobs"] as const;
+type AigenSectionId = typeof DEFAULT_AIGEN_SECTIONS[number];
 
-function loadBlockOrder(): BlockId[] {
-  try {
-    const raw = localStorage.getItem(BLOCK_ORDER_KEY);
-    if (!raw) return [...DEFAULT_BLOCKS];
-    const parsed = JSON.parse(raw) as BlockId[];
-    const valid = DEFAULT_BLOCKS.filter((b) => parsed.includes(b));
-    const extra = DEFAULT_BLOCKS.filter((b) => !parsed.includes(b));
-    return [...valid.sort((a, b) => parsed.indexOf(a) - parsed.indexOf(b)), ...extra];
-  } catch {
-    return [...DEFAULT_BLOCKS];
+/** Chuyển tab object array thành key array để dùng với useUIOrder */
+function tabKeysToTabs(keys: TabKey[]): Tab[] {
+  const byKey = new Map(DEFAULT_TABS.map((t) => [t.key, t]));
+  const ordered: Tab[] = [];
+  for (const key of keys) {
+    const hit = byKey.get(key);
+    if (hit) { ordered.push(hit); byKey.delete(key); }
   }
-}
-
-function saveBlockOrder(order: BlockId[]) {
-  try { localStorage.setItem(BLOCK_ORDER_KEY, JSON.stringify(order)); } catch {}
+  for (const tab of byKey.values()) ordered.push(tab);
+  return ordered;
 }
 
 export function ContentPipelinePage() {
-  const [tabs, setTabs] = useState<Tab[]>(() => loadSavedTabOrder());
+  // ── Persistent order via useUIOrder (localStorage cache + Supabase SSOT) ──
+  const DEFAULT_TAB_KEYS = DEFAULT_TABS.map((t) => t.key) as TabKey[];
+  const [tabKeys, setTabKeys] = useUIOrder<TabKey>('pipeline.tabs.v1', DEFAULT_TAB_KEYS);
+  const tabs = tabKeysToTabs(tabKeys);
+
+  const [blocks, setBlocks] = useUIOrder<BlockId>(
+    'pipeline.blocks.v1',
+    [...DEFAULT_BLOCKS] as BlockId[],
+  );
+  const [aigenSections, setAigenSections] = useUIOrder<AigenSectionId>(
+    'pipeline.aigenSections.v1',
+    [...DEFAULT_AIGEN_SECTIONS] as AigenSectionId[],
+  );
+
   // 2026-04-19 — Read initial tab từ URL `?tab=xxx` để right-click open new tab hoạt động.
   const [activeTab, setActiveTab] = useState<TabKey>(() => {
     try {
       const fromUrl = new URL(window.location.href).searchParams.get('tab');
       if (fromUrl) return fromUrl as TabKey;
     } catch {}
-    return loadSavedTabOrder()[0]?.key ?? "aigen";
+    return tabKeys[0] ?? "aigen";
   });
   const [dragKey, setDragKey] = useState<TabKey | null>(null);
 
   // Block-level drag state
-  const [blocks, setBlocks] = useState<BlockId[]>(() => loadBlockOrder());
   const [dragBlock, setDragBlock] = useState<BlockId | null>(null);
   const [dragOverBlock, setDragOverBlock] = useState<BlockId | null>(null);
 
+  // AiGen tab section drag state
+  const [dragAigenSection, setDragAigenSection] = useState<AigenSectionId | null>(null);
+  const [dragOverAigenSection, setDragOverAigenSection] = useState<AigenSectionId | null>(null);
+
+  const reorderAigenSection = useCallback((src: AigenSectionId, dst: AigenSectionId) => {
+    if (src === dst) return;
+    // useUIOrder#setOrder nhận T[] trực tiếp, KHÔNG phải functional updater
+    // Dùng functional updater sẽ pass function object → save sai vào localStorage
+    const current = aigenSections.slice();
+    const si = current.indexOf(src);
+    const di = current.indexOf(dst);
+    if (si === -1 || di === -1) return;
+    current.splice(si, 1);
+    current.splice(di, 0, src);
+    setAigenSections(current);
+  }, [aigenSections, setAigenSections]);
+
   const reorderBlock = useCallback((src: BlockId, dst: BlockId) => {
     if (src === dst) return;
-    setBlocks((prev) => {
-      const next = prev.slice();
-      const si = next.indexOf(src);
-      const di = next.indexOf(dst);
-      if (si === -1 || di === -1) return prev;
-      next.splice(si, 1);
-      next.splice(di, 0, src);
-      saveBlockOrder(next);
-      return next;
-    });
-  }, []);
+    const current = blocks.slice();
+    const si = current.indexOf(src);
+    const di = current.indexOf(dst);
+    if (si === -1 || di === -1) return;
+    current.splice(si, 1);
+    current.splice(di, 0, src);
+    setBlocks(current);
+  }, [blocks, setBlocks]);
 
   const reorderTab = useCallback((sourceKey: TabKey, targetKey: TabKey) => {
     if (sourceKey === targetKey) return;
-    setTabs((prev) => {
-      const src = prev.findIndex((t) => t.key === sourceKey);
-      const dst = prev.findIndex((t) => t.key === targetKey);
-      if (src === -1 || dst === -1) return prev;
-      const next = prev.slice();
-      const [moved] = next.splice(src, 1);
-      next.splice(dst, 0, moved);
-      try { localStorage.setItem(TAB_ORDER_STORAGE_KEY, JSON.stringify(next.map((t) => t.key))); } catch {}
-      return next;
-    });
-  }, []);
+    const current = tabKeys.slice();
+    const src = current.indexOf(sourceKey);
+    const dst = current.indexOf(targetKey);
+    if (src === -1 || dst === -1) return;
+    const [moved] = current.splice(src, 1);
+    current.splice(dst, 0, moved);
+    setTabKeys(current);
+  }, [tabKeys, setTabKeys]);
 
   const [bulkApproving, setBulkApproving] = useState(false);
   const qc = useQueryClient();
@@ -345,7 +343,8 @@ export function ContentPipelinePage() {
           <div key={id} className={`${blockWrapCls(id)} space-y-0`} {...blockDragProps(id)}>
             <span className={dragHandleCls} title="Kéo để đổi vị trí" {...blockDragSourceProps(id)}>⠿</span>
             {/* Tab bar — 2026-04-19 fix: dùng <a href> để right-click mở new tab/window được.
-                Drag-reorder chuyển qua handle "⋮⋮" riêng để không intercept click selection text. */}
+                Drag-reorder chuyển qua handle "⋮⋮" riêng để không intercept click selection text.
+                2026-05-07: dùng dataTransfer thay vì state để tránh stale closure trong onDrop. */}
             <div className="flex border-b">
               {tabs.map((tab) => (
                 <div
@@ -353,6 +352,13 @@ export function ContentPipelinePage() {
                   className={`group flex items-center border-b-2 transition-colors ${
                     activeTab === tab.key ? "border-primary" : "border-transparent hover:border-border"
                   } ${dragKey === tab.key ? "opacity-50" : ""}`}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const src = e.dataTransfer.getData("text/tab-key") as TabKey;
+                    if (src && src !== tab.key) reorderTab(src, tab.key);
+                    setDragKey(null);
+                  }}
                 >
                   <a
                     href={`?tab=${tab.key}`}
@@ -376,9 +382,12 @@ export function ContentPipelinePage() {
                   {/* Drag handle riêng — chỉ visible khi hover để bớt làm phân tán */}
                   <span
                     draggable
-                    onDragStart={(e) => { setDragKey(tab.key); e.stopPropagation(); }}
-                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                    onDrop={(e) => { e.stopPropagation(); if (dragKey && dragKey !== tab.key) reorderTab(dragKey, tab.key); setDragKey(null); }}
+                    onDragStart={(e) => {
+                      setDragKey(tab.key);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/tab-key", tab.key);
+                      e.stopPropagation();
+                    }}
                     onDragEnd={() => setDragKey(null)}
                     className="px-1 text-[10px] text-muted-foreground/40 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing select-none"
                     title="Kéo thả để đổi vị trí tab"
@@ -393,8 +402,81 @@ export function ContentPipelinePage() {
             {activeTab === "pipeline" && <PipelineTab onSwitchTab={(tab) => setActiveTab(tab as TabKey)} />}
             {activeTab === "aigen" && (
               <div className="cc-scope space-y-4">
-                <BatchJobsView />
-                <AiGenPage />
+                <p className="text-[10px] text-muted-foreground opacity-60 -mb-2">
+                  💡 Kéo handle ⠿ để đổi thứ tự các section — thứ tự được lưu tự động.
+                </p>
+                {aigenSections.map((sectionId) => {
+                  const isBeingDragged = dragAigenSection === sectionId;
+                  const isDragTarget = dragOverAigenSection === sectionId && dragAigenSection !== sectionId;
+                  const anyDragging = dragAigenSection !== null;
+                  const wrapCls = `relative group/aigen-block transition-all duration-150 ${
+                    isBeingDragged ? "opacity-40 scale-[0.99]" : ""
+                  } ${isDragTarget ? "ring-2 ring-primary/50 rounded-xl" : ""}`;
+
+                  const dropTargetProps = {
+                    onDragOver: (e: React.DragEvent) => { e.preventDefault(); setDragOverAigenSection(sectionId); },
+                    onDragLeave: () => setDragOverAigenSection(null),
+                    onDrop: (e: React.DragEvent) => {
+                      e.preventDefault();
+                      if (dragAigenSection && dragAigenSection !== sectionId) reorderAigenSection(dragAigenSection, sectionId);
+                      setDragAigenSection(null); setDragOverAigenSection(null);
+                    },
+                  };
+
+                  // Drag bar nhỏ gọn ở đầu section — chỉ có ký hiệu kéo, không có label
+                  // (label đã có trong nội dung component bên trong, tránh duplicate)
+                  const DragBar = (
+                    <div
+                      className={`flex items-center gap-2 px-2 py-1 rounded-t-md border-b select-none cursor-grab active:cursor-grabbing ${
+                        isDragTarget ? 'bg-primary/10 border-primary/40' : 'border-border/50 bg-muted/20'
+                      }`}
+                      draggable
+                      title="Kéo để đổi vị trí"
+                      onDragStart={(e) => {
+                        setDragAigenSection(sectionId);
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/aigen-section", sectionId);
+                      }}
+                      onDragEnd={() => { setDragAigenSection(null); setDragOverAigenSection(null); }}
+                    >
+                      <span className="text-muted-foreground/60 text-sm leading-none select-none">⠿⠿</span>
+                      <span className="text-[10px] text-muted-foreground/40 ml-1">kéo để đổi vị trí</span>
+                    </div>
+                  );
+
+                  if (sectionId === "batch-gen") return (
+                    <div key="batch-gen" className={wrapCls} {...dropTargetProps}>
+                      {DragBar}
+                      {/* overlay ngăn content bắt pointer events khi đang drag section khác */}
+                      {anyDragging && !isBeingDragged && (
+                        <div className="absolute inset-0 z-20" style={{ pointerEvents: 'all' }} />
+                      )}
+                      <BatchJobsView />
+                    </div>
+                  );
+
+                  if (sectionId === "ai-gen") return (
+                    <div key="ai-gen" className={wrapCls} {...dropTargetProps}>
+                      {DragBar}
+                      {anyDragging && !isBeingDragged && (
+                        <div className="absolute inset-0 z-20" style={{ pointerEvents: 'all' }} />
+                      )}
+                      <AiGenPage />
+                    </div>
+                  );
+
+                  if (sectionId === "gen-jobs") return (
+                    <div key="gen-jobs" className={wrapCls} {...dropTargetProps}>
+                      {DragBar}
+                      {anyDragging && !isBeingDragged && (
+                        <div className="absolute inset-0 z-20" style={{ pointerEvents: 'all' }} />
+                      )}
+                      <GenerationJobsBlock />
+                    </div>
+                  );
+
+                  return null;
+                })}
               </div>
             )}
             {activeTab === "content" && <ContentTab />}

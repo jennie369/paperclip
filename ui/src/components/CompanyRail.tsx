@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Paperclip, Plus } from "lucide-react";
 import { useQueries } from "@tanstack/react-query";
 import {
@@ -20,6 +20,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { cn } from "../lib/utils";
 import { queryKeys } from "../lib/queryKeys";
+import { useUIOrder } from "../hooks/useUIOrder";
 import { sidebarBadgesApi } from "../api/sidebarBadges";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useLocation, useNavigate } from "@/lib/router";
@@ -31,39 +32,16 @@ import {
 import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 
-const ORDER_STORAGE_KEY = "paperclip.companyOrder";
-
-function getStoredOrder(): string[] {
-  try {
-    const raw = localStorage.getItem(ORDER_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
-  return [];
-}
-
-function saveOrder(ids: string[]) {
-  localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(ids));
-}
-
 /** Sort companies by stored order, appending any new ones at the end. */
-function sortByStoredOrder(companies: Company[]): Company[] {
-  const order = getStoredOrder();
-  if (order.length === 0) return companies;
-
+function sortByOrder(companies: Company[], ids: string[]): Company[] {
+  if (ids.length === 0) return companies;
   const byId = new Map(companies.map((c) => [c.id, c]));
   const sorted: Company[] = [];
-
-  for (const id of order) {
+  for (const id of ids) {
     const c = byId.get(id);
-    if (c) {
-      sorted.push(c);
-      byId.delete(id);
-    }
+    if (c) { sorted.push(c); byId.delete(id); }
   }
-  // Append any companies not in stored order
-  for (const c of byId.values()) {
-    sorted.push(c);
-  }
+  for (const c of byId.values()) sorted.push(c);
   return sorted;
 }
 
@@ -195,52 +173,23 @@ export function CompanyRail() {
     return result;
   }, [companyIds, sidebarBadgeQueries]);
 
-  // Maintain sorted order in local state, synced from companies + localStorage
-  const [orderedIds, setOrderedIds] = useState<string[]>(() =>
-    sortByStoredOrder(sidebarCompanies).map((c) => c.id)
-  );
+  // --- Persistent order via useUIOrder (localStorage cache + Supabase SSOT) ---
+  const defaultIds = useMemo(() => sidebarCompanies.map((c) => c.id), [sidebarCompanies]);
+  const [orderedIds, setOrderedIds] = useUIOrder<string>('sidebar.companyOrder.v1', defaultIds);
 
-  // Re-sync orderedIds from localStorage whenever companies changes.
-  // Handles initial data load (companies starts as [] before query resolves)
-  // and subsequent refetches triggered by live updates.
+  // Append bất kỳ company mới chưa có trong order
   useEffect(() => {
-    if (sidebarCompanies.length === 0) {
-      setOrderedIds([]);
-      return;
-    }
-    setOrderedIds(sortByStoredOrder(sidebarCompanies).map((c) => c.id));
-  }, [sidebarCompanies]);
-
-  // Sync order across tabs via the native storage event
-  useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key !== ORDER_STORAGE_KEY) return;
-      try {
-        const ids: string[] = e.newValue ? JSON.parse(e.newValue) : [];
-        setOrderedIds(ids);
-      } catch { /* ignore malformed data */ }
-    };
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
-  }, []);
+    if (sidebarCompanies.length === 0) return;
+    const currentSet = new Set(orderedIds);
+    const newOnes = sidebarCompanies.map((c) => c.id).filter((id) => !currentSet.has(id));
+    if (newOnes.length > 0) setOrderedIds([...orderedIds, ...newOnes]);
+  }, [sidebarCompanies]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-derive when companies change (new company added/removed)
-  const orderedCompanies = useMemo(() => {
-    const byId = new Map(sidebarCompanies.map((c) => [c.id, c]));
-    const result: Company[] = [];
-    for (const id of orderedIds) {
-      const c = byId.get(id);
-      if (c) {
-        result.push(c);
-        byId.delete(id);
-      }
-    }
-    // Append any new companies not yet in our order
-    for (const c of byId.values()) {
-      result.push(c);
-    }
-    return result;
-  }, [sidebarCompanies, orderedIds]);
+  const orderedCompanies = useMemo(
+    () => sortByOrder(sidebarCompanies, orderedIds),
+    [sidebarCompanies, orderedIds],
+  );
 
   // Require 8px of movement before starting a drag to avoid interfering with clicks
   const sensors = useSensors(
@@ -261,10 +210,9 @@ export function CompanyRail() {
       if (oldIndex === -1 || newIndex === -1) return;
 
       const newIds = arrayMove(ids, oldIndex, newIndex);
-      setOrderedIds(newIds);
-      saveOrder(newIds);
+      setOrderedIds(newIds); // useUIOrder tự save localStorage + Supabase
     },
-    [orderedCompanies]
+    [orderedCompanies, setOrderedIds]
   );
 
   return (

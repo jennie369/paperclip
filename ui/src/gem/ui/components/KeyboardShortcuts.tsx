@@ -45,7 +45,7 @@ interface ShortcutEntry {
 
 const CATEGORY_CONFIG: Record<
   ShortcutEntry['category'],
-  { label: string; icon: React.ElementType; color: string }
+  { label: string; icon: React.ComponentType<any>; color: string }
 > = {
   navigation: {
     label: 'Dieu Huong',

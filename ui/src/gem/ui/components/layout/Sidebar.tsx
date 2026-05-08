@@ -23,7 +23,7 @@ import {
 interface NavItem {
   id: string;
   label: string;
-  icon: React.ElementType;
+  icon: React.ComponentType<any>;
   href: string;
   badge?: string;
   badgeVariant?: 'gold' | 'new' | 'key' | 'v3';

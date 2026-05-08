@@ -7,7 +7,7 @@ interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, '
   label?: string;
   error?: string;
   hint?: string;
-  icon?: React.ElementType;
+  icon?: React.ComponentType<any>;
   size?: 'sm' | 'md' | 'lg';
   tooltip?: string;
 }

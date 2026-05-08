@@ -394,7 +394,7 @@ export function SopPicker({ value, onChange }: Props) {
 
         {isLoading && (
           <div className="flex items-center justify-center py-10 text-muted-foreground text-sm">
-            <Loader2 className="size-4 animate-spin mr-2" /> Đang tải {data?.length ?? ''} SOPs…
+            <Loader2 className="size-4 animate-spin mr-2" /> Đang tải {allSops.length} SOPs…
           </div>
         )}
 

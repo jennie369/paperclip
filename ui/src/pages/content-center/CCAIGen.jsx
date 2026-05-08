@@ -65,7 +65,6 @@ import {
 import { useCreateScript, useCreateSocialPost } from '@gem/hooks/useQueryHooks';
 import { useJobSubscription } from '@gem/hooks/useJobSubscription';
 import CCSelect from './CCSelect';
-import ContentPlannerSidebar from './ContentPlannerSidebar';
 import JobLogViewerPanel from './JobLogViewerPanel';
 import DripStepHtmlEditor from './components/DripStepHtmlEditor';
 
@@ -127,7 +126,6 @@ const OUTPUT_TYPE_OPTIONS = [
   { value: 'chatbot_script', label: 'Chatbot Script Templates', jobType: 'chatbot_script', contentType: 'chatbot_script' },
   { value: 'news_article', label: 'Bài Tin Tức / Blog SEO', jobType: 'news', contentType: 'news' },
   { value: 'email_html', label: 'Email Marketing HTML', jobType: 'email', contentType: 'email' },
-  { value: 'content_planner', label: 'Content Planner (Lịch Nội Dung)', jobType: 'content_planner', contentType: 'content_planner' },
   { value: 'outline_latc', label: 'Outline Kịch Bản LATC (Đề cương trước)', jobType: 'outline', contentType: 'latc' },
   { value: 'outline_tmt', label: 'Outline Kịch Bản TMT (Đề cương trước)', jobType: 'outline', contentType: 'tmt' },
   { value: 'brainstorm', label: 'Brainstorm Chủ Đề (Gợi ý topic từ trends)', jobType: 'brainstorm', contentType: '' },
@@ -3830,29 +3828,7 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
         addToast({ type: 'success', title: 'Đã lên lịch!', message: `Sự kiện đã được tạo trên Lịch Nội Dung cho ngày ${calendarScheduleDate}.` });
       }
 
-      // Also add to Content Planner sidebar (via Supabase)
-      const plannerType = ContentPlannerSidebar.OUTPUT_TO_PLANNER_TYPE[outputType] || 'other';
-      const { plannerService } = await import('@gem/services');
-      await plannerService.create({
-        scheduled_date: calendarScheduleDate,
-        time_slot: calendarScheduleTime || '',
-        content_type: plannerType,
-        title: brief ? brief.slice(0, 60) : `${selectedOption.label}`,
-        brief: brief || output.slice(0, 200),
-        source: 'generated',
-        status: 'scheduled',
-        scheduled_content: {
-          output,
-          platform: calendarPlatform,
-          emailData: isEmail ? {
-            from: emailSender,
-            to: emailRecipients.split(',').map(e => e.trim()).filter(Boolean),
-            subject: emailSubject,
-            html: output,
-          } : null,
-        },
-      });
-      // Realtime subscription will update plannerData automatically
+
 
       setShowScheduleModal(false);
     } catch (err) {
@@ -3864,18 +3840,9 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
   }, [output, calendarScheduleDate, calendarScheduleTime, calendarPlatform, brief, selectedOption, contentType, persona, writingMode, autoCommentEnabled, autoCommentText, autoCommentLink, addToast, linkedEventId, outputType, isEmail, emailSender, emailRecipients, emailSubject]);
 
   return (
-    <div className="flex gap-4 animate-fade-in">
-      {/* Content Planner Sidebar */}
-      <ContentPlannerSidebar
-        plannerData={plannerData}
-        onPlannerChange={setPlannerData}
-        onCopyToBrief={handlePlannerCopyToBrief}
-        collapsed={plannerCollapsed}
-        onToggleCollapse={() => setPlannerCollapsed(!plannerCollapsed)}
-      />
-
+    <div className="animate-fade-in">
       {/* Main AI Gen content */}
-      <div className="space-y-6 flex-1 min-w-0">
+      <div className="space-y-6">
       {/* Log Viewer Toggle */}
       <div className="flex items-center gap-2">
         <button

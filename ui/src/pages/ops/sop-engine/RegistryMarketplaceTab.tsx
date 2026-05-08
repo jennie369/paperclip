@@ -577,7 +577,7 @@ function SkillsSubTab() {
       icon: ExternalLink,
       label: 'Mở source GitHub',
       show: (r) => r.source_locator?.startsWith('http'),
-      onClick: (r) => window.open(r.source_locator, '_blank'),
+      onClick: (r) => { window.open(r.source_locator, '_blank'); },
     },
     {
       icon: FolderOpen,
@@ -622,7 +622,7 @@ function PluginsSubTab() {
       icon: ExternalLink,
       label: 'Mở source repo',
       show: (r) => r.source_locator?.startsWith('http'),
-      onClick: (r) => window.open(r.source_locator, '_blank'),
+      onClick: (r) => { window.open(r.source_locator, '_blank'); },
     },
     {
       icon: FolderOpen,
@@ -1000,8 +1000,9 @@ function EdgeFunctionsSubTab() {
     {
       icon: ExternalLink,
       label: 'Mở Supabase Dashboard (Edge Functions)',
-      onClick: (r) =>
-        window.open(`https://supabase.com/dashboard/project/pgfkbcnzqozzkohwbgbk/functions/${r.name}`, '_blank'),
+      onClick: (r) => {
+        window.open(`https://supabase.com/dashboard/project/pgfkbcnzqozzkohwbgbk/functions/${r.name}`, '_blank');
+      },
     },
     {
       icon: FolderOpen,

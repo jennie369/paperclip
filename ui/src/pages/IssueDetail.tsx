@@ -777,7 +777,7 @@ export function IssueDetail() {
   useEffect(() => {
     const titleLabel = issue?.title ?? issueId ?? "Issue";
     const identifierLabel = issue?.identifier ?? issueId ?? null;
-    const crumbs = [sourceBreadcrumb];
+    const crumbs: Array<{ label: string; href?: string; badge?: boolean }> = [sourceBreadcrumb];
     if (identifierLabel) {
       crumbs.push({ label: identifierLabel, badge: true });
     }
@@ -803,6 +803,15 @@ export function IssueDetail() {
       });
     }
   }, [issue, issueId, navigate, location.state, location.search]);
+
+  // Scroll to top on navigation or reload
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+    const mainContent = document.getElementById("main-content");
+    if (mainContent) {
+      mainContent.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }, [issueId]);
 
   useEffect(() => {
     if (!issue?.id) return;

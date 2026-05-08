@@ -27,17 +27,17 @@ export function Issues() {
   // doesn't re-subscribe to window.history.replaceState — setting ?hidden=1
   // via replaceState didn't trigger a re-render → button looked dead. State
   // is seeded from URL once on mount so deep-links still work.
-  const [includeHidden, setIncludeHidden] = useState<boolean>(() => {
+  const [activeTab, setActiveTab] = useState<"all" | "hidden" | "heartbeats" | "gem456">(() => {
     const params = new URLSearchParams(window.location.search);
-    const raw = params.get("hidden");
-    return raw === "1" || raw === "true";
+    if (params.get("gem456_only") === "1" || params.get("gem456_only") === "true") return "gem456";
+    if (params.get("heartbeats_only") === "1" || params.get("heartbeats_only") === "true") return "heartbeats";
+    if (params.get("hidden") === "1" || params.get("hidden") === "true") return "hidden";
+    return "all";
   });
 
-  const [onlyHeartbeats, setOnlyHeartbeats] = useState<boolean>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const raw = params.get("heartbeats_only");
-    return raw === "1" || raw === "true";
-  });
+  const includeHidden = activeTab === "hidden" || activeTab === "heartbeats" || activeTab === "gem456";
+  const onlyHeartbeats = activeTab === "heartbeats";
+  const onlyGem456 = activeTab === "gem456";
 
   const handleSearchChange = useCallback((search: string) => {
     const trimmedSearch = search.trim();
@@ -96,19 +96,27 @@ export function Issues() {
     setBreadcrumbs([{ label: "Issues" }]);
   }, [setBreadcrumbs]);
 
+  const { data: gem456Parent } = useQuery({
+    queryKey: ["issues", "GEM-456"],
+    queryFn: () => issuesApi.get("GEM-456"),
+    enabled: onlyGem456,
+  });
+
   const { data: issues, isLoading, error } = useQuery({
     queryKey: [
       ...queryKeys.issues.list(selectedCompanyId!),
       "participant-agent", participantAgentId ?? "__all__",
-      "hidden", includeHidden || onlyHeartbeats ? "1" : "0",
+      "hidden", includeHidden || onlyHeartbeats || onlyGem456 ? "1" : "0",
       "heartbeats_only", onlyHeartbeats ? "1" : "0",
+      "gem456_only", onlyGem456 ? "1" : "0",
     ],
     queryFn: () => issuesApi.list(selectedCompanyId!, { 
       participantAgentId, 
-      includeHidden: includeHidden || onlyHeartbeats,
-      originKind: onlyHeartbeats ? "heartbeat" : undefined
+      includeHidden: includeHidden || onlyHeartbeats || onlyGem456,
+      originKind: onlyHeartbeats ? "system" : undefined,
+      parentId: onlyGem456 && gem456Parent ? gem456Parent.id : undefined,
     }),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && (!onlyGem456 || !!gem456Parent),
   });
 
   const updateIssue = useMutation({
@@ -123,62 +131,80 @@ export function Issues() {
     return <EmptyState icon={CircleDot} message="Select a company to view issues." />;
   }
 
-  // Flip React state AND sync URL so deep-link still works. State change
-  // re-runs the query (includeHidden is in queryKey).
-  const toggleIncludeHidden = () => {
-    const next = !includeHidden;
-    setIncludeHidden(next);
+  const handleTabChange = (tab: "all" | "hidden" | "heartbeats" | "gem456") => {
+    setActiveTab(tab);
     const url = new URL(window.location.href);
-    if (next) {
-      url.searchParams.set("hidden", "1");
-    } else {
-      url.searchParams.delete("hidden");
-    }
+    url.searchParams.delete("hidden");
+    url.searchParams.delete("heartbeats_only");
+    url.searchParams.delete("gem456_only");
+
+    if (tab === "hidden") url.searchParams.set("hidden", "1");
+    if (tab === "heartbeats") url.searchParams.set("heartbeats_only", "1");
+    if (tab === "gem456") url.searchParams.set("gem456_only", "1");
+
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   };
 
-  const toggleOnlyHeartbeats = () => {
-    const next = !onlyHeartbeats;
-    setOnlyHeartbeats(next);
-    const url = new URL(window.location.href);
-    if (next) {
-      url.searchParams.set("heartbeats_only", "1");
-    } else {
-      url.searchParams.delete("heartbeats_only");
+  const combinedIssues = useMemo(() => {
+    if (!issues) return [];
+    if (onlyGem456 && gem456Parent) {
+      // Avoid duplicate if the API somehow returns it (though parentId filter prevents that)
+      if (issues.some(i => i.id === gem456Parent.id)) return issues;
+      return [gem456Parent, ...issues];
     }
-    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  };
+    return issues;
+  }, [issues, onlyGem456, gem456Parent]);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 px-4 pt-3">
+    <div className="space-y-0">
+      <div className="flex items-center gap-6 px-6 pt-4 border-b border-border">
         <button
           type="button"
-          onClick={toggleIncludeHidden}
-          className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-            includeHidden
-              ? "bg-gold/15 border-gold/40 text-gold"
-              : "bg-transparent border-border text-txt-3 hover:text-txt hover:border-border-2"
+          onClick={() => handleTabChange("all")}
+          className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === "all"
+              ? "border-gold text-gold"
+              : "border-transparent text-txt-3 hover:text-txt hover:border-border-2"
           }`}
-          title="Bật để xem issues ẩn (thường là auto-generated)"
         >
-          {includeHidden ? "✓ Đang hiện issues ẩn" : "Hiện issues ẩn"}
+          All Issues
         </button>
         <button
           type="button"
-          onClick={toggleOnlyHeartbeats}
-          className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-            onlyHeartbeats
-              ? "bg-blue-500/15 border-blue-500/40 text-blue-500"
-              : "bg-transparent border-border text-txt-3 hover:text-txt hover:border-border-2"
+          onClick={() => handleTabChange("hidden")}
+          className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === "hidden"
+              ? "border-gold text-gold"
+              : "border-transparent text-txt-3 hover:text-txt hover:border-border-2"
           }`}
-          title="Chỉ hiển thị các heartbeat thread của các agent"
         >
-          {onlyHeartbeats ? "✓ Chỉ hiện Heartbeat Threads" : "Chỉ hiện Heartbeat Threads"}
+          Hidden
+        </button>
+        <button
+          type="button"
+          onClick={() => handleTabChange("heartbeats")}
+          className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === "heartbeats"
+              ? "border-blue-500 text-blue-500"
+              : "border-transparent text-txt-3 hover:text-txt hover:border-border-2"
+          }`}
+        >
+          Heartbeats
+        </button>
+        <button
+          type="button"
+          onClick={() => handleTabChange("gem456")}
+          className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === "gem456"
+              ? "border-purple-500 text-purple-500"
+              : "border-transparent text-txt-3 hover:text-txt hover:border-border-2"
+          }`}
+        >
+          Long-lived rivalry (GEM-456)
         </button>
       </div>
       <IssuesList
-        issues={issues ?? []}
+        issues={combinedIssues}
         isLoading={isLoading}
         error={error as Error | null}
         agents={agents}

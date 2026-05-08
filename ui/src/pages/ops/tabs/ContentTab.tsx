@@ -1,10 +1,11 @@
 // Tab 2: Nội Dung — cc_scripts CRUD + expand panel + editor + images + schedule + agent review
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, startTransition, memo, useDeferredValue } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check, X, Calendar, Copy, Trash2, Plus, ChevronDown, ChevronUp,
-  Shield, Loader2, ExternalLink, Image, Send, Mail,
+  Shield, Loader2, ExternalLink, Image, Send, Mail, FileCode, Eye
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { opsApi } from "@/api/ops";
 import { SimpleModal } from "../../crm/components/SimpleModal";
 import { useToast } from "@/context/ToastContext";
-import { useNavigate } from "@/lib/router";
+import { useNavigate, Link } from "@/lib/router";
 import { supabase } from "@/lib/supabaseClient";
 // BatchJobsView moved to ContentPipelinePage aigen tab (2026-04-18).
 import { MarkdownBody } from "@/components/MarkdownBody";
@@ -31,13 +32,28 @@ function timeAgo(d?: string): string {
 }
 
 // Detect if content is HTML (email template etc.)
+// Bắt các trường hợp:
+// 1. Full HTML document: <!DOCTYPE html> hoặc <html ...>
+// 2. HTML có <body>...</body>
+// 3. HTML fragment: bắt đầu bằng <meta, <table, <div style=, <tr, <td (email templates không có DOCTYPE)
+// 4. Code fence HTML: ```html ... ```
 function isHtmlContent(content: string): boolean {
   if (!content) return false;
   const trimmed = content.trim();
   const stripped = trimmed.startsWith('```')
     ? trimmed.replace(/^```\w*\n?/, '').replace(/\n?```\s*$/, '').trim()
     : trimmed;
-  return /^<!DOCTYPE html>/i.test(stripped) || /^<html/i.test(stripped) || (stripped.includes('<body') && stripped.includes('</body>'));
+  // Full document
+  if (/^<!DOCTYPE html>/i.test(stripped)) return true;
+  if (/^<html[\s>]/i.test(stripped)) return true;
+  if (stripped.includes('<body') && stripped.includes('</body>')) return true;
+  // HTML fragment — email templates thường bắt đầu bằng <meta hoặc comment rồi đến <table
+  if (/^<meta\s/i.test(stripped)) return true;
+  if (/^<!--[\s\S]*?-->\s*<(meta|table|div|tr|td|img|p)\b/i.test(stripped)) return true;
+  // Có đủ dấu hiệu HTML: nhiều thẻ HTML và có style inline
+  const tagCount = (stripped.match(/<\/?[a-z][a-z0-9]*[\s>]/gi) || []).length;
+  if (tagCount >= 5 && /style\s*=/i.test(stripped)) return true;
+  return false;
 }
 
 function stripCodeFence(content: string): string {
@@ -163,6 +179,278 @@ const brandColors: Record<string, string> = {
 const defaultScheduleForm = { date: '', time: '10:00', account: 'profile_jennie' };
 const defaultCreateForm = { title: '', body: '', pillar: 'trading', content_type: 'social_post', brand_voice: 'jennie' };
 
+// ---------------------------------------------------------------------------
+// EditableBadge — click để edit inline
+// ---------------------------------------------------------------------------
+const PILLAR_OPTIONS = ['trading', 'lifestyle', 'wellness', 'spiritual', 'education', 'migration'];
+
+// Content type options: regular và tất cả email series IDs từ RESEND_TEMPLATE_REGISTRY.md
+const CONTENT_TYPE_OPTIONS: { value: string; isDoc?: boolean; group?: string }[] = [
+  // --- Regular content ---
+  { value: 'social_post',    group: 'Regular' },
+  { value: 'email',          group: 'Regular' },
+  { value: 'newsletter',     group: 'Regular' },
+  { value: 'blog',           group: 'Regular' },
+  { value: 'short_video',    group: 'Regular' },
+  { value: 'reel',           group: 'Regular' },
+  { value: 'story',          group: 'Regular' },
+  { value: 'thread',         group: 'Regular' },
+  { value: 'podcast_script', group: 'Regular' },
+  { value: 'webinar_script', group: 'Regular' },
+  // --- A1. onb-trading-starter (DOC-ONB-001) ---
+  { value: 'onb-trading-starter-e1', isDoc: true, group: 'onb-trading-starter' },
+  { value: 'onb-trading-starter-e2', isDoc: true, group: 'onb-trading-starter' },
+  { value: 'onb-trading-starter-e3', isDoc: true, group: 'onb-trading-starter' },
+  { value: 'onb-trading-starter-e4', isDoc: true, group: 'onb-trading-starter' },
+  { value: 'onb-trading-starter-e5', isDoc: true, group: 'onb-trading-starter' },
+  // --- A2. onb-trading-tier1 (DOC-ONB-002) ---
+  { value: 'onb-trading-tier1-e1', isDoc: true, group: 'onb-trading-tier1' },
+  { value: 'onb-trading-tier1-e2', isDoc: true, group: 'onb-trading-tier1' },
+  { value: 'onb-trading-tier1-e3', isDoc: true, group: 'onb-trading-tier1' },
+  { value: 'onb-trading-tier1-e4', isDoc: true, group: 'onb-trading-tier1' },
+  { value: 'onb-trading-tier1-e5', isDoc: true, group: 'onb-trading-tier1' },
+  { value: 'onb-trading-tier1-e6', isDoc: true, group: 'onb-trading-tier1' },
+  { value: 'onb-trading-tier1-e7', isDoc: true, group: 'onb-trading-tier1' },
+  // --- A3. onb-trading-tier2 (DOC-ONB-003) ---
+  { value: 'onb-trading-tier2-e1', isDoc: true, group: 'onb-trading-tier2' },
+  { value: 'onb-trading-tier2-e2', isDoc: true, group: 'onb-trading-tier2' },
+  { value: 'onb-trading-tier2-e3', isDoc: true, group: 'onb-trading-tier2' },
+  { value: 'onb-trading-tier2-e4', isDoc: true, group: 'onb-trading-tier2' },
+  { value: 'onb-trading-tier2-e5', isDoc: true, group: 'onb-trading-tier2' },
+  { value: 'onb-trading-tier2-e6', isDoc: true, group: 'onb-trading-tier2' },
+  { value: 'onb-trading-tier2-e7', isDoc: true, group: 'onb-trading-tier2' },
+  // --- A4. onb-trading-tier3 (DOC-ONB-004) ---
+  { value: 'onb-trading-tier3-e1', isDoc: true, group: 'onb-trading-tier3' },
+  { value: 'onb-trading-tier3-e2', isDoc: true, group: 'onb-trading-tier3' },
+  { value: 'onb-trading-tier3-e3', isDoc: true, group: 'onb-trading-tier3' },
+  { value: 'onb-trading-tier3-e4', isDoc: true, group: 'onb-trading-tier3' },
+  { value: 'onb-trading-tier3-e5', isDoc: true, group: 'onb-trading-tier3' },
+  { value: 'onb-trading-tier3-e6', isDoc: true, group: 'onb-trading-tier3' },
+  { value: 'onb-trading-tier3-e7', isDoc: true, group: 'onb-trading-tier3' },
+  // --- A5. onb-tinh-yeu (DOC-ONB-005) ---
+  { value: 'onb-tinh-yeu-e1', isDoc: true, group: 'onb-tinh-yeu' },
+  { value: 'onb-tinh-yeu-e2', isDoc: true, group: 'onb-tinh-yeu' },
+  { value: 'onb-tinh-yeu-e3', isDoc: true, group: 'onb-tinh-yeu' },
+  { value: 'onb-tinh-yeu-e4', isDoc: true, group: 'onb-tinh-yeu' },
+  { value: 'onb-tinh-yeu-e5', isDoc: true, group: 'onb-tinh-yeu' },
+  { value: 'onb-tinh-yeu-e6', isDoc: true, group: 'onb-tinh-yeu' },
+  // --- A6. onb-trieu-phu (DOC-ONB-006) ---
+  { value: 'onb-trieu-phu-e1', isDoc: true, group: 'onb-trieu-phu' },
+  { value: 'onb-trieu-phu-e2', isDoc: true, group: 'onb-trieu-phu' },
+  { value: 'onb-trieu-phu-e3', isDoc: true, group: 'onb-trieu-phu' },
+  { value: 'onb-trieu-phu-e4', isDoc: true, group: 'onb-trieu-phu' },
+  { value: 'onb-trieu-phu-e5', isDoc: true, group: 'onb-trieu-phu' },
+  { value: 'onb-trieu-phu-e6', isDoc: true, group: 'onb-trieu-phu' },
+  { value: 'onb-trieu-phu-e7', isDoc: true, group: 'onb-trieu-phu' },
+  // --- A7. onb-7-ngay-tan-so-goc (DOC-ONB-007) ---
+  { value: 'onb-7-ngay-tan-so-goc-e1', isDoc: true, group: 'onb-7-ngay' },
+  { value: 'onb-7-ngay-tan-so-goc-e2', isDoc: true, group: 'onb-7-ngay' },
+  { value: 'onb-7-ngay-tan-so-goc-e3', isDoc: true, group: 'onb-7-ngay' },
+  { value: 'onb-7-ngay-tan-so-goc-e4', isDoc: true, group: 'onb-7-ngay' },
+  { value: 'onb-7-ngay-tan-so-goc-e5', isDoc: true, group: 'onb-7-ngay' },
+  { value: 'onb-7-ngay-tan-so-goc-e6', isDoc: true, group: 'onb-7-ngay' },
+  { value: 'onb-7-ngay-tan-so-goc-e7', isDoc: true, group: 'onb-7-ngay' },
+  // --- A8. onb-ctv-kol (DOC-ONB-008) ---
+  { value: 'onb-ctv-kol-e1', isDoc: true, group: 'onb-ctv-kol' },
+  { value: 'onb-ctv-kol-e2', isDoc: true, group: 'onb-ctv-kol' },
+  { value: 'onb-ctv-kol-e3', isDoc: true, group: 'onb-ctv-kol' },
+  { value: 'onb-ctv-kol-e4', isDoc: true, group: 'onb-ctv-kol' },
+  { value: 'onb-ctv-kol-e5', isDoc: true, group: 'onb-ctv-kol' },
+  // --- B1. welcome-free-signup ---
+  { value: 'welcome-free-signup-e1', isDoc: true, group: 'welcome' },
+  { value: 'welcome-free-signup-e2', isDoc: true, group: 'welcome' },
+  { value: 'welcome-free-signup-e3', isDoc: true, group: 'welcome' },
+  // --- B2. winback-dormant ---
+  { value: 'winback-dormant-e1', isDoc: true, group: 'winback' },
+  { value: 'winback-dormant-e2', isDoc: true, group: 'winback' },
+  { value: 'winback-dormant-e3', isDoc: true, group: 'winback' },
+  // --- D1. VIP ---
+  { value: 'vip-personal-touch', isDoc: true, group: 'vip' },
+];
+
+const STATUS_OPTIONS = ['draft', 'approved', 'rejected', 'published', 'scheduled'];
+const BRAND_OPTIONS = ['jennie', 'generic'];
+
+// ---------------------------------------------------------------------------
+// ContentTypeDropdown — custom popover với search, tránh freeze
+// ---------------------------------------------------------------------------
+function ContentTypeDropdown({
+  value, options, onSelect, onClose, anchorRect,
+}: {
+  value: string;
+  options: string[];
+  onSelect: (v: string) => void;
+  onClose: () => void;
+  anchorRect: DOMRect;
+}) {
+  const [search, setSearch] = useState('');
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // pos tính thẳng từ anchorRect — không cần useEffect, không có delay
+  const pos = { top: anchorRect.bottom + 4, left: anchorRect.left };
+
+  // Click outside
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [onClose]);
+
+  // Key: Escape đóng
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  const q = search.toLowerCase();
+  // Giới hạn 30 items khi chưa search — tránh render 70 nodes cùng lúc gây freeze
+  const filtered = search
+    ? options.filter(o => o.toLowerCase().includes(q))
+    : options.slice(0, 30);
+
+  // Group lại để hiển thị header
+  const grouped: { group: string; items: string[] }[] = [];
+  const groupMap = new Map<string, string[]>();
+  for (const o of filtered) {
+    const meta = CONTENT_TYPE_OPTIONS.find(c => c.value === o);
+    const g = meta?.group ?? 'Khác';
+    if (!groupMap.has(g)) groupMap.set(g, []);
+    groupMap.get(g)!.push(o);
+  }
+  groupMap.forEach((items, group) => grouped.push({ group, items }));
+
+  // createPortal → render thẳng vào document.body
+  // Fix: dnd-kit inject transform vào draggable rows → position:fixed bị lệch
+  // Portal bypass hoàn toàn mọi CSS stacking context của parent
+  return createPortal(
+    <div
+      ref={popoverRef}
+      style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 99999, minWidth: 220, maxHeight: 320 }}
+      className="bg-popover border border-border rounded-lg shadow-2xl flex flex-col overflow-hidden"
+    >
+      {/* Search */}
+      <div className="px-2 py-1.5 border-b border-border shrink-0">
+        <input
+          autoFocus
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Tìm... (gõ để lọc tất cả)"
+          className="w-full text-[11px] bg-transparent outline-none placeholder:text-muted-foreground/50"
+        />
+      </div>
+      {/* List */}
+      <div className="overflow-y-auto flex-1">
+        {!search && (
+          <div className="px-2 py-1 text-[9px] text-muted-foreground/40 italic">Hiện 30 đầu · gõ để tìm tất cả</div>
+        )}
+        {grouped.length === 0 && (
+          <div className="px-3 py-2 text-[11px] text-muted-foreground">Không tìm thấy</div>
+        )}
+        {grouped.map(({ group, items }) => (
+          <div key={group}>
+            <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground/60 font-semibold bg-muted/30 sticky top-0">
+              {group}
+            </div>
+            {items.map(o => {
+              const meta = CONTENT_TYPE_OPTIONS.find(c => c.value === o);
+              const isDoc = meta?.isDoc ?? false;
+              const isSelected = o === value;
+              return (
+                <button
+                  key={o}
+                  type="button"
+                  className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 hover:bg-accent/60 transition-colors ${isSelected ? 'bg-accent' : ''}`}
+                  onClick={() => { onSelect(o); onClose(); }}
+                >
+                  {isDoc ? (
+                    <span className="font-mono font-bold px-1.5 py-0.5 rounded text-[10px] bg-zinc-900 text-white">{o}</span>
+                  ) : (
+                    <span className={isSelected ? 'font-semibold' : ''}>{o}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function EditableBadge({
+  value, options, onSave, className, isText = false, placeholder,
+}: {
+  value: string;
+  options?: string[];
+  onSave: (v: string) => void;
+  className?: string;
+  isText?: boolean;
+  placeholder?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  // anchorRect: capture ngay tại onClick trước khi React re-render (unmount badge span)
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+
+  const commit = (v: string) => {
+    onSave(v.trim() || value);
+    setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <span
+        className={`cursor-pointer hover:ring-1 hover:ring-primary/40 transition-all ${className}`}
+        title="Click để chỉnh sửa"
+        onClick={(e) => {
+          e.stopPropagation();
+          // Capture rect trước setEditing — lúc này DOM vẫn ở đúng vị trí
+          setAnchorRect((e.currentTarget as HTMLElement).getBoundingClientRect());
+          setDraft(value);
+          setEditing(true);
+        }}
+      >
+        {value || placeholder || '—'}
+      </span>
+    );
+  }
+
+  // Text input mode
+  if (isText || !options) {
+    return (
+      <span onClick={(e) => e.stopPropagation()} className="inline-block">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') commit(draft); if (e.key === 'Escape') { setEditing(false); setDraft(value); } }}
+          placeholder={placeholder}
+          className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 border rounded focus:outline-none focus:ring-1 focus:ring-primary/40 w-28 ${className}`}
+        />
+      </span>
+    );
+  }
+
+  // Dropdown: ContentTypeDropdown với anchorRect đã capture sẵn từ onClick
+  if (!anchorRect) return null;
+  return (
+    <span onClick={(e) => e.stopPropagation()} className="relative inline-block">
+      <ContentTypeDropdown
+        value={value}
+        options={options}
+        onSelect={commit}
+        onClose={() => { setEditing(false); setDraft(value); }}
+        anchorRect={anchorRect}
+      />
+    </span>
+  );
+}
+
 // Lấy tiêu đề email hợp lệ: nếu title là HTML thì extract từ thẻ <title>, nếu không trả về title thường
 function getEmailSubject(script: any): string {
   const rawTitle = script.title || '';
@@ -182,53 +470,87 @@ function getEmailSubject(script: any): string {
 // ScriptExpandedPanel
 // ---------------------------------------------------------------------------
 
-function ScriptExpandedPanel({ script }: { script: any }) {
+function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTag?: string }) {
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const [mode, setMode] = useState<'preview' | 'edit'>('preview');
-  // Auto-strip AI preamble từ body + title khi load. Chị có thể override
-  // trong edit mode nếu strip nhầm.
-  const initialBody = stripAiPreamble(script.body || script.caption || script.content || '');
-  const initialTitle = stripAiTitlePrefix(script.title || '');
-  const [body, setBody] = useState(initialBody);
-  const [title, setTitle] = useState(initialTitle);
+
+  // useMemo: chỉ tính 1 lần khi script.id thay đổi — tránh gọi regex nặng mỗi render
+  const initialBody = useMemo(
+    () => stripAiPreamble(script.body || script.caption || script.content || ''),
+    [script.id] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const initialTitle = useMemo(
+    () => stripAiTitlePrefix(script.title || ''),
+    [script.id] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const [body, setBody] = useState(() => initialBody);
+  const [title, setTitle] = useState(() => initialTitle);
   const [saving, setSaving] = useState(false);
-  const [reviewAgent, setReviewAgent] = useState('ceo');
-  const [scheduleForm, setScheduleForm] = useState({ date: '', time: '10:00', account: 'profile_jennie' });
-  const [emailFrom, setEmailFrom] = useState('Jennie Uyen Chu <hello@gemral.com>');
-  const [emailTo, setEmailTo] = useState('');
-  const [emailSubject, setEmailSubject] = useState(getEmailSubject(script));
-  const [emailSending, setEmailSending] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  // 'saved' | 'unsaved' | 'saving' — indicator auto-save
+  const [saveState, setSaveState] = useState<'saved' | 'unsaved' | 'saving'>('saved');
+
+  // deferredBody: React render markdown/iframe với giá trị cũ (không block)
+  // trong khi mode button click phản hồi ngay lập tức — giảm cảm giác freeze.
+  // MUST be after useState(body) to avoid TDZ (Temporal Dead Zone)
+  const deferredBody = useDeferredValue(body);
 
   // Sync body + title when script id changes (e.g. different row expanded)
   useEffect(() => {
-    setBody(stripAiPreamble(script.body || script.caption || script.content || ''));
-    setTitle(stripAiTitlePrefix(script.title || ''));
-    setEmailSubject(getEmailSubject(script));
-  }, [script.id]);
+    setBody(initialBody);
+    setTitle(initialTitle);
+    setSaveState('saved');
+  }, [initialBody, initialTitle]);
+
+  // Toggle mode dùng startTransition → không block main thread
+  const handleSetMode = useCallback((m: 'preview' | 'edit') => {
+    startTransition(() => setMode(m));
+  }, []);
 
   const inv = () => qc.invalidateQueries({ queryKey: ['ops'] });
 
-  const handleSave = async () => {
+  const doSave = useCallback(async (t: string, b: string) => {
     setSaving(true);
+    setSaveState('saving');
     try {
-      // Save cả title VÀ body. Trước đây chỉ save body → title AI-generated
-      // sai vẫn nguyên xi → push thẳng Notion → wrong headline.
-      const payload: Record<string, any> = { body };
-      const trimmedTitle = title.trim();
+      const payload: Record<string, any> = { body: b };
+      const trimmedTitle = t.trim();
       if (trimmedTitle && trimmedTitle !== (script.title || '').trim()) {
         payload.title = trimmedTitle;
       }
       await opsApi.updateScript(script.id, payload);
       inv();
-      pushToast({ title: 'Đã lưu nội dung', tone: 'success' });
+      setSaveState('saved');
     } catch {
       pushToast({ title: 'Lỗi lưu nội dung', tone: 'error' });
+      setSaveState('unsaved');
     } finally {
       setSaving(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [script.id]);
+
+  // Auto-save debounce 1.5s sau khi user dừng gõ
+  const autoSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Không auto-save nếu content chưa thay đổi so với DB
+    if (body === initialBody && title === initialTitle) return;
+    setSaveState('unsaved');
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
+    autoSaveRef.current = setTimeout(() => {
+      doSave(title, body);
+    }, 1500);
+    return () => {
+      if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body, title]);
+
+  const handleSave = () => {
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current);
+    doSave(title, body);
   };
 
   const handleCopy = () => {
@@ -278,44 +600,6 @@ function ScriptExpandedPanel({ script }: { script: any }) {
     e.target.value = '';
   };
 
-  const handleSchedule = async () => {
-    if (!scheduleForm.date) {
-      pushToast({ title: 'Vui lòng chọn ngày đăng', tone: 'info' });
-      return;
-    }
-    try {
-      const scheduledAt = new Date(`${scheduleForm.date}T${scheduleForm.time}:00`).toISOString();
-      const res = await fetch('/api/ops/content-pipeline/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script_id: script.id, scheduled_at: scheduledAt, account: scheduleForm.account }),
-      });
-      if (!res.ok) throw new Error();
-      pushToast({ title: 'Đã lên lịch đăng bài', tone: 'success' });
-      inv();
-    } catch {
-      pushToast({ title: 'Lỗi lên lịch', tone: 'error' });
-    }
-  };
-
-  const handleAgentReview = async () => {
-    try {
-      const res = await fetch('/api/ops/content-pipeline/agent-review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          script_id: script.id,
-          agent: reviewAgent,
-          task: `Review bài "${script.title}": kiểm tra compliance, brand voice Jennie, chất lượng nội dung. Script ID: ${script.id}. Pillar: ${script.pillar}. Type: ${script.content_type}.`,
-        }),
-      });
-      if (!res.ok) throw new Error();
-      pushToast({ title: `Đã giao review cho ${reviewAgent}`, tone: 'success' });
-    } catch {
-      pushToast({ title: 'API review chưa sẵn sàng — sẽ kích hoạt sau', tone: 'info' });
-    }
-  };
-
   const meta = script.metadata || {};
   const wordCount = script.word_count || meta.word_count || body.split(/\s+/).filter(Boolean).length;
   const readTime = Math.max(1, Math.round(wordCount / 200));
@@ -351,7 +635,7 @@ function ScriptExpandedPanel({ script }: { script: any }) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-0.5 bg-white border rounded-lg p-0.5">
           <button
-            onClick={() => setMode('preview')}
+            onClick={() => handleSetMode('preview')}
             className={`text-xs px-3 py-1.5 rounded-md transition-colors ${
               mode === 'preview' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:text-zinc-900'
             }`}
@@ -359,7 +643,7 @@ function ScriptExpandedPanel({ script }: { script: any }) {
             Xem Trước
           </button>
           <button
-            onClick={() => setMode('edit')}
+            onClick={() => handleSetMode('edit')}
             className={`text-xs px-3 py-1.5 rounded-md transition-colors ${
               mode === 'edit' ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:text-zinc-900'
             }`}
@@ -371,73 +655,95 @@ function ScriptExpandedPanel({ script }: { script: any }) {
           <Button size="sm" variant="outline" onClick={handleCopy}>
             <Copy className="h-3 w-3 mr-1" />Sao chép
           </Button>
-          <Button size="sm" variant="outline" onClick={handleSave} disabled={saving}>
-            {saving && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-            {saving ? 'Đang lưu...' : 'Lưu'}
+          <Button size="sm" variant="outline" onClick={() => {
+            const t = stripAiTitlePrefix(title || 'Kịch Bản');
+            // Ưu tiên customTag làm tên file nếu đã đặt, fallback về title
+            const fileBaseName = customTag?.trim() || t;
+            const contentToExport = stripAiPreamble(body);
+            const htmlContent = contentToExport.startsWith('```html') 
+              ? contentToExport.replace(/^```html\s*/i, '').replace(/```\s*$/i, '') 
+              : contentToExport;
+            const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${fileBaseName.slice(0, 80).replace(/[^a-zA-Z0-9\s\-_]/g, '').trim() || 'Kich_Ban'}.html`;
+            document.body.appendChild(a); 
+            a.click(); 
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            pushToast({ title: 'Đã xuất HTML', tone: 'success' });
+          }}>
+            <FileCode className="h-3 w-3 mr-1" />Xuất
           </Button>
+          {/* Auto-save indicator — thay thế nút Lưu manual */}
+          <span className={`text-[10px] flex items-center gap-1 transition-all ${
+            saveState === 'saving' ? 'text-amber-500' :
+            saveState === 'unsaved' ? 'text-muted-foreground' : 'text-emerald-500'
+          }`}>
+            {saveState === 'saving' && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+            {saveState === 'saving' ? 'Đang lưu...' : saveState === 'unsaved' ? '● Chưa lưu' : '✓ Đã lưu'}
+          </span>
           <Button
             size="sm"
             variant="outline"
-            onClick={() => navigate(`/GEM/cc/scripts/${script.id}`)}
+            asChild
           >
-            <ExternalLink className="h-3 w-3 mr-1" />Mở đầy đủ
+            <a 
+              href={`/GEM/cc/scripts/${script.id}`}
+              onClick={(e) => {
+                if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                  e.preventDefault();
+                  navigate(`/GEM/cc/scripts/${script.id}`);
+                }
+              }}
+            >
+              <ExternalLink className="h-3 w-3 mr-1" />Mở đầy đủ
+            </a>
           </Button>
         </div>
       </div>
 
-      {/* Body content */}
-      {mode === 'preview' ? (
-        isHtmlContent(body) ? (
-          <div className="rounded-lg border overflow-hidden bg-white" style={{ minHeight: 300 }}>
-            <iframe
-              ref={iframeRef}
-              srcDoc={stripImagePrompt(stripCodeFence(body))}
-              style={{ width: '100%', minHeight: 400, border: 'none', display: 'block' }}
-              title="HTML Preview"
-              sandbox="allow-same-origin"
-              onLoad={(e) => {
-                const iframe = e.currentTarget;
-                try {
-                  const h = iframe.contentDocument?.documentElement?.scrollHeight;
-                  if (h) iframe.style.height = h + 'px';
-                } catch {}
-              }}
-            />
-          </div>
+      {/* Body content — 2026-05-07: giữ cả 2 panel trong DOM, toggle bằng display:none.
+          Trước: conditional render → unmount+remount mỗi lần toggle → MarkdownBody parse lại từ đầu → freeze.
+          Sau: cả 2 luôn mounted, chỉ ẩn/hiện bằng CSS → không có remount → instant toggle. */}
+
+      {/* Preview panel — luôn mounted, ẩn bằng CSS khi mode=edit */}
+      <div style={{ display: mode === 'preview' ? undefined : 'none' }}>
+        {isHtmlContent(deferredBody) ? (
+          <MemoizedIframePreview srcDoc={stripImagePrompt(stripCodeFence(deferredBody))} />
         ) : (
-          <div className="bg-white p-4 rounded-lg border text-sm min-h-[200px] max-h-[500px] overflow-y-auto leading-relaxed prose prose-sm max-w-none">
-            <MarkdownBody>{body || '*(Không có nội dung)*'}</MarkdownBody>
-          </div>
-        )
-      ) : (
-        <div className="space-y-2">
-          {/* Title editable — trước đây không edit được → AI-generated title sai
-              vẫn được push thẳng vào Notion. Giờ chị có thể fix trước khi Lưu. */}
-          <div>
-            <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">
-              Tiêu đề
-            </label>
-            <input
-              type="text"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              className="w-full px-3 py-2 text-sm font-medium border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
-              placeholder="Nhập tiêu đề..."
-            />
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">
-              Nội dung
-            </label>
-            <textarea
-              value={body}
-              onChange={e => setBody(e.target.value)}
-              className="w-full min-h-[300px] p-4 font-mono text-sm border rounded-lg resize-y bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
-              placeholder="Nhập nội dung..."
-            />
-          </div>
+          <MemoizedMarkdownPreview body={deferredBody} visible={mode === 'preview'} />
+        )}
+      </div>
+
+      {/* Edit panel — luôn mounted, ẩn bằng CSS khi mode=preview */}
+      <div className="space-y-2" style={{ display: mode === 'edit' ? undefined : 'none' }}>
+        {/* Title editable */}
+        <div>
+          <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">
+            Tiêu đề
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            className="w-full px-3 py-2 text-sm font-medium border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+            placeholder="Nhập tiêu đề..."
+          />
         </div>
-      )}
+        <div>
+          <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">
+            Nội dung
+          </label>
+          <textarea
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            className="w-full min-h-[300px] p-4 font-mono text-sm border rounded-lg resize-y bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+            placeholder="Nhập nội dung..."
+          />
+        </div>
+      </div>
 
       {/* Hình ảnh đính kèm */}
       <div className="space-y-2">
@@ -448,190 +754,452 @@ function ScriptExpandedPanel({ script }: { script: any }) {
               key={i}
               src={img}
               alt=""
-              className="w-20 h-20 object-cover rounded-lg border cursor-pointer hover:opacity-80 transition-opacity"
+              className="w-20 h-20 object-cover rounded-lg border cursor-pointer border-zinc-100"
               onClick={() => window.open(img, '_blank')}
             />
           ))}
-          <label className="w-20 h-20 border-2 border-dashed border-zinc-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 transition-colors gap-1 text-zinc-400">
-            <Image className="h-5 w-5" />
-            <span className="text-[10px]">Thêm hình</span>
-            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+          <label className="w-20 h-20 rounded-lg border-2 border-dashed flex flex-col items-center justify-center text-muted-foreground hover:bg-muted/50 cursor-pointer">
+            <Plus className="w-4 h-4 mb-1" />
+            <span className="text-[10px]">Thêm</span>
+            <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
           </label>
         </div>
-      </div>
-
-      {/* Đăng bài */}
-      <div className="p-3 bg-blue-50/80 rounded-lg space-y-2 border border-blue-100">
-        <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider">Đăng bài</p>
-        <div className="flex flex-wrap gap-2 items-center">
-          <select
-            value={scheduleForm.account}
-            onChange={e => setScheduleForm(f => ({ ...f, account: e.target.value }))}
-            className="text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
-          >
-            <option value="profile_jennie">👤 Profile Jennie</option>
-            <option value="page_jennie">📘 Page Jennie</option>
-            <option value="page_gemral">📘 Page Gemral</option>
-          </select>
-          <input
-            type="time"
-            value={scheduleForm.time}
-            onChange={e => setScheduleForm(f => ({ ...f, time: e.target.value }))}
-            className="text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
-          />
-          <input
-            type="date"
-            value={scheduleForm.date}
-            onChange={e => setScheduleForm(f => ({ ...f, date: e.target.value }))}
-            className="text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
-          />
-          <Button size="sm" onClick={handleSchedule} className="bg-blue-600 hover:bg-blue-700 text-white">
-            <Calendar className="h-3 w-3 mr-1" />Lên lịch
-          </Button>
-        </div>
-      </div>
-
-      {/* Gửi Email qua Resend */}
-      {(() => {
-        const rawHtml = isHtmlContent(body) ? stripCodeFence(body) : '';
-        const cleanHtml = rawHtml ? stripImagePrompt(rawHtml) : '';
-        const imgPrompt = rawHtml ? extractImagePrompt(rawHtml) : '';
-        const charCount = cleanHtml.length || body.length;
-        const handleSendEmail = async () => {
-          if (!body.trim()) { pushToast({ title: 'Không có nội dung để gửi', tone: 'error' }); return; }
-          if (!emailTo.trim()) { pushToast({ title: 'Vui lòng nhập email người nhận', tone: 'error' }); return; }
-          if (!emailSubject.trim()) { pushToast({ title: 'Vui lòng nhập tiêu đề email', tone: 'error' }); return; }
-          setEmailSending(true);
-          try {
-            const recipients = emailTo.split(',').map((e: string) => e.trim()).filter(Boolean);
-            const htmlContent = cleanHtml
-              || `<pre style="font-family:sans-serif;white-space:pre-wrap">${body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
-            const res = await fetch('/api/email/send', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent, from: emailFrom }),
-            });
-            const data = await res.json();
-            if (data.success) {
-              pushToast({ title: `✅ Đã gửi email đến ${recipients.length} người nhận`, tone: 'success' });
-              setEmailTo('');
-            } else {
-              pushToast({ title: data.error || 'Lỗi gửi email', tone: 'error' });
-            }
-          } catch {
-            pushToast({ title: 'Lỗi kết nối API email', tone: 'error' });
-          } finally {
-            setEmailSending(false);
-          }
-        };
-        return (
-          <div className="rounded-lg border border-violet-200 bg-violet-50/60 overflow-hidden">
-            <div className="px-3 py-2 border-b border-violet-100 flex items-center gap-1.5">
-              <Mail className="h-3.5 w-3.5 text-violet-600" />
-              <span className="text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Gửi Email qua Resend</span>
-            </div>
-            <div className="p-3 space-y-2">
-              {/* Sender */}
-              <div className="space-y-1">
-                <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Gửi từ (Sender) *</label>
-                <select
-                  value={emailFrom}
-                  onChange={e => setEmailFrom(e.target.value)}
-                  className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
-                >
-                  <option value="Jennie Uyen Chu &lt;hello@gemral.com&gt;">Jennie Uyen Chu &lt;hello@gemral.com&gt;</option>
-                  <option value="Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;">Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;</option>
-                  <option value="Gemral &lt;no_reply@gemral.com&gt;">Gemral &lt;no_reply@gemral.com&gt;</option>
-                  <option value="Gemral &lt;info@gemral.com&gt;">Gemral &lt;info@gemral.com&gt;</option>
-                  <option value="Gemral &lt;support@gemral.com&gt;">Gemral &lt;support@gemral.com&gt;</option>
-                </select>
-              </div>
-              {/* Subject */}
-              <div className="space-y-1">
-                <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Tiêu đề email *</label>
-                <input
-                  type="text"
-                  value={emailSubject}
-                  onChange={e => setEmailSubject(e.target.value)}
-                  placeholder="Nhập tiêu đề email..."
-                  className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
-                />
-              </div>
-              {/* Recipients */}
-              <div className="space-y-1">
-                <label className="text-[10px] font-medium text-violet-700 uppercase tracking-wide">Người nhận * (dấu phẩy phân cách)</label>
-                <input
-                  type="text"
-                  value={emailTo}
-                  onChange={e => setEmailTo(e.target.value)}
-                  placeholder="email1@gmail.com, email2@gmail.com"
-                  className="w-full text-xs border border-violet-200 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
-                />
-              </div>
-              {/* Info + IMAGE_PROMPT notice */}
-              <div className="flex flex-wrap items-center gap-2 text-[10px] text-violet-600">
-                <span>📄 Sẽ gửi nội dung đã tạo ({charCount.toLocaleString()} ký tự)</span>
-                {imgPrompt && (
-                  <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium">
-                    ✂️ Đã tách IMAGE_PROMPT ra — sẽ không gửi kèm
-                  </span>
-                )}
-              </div>
-              {/* IMAGE_PROMPT preview (collapsed) */}
-              {imgPrompt && (
-                <details className="text-[10px]">
-                  <summary className="cursor-pointer text-amber-600 hover:text-amber-700 font-medium">Xem prompt hình ảnh đã tách...</summary>
-                  <pre className="mt-1 p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 whitespace-pre-wrap max-h-24 overflow-y-auto">{imgPrompt}</pre>
-                </details>
-              )}
-              {/* Buttons */}
-              <div className="flex gap-2 pt-1">
-                <Button
-                  size="sm"
-                  disabled={emailSending || !emailTo.trim() || !emailSubject.trim() || !emailFrom.trim()}
-                  onClick={handleSendEmail}
-                  className="bg-violet-600 hover:bg-violet-700 text-white"
-                >
-                  {emailSending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Mail className="h-3 w-3 mr-1" />}
-                  {emailSending ? 'Đang gửi...' : 'Gửi Email'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    const toCopy = cleanHtml || body;
-                    navigator.clipboard.writeText(toCopy)
-                      .then(() => pushToast({ title: 'Đã sao chép HTML', tone: 'success' }))
-                      .catch(() => {});
-                  }}
-                >
-                  <Copy className="h-3 w-3 mr-1" />Sao Chép HTML
-                </Button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Agent review */}
-      <div className="p-3 bg-zinc-50 rounded-lg flex items-center gap-2 flex-wrap border border-zinc-100">
-        <span className="text-xs font-semibold text-muted-foreground">Giao review:</span>
-        <select
-          value={reviewAgent}
-          onChange={e => setReviewAgent(e.target.value)}
-          className="text-xs border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-300"
-        >
-          <option value="ceo">🤖 CEO Agent</option>
-          <option value="content-manager">📝 Content Manager</option>
-          <option value="brand-manager">🎨 Brand Manager</option>
-        </select>
-        <Button size="sm" variant="outline" onClick={handleAgentReview}>
-          <Send className="h-3 w-3 mr-1" />Giao review
-        </Button>
       </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// useSessionState — persist vào sessionStorage, restore khi back
+// ---------------------------------------------------------------------------
+function useSessionState<T>(key: string, defaultVal: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const [state, setStateRaw] = useState<T>(() => {
+    try {
+      const raw = sessionStorage.getItem(key);
+      return raw !== null ? (JSON.parse(raw) as T) : defaultVal;
+    } catch {
+      return defaultVal;
+    }
+  });
+
+  const setState = useCallback((v: T | ((prev: T) => T)) => {
+    setStateRaw((prev) => {
+      const next = typeof v === 'function' ? (v as (prev: T) => T)(prev) : v;
+      try { sessionStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+
+  return [state, setState];
+}
+
+// ---------------------------------------------------------------------------
+// useLocalState — persist vào localStorage, giữ qua đóng/mở browser
+// ---------------------------------------------------------------------------
+function useLocalState<T>(key: string, defaultVal: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const [state, setStateRaw] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw !== null ? (JSON.parse(raw) as T) : defaultVal;
+    } catch {
+      return defaultVal;
+    }
+  });
+
+  const setState = useCallback((v: T | ((prev: T) => T)) => {
+    setStateRaw((prev) => {
+      const next = typeof v === 'function' ? (v as (prev: T) => T)(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+
+  return [state, setState];
+}
+
+// ---------------------------------------------------------------------------
+// MemoizedPreview — tránh re-render iframe/markdown khi parent toggle
+// ---------------------------------------------------------------------------
+// Detect xem body có phải HTML document/email không
+function isHtmlBody(body: string): boolean {
+  if (!body) return false;
+  const t = body.trimStart().toLowerCase();
+  return t.startsWith('<!doctype') || t.startsWith('<html') || t.startsWith('<table') || t.startsWith('<meta');
+}
+
+const MemoizedMarkdownPreview = memo(function MemoizedMarkdownPreview({ body, visible }: { body: string; visible: boolean }) {
+  const [hasBeenVisible, setHasBeenVisible] = useState(visible);
+  const [renderedHtml, setRenderedHtml] = useState('');
+
+  useEffect(() => { if (visible) setHasBeenVisible(true); }, [visible]);
+
+  // Nếu là HTML email: dùng iframe (không cần renderMarkdown)
+  // Nếu là markdown/text: dùng renderMarkdown như cũ
+  const isHtml = isHtmlBody(body);
+
+  useEffect(() => {
+    if (!hasBeenVisible || !body || isHtml) return;
+    const cb = (typeof requestIdleCallback !== 'undefined' ? requestIdleCallback : setTimeout) as (
+      fn: () => void, opts?: any
+    ) => number;
+    const id = cb(() => setRenderedHtml(renderMarkdown(body)), { timeout: 500 });
+    return () => {
+      (typeof cancelIdleCallback !== 'undefined' ? cancelIdleCallback : clearTimeout)(id);
+    };
+  }, [body, hasBeenVisible, isHtml]);
+
+  if (!hasBeenVisible) return <div className="bg-white p-4 rounded-lg border min-h-[200px]" />;
+
+  // HTML email: render trong iframe sandbox — không block main thread, không leak CSS
+  if (isHtml) {
+    return (
+      <div className="rounded-lg border overflow-hidden bg-white" style={{ minHeight: 300 }}>
+        <iframe
+          srcDoc={buildPreviewDoc(body)}
+          style={{ width: '100%', minHeight: 450, border: 'none', display: 'block' }}
+          title="HTML Email Preview"
+          sandbox="allow-same-origin allow-scripts allow-popups"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white p-4 rounded-lg border text-sm min-h-[200px] max-h-[500px] overflow-y-auto leading-relaxed prose prose-sm max-w-none">
+      {renderedHtml
+        ? <div dangerouslySetInnerHTML={{ __html: renderedHtml }} />
+        : <div className="text-muted-foreground text-xs animate-pulse">Đang tải...</div>
+      }
+    </div>
+  );
+});
+
+
+
+// ---------------------------------------------------------------------------
+// ScriptRow — memo component: chỉ re-render khi isExpanded thay đổi, không
+// re-render toàn bộ list mỗi khi một row được expand → fix freeze.
+// ---------------------------------------------------------------------------
+const ScriptRow = memo(function ScriptRow({
+  s, isExpanded, isSeen, customTag,
+  onToggle, onMarkSeen, onSaveCustomTag,
+  approveMut, onReject, deleteMut, complianceMut,
+  pushToast, navigate, inv,
+}: {
+  s: any; isExpanded: boolean; isSeen: boolean; customTag: string;
+  onToggle: (id: string) => void;
+  onMarkSeen: (id: string) => void;
+  onSaveCustomTag: (id: string, tag: string) => void;
+  approveMut: any; onReject: (id: string) => void; deleteMut: any; complianceMut: any;
+  pushToast: any; navigate: any; inv: () => void;
+}) {
+  // Lazy mount: chỉ mount ScriptExpandedPanel lần đầu khi expand, giữ trong DOM bằng CSS display:none.
+  // Tác dụng: click expand lần 2+ = instant, không có mount overhead.
+  const [hasBeenExpanded, setHasBeenExpanded] = useState(isExpanded);
+  useEffect(() => { if (isExpanded) setHasBeenExpanded(true); }, [isExpanded]);
+
+  const fullText = s.body || s.caption || s.content || '';
+
+  return (
+    <div className="hover:bg-muted/20 transition-colors">
+      {/* Row header */}
+      <div
+        className={`p-4 cursor-pointer flex items-start justify-between gap-3 ${
+          isSeen ? 'opacity-70' : ''
+        }`}
+        onClick={() => {
+          onToggle(s.id);
+          onMarkSeen(s.id);
+        }}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+            {isSeen && (
+              <Eye className="h-2.5 w-2.5 text-muted-foreground/50 shrink-0" aria-label="Đã xem" />
+            )}
+            <EditableBadge
+              value={statusLabels[s.status] || s.status}
+              options={STATUS_OPTIONS}
+              onSave={async (v) => {
+                const key = Object.entries(statusLabels).find(([, lbl]) => lbl === v)?.[0] || v;
+                try { await opsApi.updateScript(s.id, { status: key }); inv(); } catch {}
+              }}
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColors[s.status] || 'bg-muted'}`}
+            />
+            {s.brand_voice && (
+              <EditableBadge
+                value={s.brand_voice}
+                options={BRAND_OPTIONS}
+                onSave={async (v) => { try { await opsApi.updateScript(s.id, { brand_voice: v }); inv(); } catch {} }}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${brandColors[s.brand_voice] || 'bg-muted'}`}
+              />
+            )}
+            {s.pillar && (
+              <EditableBadge
+                value={s.pillar}
+                options={PILLAR_OPTIONS}
+                onSave={async (v) => { try { await opsApi.updateScript(s.id, { pillar: v }); inv(); } catch {} }}
+                className="text-[10px] text-muted-foreground"
+              />
+            )}
+            {s.content_type && (() => {
+              // isDoc: check CONTENT_TYPE_OPTIONS (bao gồm onb-*, welcome-*, winback-*, vip-*)
+              // không chỉ regex DOC- như cũ
+              const isDoc = CONTENT_TYPE_OPTIONS.find(c => c.value === s.content_type)?.isDoc
+                ?? /^(DOC-|onb-|welcome-|winback-|vip-)/.test(s.content_type);
+              return (
+                <EditableBadge
+                  value={s.content_type}
+                  options={CONTENT_TYPE_OPTIONS.map(c => c.value)}
+                  onSave={async (v) => {
+                    try {
+                      await opsApi.updateScript(s.id, { content_type: v });
+                      inv();
+                      // Auto-copy sang Custom Badge → Filename
+                      onSaveCustomTag(s.id, v);
+                    } catch (e: any) {
+                      const msg = e?.message || String(e);
+                      console.error('[content_type save error]', msg, { id: s.id, v });
+                      pushToast({ type: 'error', message: `Lỗi lưu content_type: ${msg}` });
+                    }
+                  }}
+                  className={isDoc
+                    ? 'rounded-md px-2 py-0.5 text-[10px] font-mono font-semibold bg-zinc-900 text-white'
+                    : 'text-[10px] text-muted-foreground'
+                  }
+                />
+              );
+            })()}
+            {/* Custom label badge — nhập tên file tùy ý, style chữ nhật như DOC- */}
+            <EditableBadge
+              value={customTag}
+              isText
+              placeholder="+ nhãn..."
+              onSave={(v) => onSaveCustomTag(s.id, v)}
+              className={`rounded-md px-2 py-0.5 text-[10px] font-mono ${
+                customTag
+                  ? 'bg-indigo-900 text-white font-semibold'
+                  : 'bg-transparent border border-dashed border-muted-foreground/30 text-muted-foreground/50 hover:border-primary/50'
+              }`}
+            />
+            {s.posted_account && <span className="text-[10px] text-blue-500">· {s.posted_account}</span>}
+            {s.posted_time_slot && <span className="text-[10px] text-muted-foreground">· {s.posted_time_slot}</span>}
+          </div>
+          <a
+            href={`/GEM/cc/scripts/${s.id}`}
+            className="text-sm font-medium hover:text-blue-600 dark:hover:text-blue-400 hover:underline block"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                e.preventDefault();
+                navigate(`/GEM/cc/scripts/${s.id}`);
+              }
+            }}
+          >
+            {s.title || '(Không có tiêu đề)'}
+          </a>
+          {!isExpanded && (
+            <p className="text-xs text-muted-foreground truncate mt-0.5">{fullText.substring(0, 120)}</p>
+          )}
+          {!isExpanded && s.image_urls && Array.isArray(s.image_urls) && s.image_urls.length > 0 && (
+            <div className="flex gap-1 mt-1">
+              {s.image_urls.slice(0, 2).map((u: string, i: number) => (
+                <img key={i} src={u} alt="" className="h-8 w-8 rounded object-cover" />
+              ))}
+            </div>
+          )}
+          <div className="text-[10px] text-muted-foreground mt-1">{timeAgo(s.created_at)}</div>
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+          {s.status === 'draft' && (
+            <>
+              <Button size="sm" variant="outline" disabled={approveMut.isPending} onClick={() => approveMut.mutate(s.id)}>
+                <Check className="h-3 w-3 mr-1" />Đuyệt
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onReject(s.id)}>
+                <X className="h-3 w-3 mr-1" />Từ chối
+              </Button>
+            </>
+          )}
+          <Button size="sm" variant="ghost" onClick={(e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(fullText).then(() => pushToast({ title: 'Đã copy', tone: 'success' })).catch(() => {});
+          }} title="Sao chép">
+            <Copy className="h-3 w-3" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={(e) => {
+            e.stopPropagation();
+            const t = stripAiTitlePrefix(s.title || 'Kịch Bản');
+            // Ưu tiên customTag làm tên file
+            const fileBaseName = customTag?.trim() || t;
+            const contentToExport = stripAiPreamble(fullText);
+            const htmlContent = contentToExport.startsWith('```html') ? contentToExport.replace(/^```html\s*/i, '').replace(/```\s*$/i, '') : contentToExport;
+            const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${fileBaseName.slice(0, 80).replace(/[^a-zA-Z0-9\s\-_]/g, '').trim() || 'Kich_Ban'}.html`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            pushToast({ title: 'Đã xuất HTML', tone: 'success' });
+          }} title="Xuất HTML">
+            <FileCode className="h-3 w-3" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => complianceMut.mutate(fullText)} title="Compliance check">
+            <Shield className="h-3 w-3" />
+          </Button>
+          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Xóa bài này?')) deleteMut.mutate(s.id); }}>
+            <Trash2 className="h-3 w-3" />
+          </Button>
+          {isExpanded
+            ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            : <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          }
+        </div>
+      </div>
+
+      {/* Expanded panel — lazy mount + CSS display:none: instant toggle lần 2+ */}
+      <div style={{ display: isExpanded ? undefined : 'none' }}>
+        {hasBeenExpanded && <ScriptExpandedPanel script={s} customTag={customTag} />}
+      </div>
+    </div>
+  );
+});
+
+// Font links chỉ — inject vào <head> (nhẹ, không có style block lớn)
+const FONT_LINK = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">`;
+
+// Script inject vào iframe — tooltip follow cursor khi hover link
+const IFRAME_HOVER_SCRIPT = `<script>
+(function(){
+  var tip = document.createElement('div');
+  Object.assign(tip.style, {
+    position:'fixed', top:'0', left:'0',
+    background:'rgba(15,15,15,0.92)', color:'#e2e8f0',
+    fontSize:'11px', lineHeight:'1.4', padding:'5px 10px', borderRadius:'6px',
+    display:'none', zIndex:'99999', maxWidth:'420px', wordBreak:'break-all',
+    pointerEvents:'none', fontFamily:'ui-monospace,monospace',
+    boxShadow:'0 2px 8px rgba(0,0,0,0.4)',
+    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'
+  });
+  document.body && document.body.appendChild(tip);
+  function attachTip(){ if(document.body && !document.body.contains(tip)) document.body.appendChild(tip); }
+  attachTip();
+  document.addEventListener('DOMContentLoaded', attachTip);
+
+  var mouseX = 0, mouseY = 0;
+  document.addEventListener('mousemove', function(e){
+    mouseX = e.clientX; mouseY = e.clientY;
+    if(tip.style.display === 'block') moveTip();
+  });
+  function moveTip(){
+    var vw = document.documentElement.clientWidth || window.innerWidth;
+    var tipW = tip.offsetWidth || 300;
+    var x = mouseX + 14;
+    if(x + tipW > vw - 8) x = mouseX - tipW - 8;
+    if(x < 4) x = 4;
+    tip.style.left = x + 'px';
+    // hiển thị phía trên cursor
+    tip.style.top = (mouseY - tip.offsetHeight - 10) + 'px';
+  }
+  document.addEventListener('mouseover', function(e){
+    var a = e.target && e.target.closest && e.target.closest('a[href]');
+    var href = a ? a.getAttribute('href') : null;
+    if(href && !href.startsWith('javascript') && !href.startsWith('#')){
+      tip.textContent = '\uD83D\uDD17 ' + href;
+      tip.style.display = 'block';
+      moveTip();
+    } else {
+      tip.style.display = 'none';
+    }
+  });
+  document.addEventListener('mouseout', function(){ tip.style.display = 'none'; });
+})();
+<\/script>`;
+
+// JS thuần cho hover tooltip — inject qua DOM sau khi iframe load
+// (không bạk vào HTML string → giảm overhead buildPreviewDoc)
+const HOVER_JS = `(function(){
+  var tip=document.createElement('div');
+  Object.assign(tip.style,{position:'fixed',top:'0',left:'0',background:'rgba(15,15,15,0.92)',color:'#e2e8f0',fontSize:'11px',lineHeight:'1.4',padding:'5px 10px',borderRadius:'6px',display:'none',zIndex:'99999',maxWidth:'420px',wordBreak:'break-all',pointerEvents:'none',fontFamily:'ui-monospace,monospace',boxShadow:'0 2px 8px rgba(0,0,0,0.4)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'});
+  document.body.appendChild(tip);
+  var mx=0,my=0;
+  document.addEventListener('mousemove',function(e){mx=e.clientX;my=e.clientY;if(tip.style.display==='block')mv();});
+  function mv(){var vw=document.documentElement.clientWidth||window.innerWidth;var tw=tip.offsetWidth||300;var x=mx+14;if(x+tw>vw-8)x=mx-tw-8;if(x<4)x=4;tip.style.left=x+'px';tip.style.top=(my-tip.offsetHeight-10)+'px';}
+  document.addEventListener('mouseover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');var href=a?a.getAttribute('href'):null;if(href&&!href.startsWith('javascript')&&!href.startsWith('#')){tip.textContent='\uD83D\uDD17 '+href;tip.style.display='block';mv();}else{tip.style.display='none';}});
+  document.addEventListener('mouseout',function(){tip.style.display='none';});
+})();`;
+
+function buildPreviewDoc(srcDoc: string): string {
+  const trimmed = srcDoc.trim();
+  const isFullDoc = /^<!DOCTYPE/i.test(trimmed) || /^<html/i.test(trimmed);
+  if (isFullDoc) {
+    let doc = trimmed.replace(/(<head[^>]*>)/i, `$1\n${FONT_LINK}`);
+    if (doc === trimmed) {
+      doc = trimmed.replace(/(<body[^>]*>)/i, `<head>${FONT_LINK}</head>\n$1`);
+    }
+    return doc;
+  }
+  return `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank">${FONT_LINK}</head><body>${trimmed}</body></html>`;
+}
+
+
+const MemoizedIframePreview = memo(function MemoizedIframePreview({ srcDoc }: { srcDoc: string }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [activeDoc, setActiveDoc] = useState('');
+
+  useEffect(() => {
+    setActiveDoc('');
+    setLoaded(false);
+    const raf = requestAnimationFrame(() => {
+      // buildPreviewDoc nhẹ hơn: chỉ inject font link, không bạk hover script
+      setActiveDoc(buildPreviewDoc(srcDoc));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [srcDoc]);
+
+  return (
+    <div className="rounded-lg border overflow-hidden bg-white relative" style={{ minHeight: 600 }}>
+      {(!activeDoc || !loaded) && (
+        <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground bg-gray-50 z-10">
+          <span className="animate-pulse">Loading preview...</span>
+        </div>
+      )}
+      {activeDoc && (
+        <iframe
+          ref={iframeRef}
+          srcDoc={activeDoc}
+          style={{ width:'100%', minHeight:600, border:'none', display:'block', opacity: loaded ? 1 : 0, transition:'opacity 0.15s ease' }}
+          title="HTML Preview"
+          sandbox="allow-same-origin allow-scripts allow-popups"
+          onLoad={(e) => {
+            const iframe = e.currentTarget;
+            try {
+              const doc = iframe.contentDocument;
+              if (doc?.body) {
+                // Inject font normalizer style
+                const st = doc.createElement('style');
+                st.textContent = `body,*{-webkit-font-smoothing:antialiased;}:not([style*='font-family']){font-family:'Be Vietnam Pro',Arial,sans-serif;}`;
+                doc.head?.appendChild(st);
+                // Inject hover tooltip script (nhẹ, không phải bắt HTML string)
+                const sc = doc.createElement('script');
+                sc.textContent = HOVER_JS;
+                doc.body.appendChild(sc);
+                // Adjust height TRƯỚC khi show
+                const h = doc.documentElement.scrollHeight;
+                if (h > 0) iframe.style.height = Math.min(h + 20, 2000) + 'px';
+              }
+            } catch {}
+            setLoaded(true);
+          }}
+        />
+      )}
+    </div>
+  );
+});
+
 
 // ---------------------------------------------------------------------------
 // ContentTab
@@ -641,24 +1209,55 @@ export function ContentTab() {
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const navigate = useNavigate();
-  // View mode: "scripts" (cc_scripts with full editor + preview) or
-  // "jobs" (cc_generation_jobs batch generator queue — moved here from the
-  // SOP Engine → Batch Generator tab so Jennie can see both views in one
-  // place. Both views have expandable rows.)
-  // viewMode removed 2026-04-18 — Jobs Queue relocated to AI Tạo Nội Dung tab.
-  const [statusFilter, setStatusFilter] = useState('');
-  const [pillarFilter, setPillarFilter] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useSessionState<string>('contentTab.statusFilter', '');
+  const [pillarFilter, setPillarFilter] = useSessionState<string>('contentTab.pillarFilter', '');
+  const [limit, setLimit] = useSessionState<number>('contentTab.limit', 20);
+  const [expandedId, setExpandedId] = useSessionState<string | null>('contentTab.expandedId', null);
+
+  // "Đã xem" tracking — localStorage: giữ qua đóng browser, reset bằng tay nếu cần
+  const [seenIds, setSeenIds] = useLocalState<string[]>('contentTab.seenIds', []);
+  const seenSet = useMemo(() => new Set(seenIds), [seenIds]);
+  const markSeen = useCallback((id: string) => {
+    setSeenIds((prev) => prev.includes(id) ? prev : [...prev, id]);
+  }, [setSeenIds]);
+
+  // Custom label tags per script — localStorage, giữ qua đóng browser
+  const [customTags, setCustomTags] = useLocalState<Record<string, string>>('contentTab.customTags', {});
+  const saveCustomTag = useCallback((id: string, tag: string) => {
+    setCustomTags((prev) => ({ ...prev, [id]: tag }));
+  }, [setCustomTags]);
+
+  const handleToggle = useCallback((id: string) => {
+    setExpandedId((prev) => prev === id ? null : id);
+  }, [setExpandedId]);
+
+  const handleReject = useCallback((id: string) => setRejectId(id), []);
+
+  // Scroll restore — lưu scrollY của page khi navigate đi, restore khi mount lại
+  const scrollKeyRef = useRef('contentTab.scrollY');
+  useEffect(() => {
+    // Restore scroll sau khi list đã render
+    const saved = sessionStorage.getItem(scrollKeyRef.current);
+    if (saved) {
+      const y = parseInt(saved, 10);
+      requestAnimationFrame(() => window.scrollTo({ top: y, behavior: 'instant' as ScrollBehavior }));
+    }
+    // Lưu scrollY trước khi unmount
+    return () => {
+      sessionStorage.setItem(scrollKeyRef.current, String(Math.round(window.scrollY)));
+    };
+  }, []); // chỉ chạy khi mount/unmount
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState(defaultCreateForm);
 
   const { data: scripts, isLoading } = useQuery({
-    queryKey: ['ops', 'scripts', statusFilter, pillarFilter],
+    queryKey: ['ops', 'scripts', statusFilter, pillarFilter, limit],
     queryFn: () => opsApi.getScripts({
       ...(statusFilter && { status: statusFilter }),
       ...(pillarFilter && { pillar: pillarFilter }),
+      limit: limit.toString(),
     }),
     staleTime: 15_000,
     refetchInterval: 30_000,
@@ -728,11 +1327,11 @@ export function ContentTab() {
           </select>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => navigate('/GEM/cc/ai-gen')}>
-            ✨ AI Tạo nội dung
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/GEM/cc/ai-gen">✨ AI Tạo nội dung</Link>
           </Button>
-          <Button size="sm" variant="outline" onClick={() => navigate('/GEM/cc/scripts')}>
-            📄 Kịch bản CC
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/GEM/cc/scripts">📄 Kịch bản CC</Link>
           </Button>
           <Button size="sm" onClick={() => { setCreateForm(defaultCreateForm); setShowCreate(true); }}>
             <Plus className="h-4 w-4 mr-1" />Tạo nội dung
@@ -750,79 +1349,35 @@ export function ContentTab() {
           <div className="p-8 text-center text-sm text-muted-foreground">Chưa có nội dung nào.</div>
         ) : (
           <div className="divide-y">
-            {list.map((s: any) => {
-              const isExpanded = expandedId === s.id;
-              const fullText = s.body || s.caption || s.content || '';
-              return (
-                <div key={s.id} className="hover:bg-muted/20 transition-colors">
-                  {/* Row header */}
-                  <div
-                    className="p-4 cursor-pointer flex items-start justify-between gap-3"
-                    onClick={() => setExpandedId(isExpanded ? null : s.id)}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColors[s.status] || 'bg-muted'}`}>
-                          {statusLabels[s.status] || s.status}
-                        </span>
-                        {s.brand_voice && (
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${brandColors[s.brand_voice] || 'bg-muted'}`}>
-                            {s.brand_voice}
-                          </span>
-                        )}
-                        {s.pillar && <span className="text-[10px] text-muted-foreground">{s.pillar}</span>}
-                        {s.content_type && <span className="text-[10px] text-muted-foreground">· {s.content_type}</span>}
-                        {s.posted_account && <span className="text-[10px] text-blue-500">· {s.posted_account}</span>}
-                        {s.posted_time_slot && <span className="text-[10px] text-muted-foreground">· {s.posted_time_slot}</span>}
-                      </div>
-                      <p className="text-sm font-medium">{s.title || '(Không có tiêu đề)'}</p>
-                      {!isExpanded && (
-                        <p className="text-xs text-muted-foreground truncate mt-0.5">{fullText.substring(0, 120)}</p>
-                      )}
-                      {!isExpanded && s.image_urls && Array.isArray(s.image_urls) && s.image_urls.length > 0 && (
-                        <div className="flex gap-1 mt-1">
-                          {s.image_urls.slice(0, 2).map((u: string, i: number) => (
-                            <img key={i} src={u} alt="" className="h-8 w-8 rounded object-cover" />
-                          ))}
-                        </div>
-                      )}
-                      <div className="text-[10px] text-muted-foreground mt-1">{timeAgo(s.created_at)}</div>
-                    </div>
-
-                    <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                      {s.status === 'draft' && (
-                        <>
-                          <Button size="sm" variant="outline" disabled={approveMut.isPending} onClick={() => approveMut.mutate(s.id)}>
-                            <Check className="h-3 w-3 mr-1" />Duyệt
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => setRejectId(s.id)}>
-                            <X className="h-3 w-3 mr-1" />Từ chối
-                          </Button>
-                        </>
-                      )}
-                      <Button size="sm" variant="ghost" onClick={() => {
-                        navigator.clipboard.writeText(fullText).then(() => pushToast({ title: 'Đã copy', tone: 'success' })).catch(() => {});
-                      }} title="Sao chép">
-                        <Copy className="h-3 w-3" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => complianceMut.mutate(fullText)} title="Compliance check">
-                        <Shield className="h-3 w-3" />
-                      </Button>
-                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Xóa bài này?')) deleteMut.mutate(s.id); }}>
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                      {isExpanded
-                        ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                        : <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      }
-                    </div>
-                  </div>
-
-                  {/* Expanded panel */}
-                  {isExpanded && <ScriptExpandedPanel script={s} />}
-                </div>
-              );
-            })}
+            {list.map((s: any) => (
+              <ScriptRow
+                key={s.id}
+                s={s}
+                isExpanded={expandedId === s.id}
+                isSeen={seenSet.has(s.id)}
+                customTag={customTags[s.id] || ''}
+                onToggle={handleToggle}
+                onMarkSeen={markSeen}
+                onSaveCustomTag={saveCustomTag}
+                approveMut={approveMut}
+                onReject={handleReject}
+                deleteMut={deleteMut}
+                complianceMut={complianceMut}
+                pushToast={pushToast}
+                navigate={navigate}
+                inv={inv}
+              />
+            ))}
+          </div>
+        )}
+        {!isLoading && list.length > 0 && (
+          <div className="p-4 flex items-center justify-center gap-2 border-t">
+            <Button variant="outline" size="sm" onClick={() => setLimit(l => l + 10)}>
+              Hiển thị thêm 10 bài
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setLimit(1000)}>
+              Tất cả
+            </Button>
           </div>
         )}
       </Card>
