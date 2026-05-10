@@ -230,6 +230,7 @@ const POSTED_ACCOUNT_OPTIONS = [
   { value: 'page_gemral', label: 'Page Gemral (brand)' },
   { value: 'email', label: 'Email (Resend)' },
   { value: 'forum', label: 'Forum (Gemral community)' },
+  { value: 'push', label: 'Push Notification (mobile app)' },
 ];
 
 // Publish Mode — SSOT match Notion + cc_scripts.publish_mode enum
@@ -237,6 +238,7 @@ const PUBLISH_MODE_OPTIONS = [
   { value: 'scheduled', label: 'Scheduled — lên lịch theo calendar' },
   { value: 'immediate', label: 'Immediate — publish ngay sau generate' },
   { value: 'threshold_5', label: 'Threshold 5 — chờ batch ≥5 bài mới post' },
+  { value: 'schedule2week', label: 'Schedule 2 Weeks — rải đều 2 tuần (forum)' },
 ];
 
 // ============================================================================
@@ -1406,7 +1408,18 @@ export default function AiGenPage() {
   // login picks the right saved session.
   const [postedAccount, setPostedAccount] = useState('page_jennie');
   const [contentPillar, setContentPillar] = useState('trading');
-  const [publishMode, setPublishMode] = useState('scheduled'); // scheduled | immediate | threshold_5
+  const [publishMode, setPublishMode] = useState('scheduled'); // scheduled | immediate | threshold_5 | schedule2week
+
+  // Auto-set posted_account and publish_mode when output type changes
+  useEffect(() => {
+    if (outputType === 'news_article') {
+      setPostedAccount('forum');
+      setPublishMode('scheduled');
+    } else if (outputType === 'push_notification') {
+      setPostedAccount('push');
+      setPublishMode('immediate');
+    }
+  }, [outputType]);
 
   // -- Batch & extra options --
   const [batchCount, setBatchCount] = useState(1);
@@ -2084,6 +2097,14 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
     console.log('[DEBUG] handleGenerate called, validateBrief() =', validateBrief());
     if (!validateBrief()) return;
 
+    // 2026-05-08: Auto start batch on ANY generate click, optimistic UI update
+    setBatchRunning(true);
+    fetch('/api/ops/content-pipeline/batch/start', { method: 'POST' })
+      .catch(err => {
+        console.warn('[AUTO-BATCH] error starting:', err);
+        setBatchRunning(false);
+      });
+
     // 2026-04-17 — Doc-Tài Liệu flow: queue 1 generation job per selected SOP
     // instead of running AI inline. batch_processor picks them up and pulls the
     // SOP-specific knowledge files (DOC_KNOWLEDGE_FILES) + prompt template.
@@ -2240,7 +2261,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
           }
         }
         if (queued > 0) {
-          addToast?.('success', `Đã queue ${queued}/${selectedDocIds.length} job(s) tạo tài liệu. Batch processor sẽ generate từng bài.`);
+          addToast?.('success', `Đã queue ${queued}/${selectedDocIds.length} job(s) tạo tài liệu. Batch processor đang chạy...`);
         }
         if (errors.length) {
           addToast?.('error', `${errors.length} job(s) fail: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '...' : ''}`);
@@ -2345,9 +2366,17 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
           if (completed.size === 0) {
             setOutput(`⚠️ Timeout sau 5 phút. ${queuedJobIds.length} job(s) vẫn đang chạy. Xem tab Nội Dung để check kết quả.`);
           }
+          
+          if (completed.size === queuedJobIds.length) {
+            console.log('[DOC-POLL] All jobs completed.');
+          }
         }
       } finally {
         setGenerating(false);
+        // Tự động tắt batch sau khi xong
+        fetch('/api/ops/content-pipeline/batch/stop', { method: 'POST' })
+          .then(() => setBatchRunning(false))
+          .catch(e => console.error('[AUTO-BATCH] error stopping:', e));
       }
       return;
     }
@@ -2377,7 +2406,6 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
 ⚠️ QUY TẮC TUYỆT ĐỐI — VI PHẠM = BỊ TỪ CHỐI:
 - Output bắt đầu bằng <!DOCTYPE html> và kết thúc bằng </html>.
 - KHÔNG markdown, KHÔNG giải thích, KHÔNG text trước HTML.
-- SAU </html>, thêm phần ===IMAGE_PROMPT=== với prompt tạo hình ảnh minh họa cho hero banner email (luxurious editorial style).
 
 QUY TẮC EMAIL HTML:
 - TABLE LAYOUT cho tương thích Outlook, Gmail, Apple Mail. KHÔNG div cho layout chính.
@@ -2454,6 +2482,34 @@ QUY TẮC EMOJI (ÁP DỤNG CHO BÀI ĐĂNG MXH, KỊCH BẢN):
 - Ưu tiên emoji phù hợp brand: ✨ 💎 🌟 💫 🔥 💪 🙏 💜 🌈 ⭐ 🎯 💡 🌸 🦋
 - TUYỆT ĐỐI KHÔNG dùng emoji thay thế từ ngữ, chỉ dùng để bổ sung visual.
 
+QUY TẮC NỘI DUNG ẢNH (BẮT BUỘC):
+- Nếu bài đăng có kịch bản hình ảnh (slide/carousel), BẠN PHẢI viết ĐẦY ĐỦ nội dung cho TẤT CẢ 6 HÌNH ẢNH (hoặc đủ số lượng yêu cầu).
+- TUYỆT ĐỐI KHÔNG DÙNG PLACEHOLDER. KHÔNG viết kiểu "(Điền nội dung vào đây)" hay "Tương tự cho các hình tiếp theo".
+- Mọi text trên ảnh phải được viết hoàn thiện, chi tiết, bằng tiếng Việt có dấu, đúng văn phong của brand, sẵn sàng để sử dụng ngay lập tức.
+\${socialTopic === 'app_features' ? \`
+CẢNH BÁO QUAN TRỌNG VỀ ĐỘ DÀI & CHI TIẾT ẢNH INFOGRAPHIC (CHỐNG LƯỜI):
+Agent BẮT BUỘC phải tạo ĐẦY ĐỦ 6 HÌNH (Carousel 6 ảnh) và ĐIỀN KÍN CHỮ TIẾNG VIỆT CÓ DẤU cho toàn bộ các mục { }. 
+- TUYỆT ĐỐI KHÔNG được lười biếng.
+- KHÔNG ĐƯỢC viết tắt kiểu "... (giữ nguyên)", "... (giữ nguyên các phần còn lại)".
+- ĐỐI VỚI CÁC PHẦN GHI LÀ (LOCK — KHÔNG THAY): BẠN VẪN PHẢI IN RA TOÀN BỘ ĐOẠN TEXT ĐÓ TỪ ĐẦU ĐẾN CUỐI THÀNH MỘT BẢN HOÀN CHỈNH SẴN SÀNG, TUYỆT ĐỐI KHÔNG ĐƯỢC GHI TÓM TẮT.
+- Phải xuất ra TRỌN VẸN toàn bộ template cho TỪNG HÌNH TRONG CẢ 6 HÌNH để chị có thể copy paste 100%.
+
+LƯU Ý QUAN TRỌNG VỀ CẤU TRÚC PROMPT: 
+1. PHÂN TÁCH RÕ RÀNG: Giữa các prompt của từng bức ảnh, BẠN BẮT BUỘC phải có một đường kẻ ngang rõ ràng (ví dụ: =========================================) kèm theo tiêu đề chỉ rõ đây là ảnh nào (ví dụ: "PROMPT CHO ẢNH 2", "PROMPT CHO ẢNH 3").
+2. LẶP LẠI FULL HEADER: Ngay sau đường kẻ phân tách, BẠN BẮT BUỘC PHẢI BẮT ĐẦU mỗi ảnh bằng câu "[tạo ảnh theo template sau:]" đặt ngay trước phần "# BRAND BACKGROUND (LOCK — KHÔNG THAY)". BẠN BẮT BUỘC PHẢI LẶP LẠI TOÀN BỘ CẤU TRÚC TEMPLATE TỪ ĐẦU ĐẾN CUỐI CHO TỪNG BỨC ẢNH MỘT. TUYỆT ĐỐI KHÔNG ĐƯỢC LƯỜI BIẾNG CHỈ ĐỂ Ở ẢNH ĐẦU TIÊN RỒI CÁC ẢNH SAU BỎ QUA.
+\` : socialTopic === 'trading_mindset' ? \`
+CẢNH BÁO QUAN TRỌNG VỀ ĐỘ DÀI & CHI TIẾT ẢNH INFOGRAPHIC KỸ THUẬT (CHỐNG LƯỜI):
+Agent BẮT BUỘC phải tạo ĐẦY ĐỦ 6 HÌNH (Carousel 6 ảnh) và ĐIỀN KÍN CHỮ TIẾNG VIỆT CÓ DẤU cho toàn bộ các mục { }. 
+- TUYỆT ĐỐI KHÔNG được lười biếng.
+- KHÔNG ĐƯỢC viết tắt kiểu "... (giữ nguyên)", "... (giữ nguyên các phần còn lại)", hay giữ nguyên format {NHÃN CHỦ ĐỀ} mà không điền nội dung thật.
+- ĐỐI VỚI CÁC PHẦN GHI LÀ (LOCK — KHÔNG THAY): BẠN VẪN PHẢI IN RA TOÀN BỘ ĐOẠN TEXT ĐÓ TỪ ĐẦU ĐẾN CUỐI THÀNH MỘT BẢN HOÀN CHỈNH SẴN SÀNG, TUYỆT ĐỐI KHÔNG ĐƯỢC GHI TÓM TẮT LÀ "giữ nguyên" HAY "... (giữ nguyên các phần còn lại)".
+- Phải xuất ra TRỌN VẸN toàn bộ template (bao gồm cả các phần LOCK và phần cần thay thế) cho TỪNG HÌNH TRONG CẢ 6 HÌNH từ đầu đến cuối để chị có thể copy paste 100% trực tiếp mà không cần gõ thêm hay nối chữ nào.
+
+LƯU Ý QUAN TRỌNG VỀ CẤU TRÚC PROMPT: 
+1. PHÂN TÁCH RÕ RÀNG: Giữa các prompt của từng bức ảnh, BẠN BẮT BUỘC phải có một đường kẻ ngang rõ ràng (ví dụ: =========================================) kèm theo tiêu đề chỉ rõ đây là ảnh nào (ví dụ: "PROMPT CHO ẢNH 2", "PROMPT CHO ẢNH 3").
+2. LẶP LẠI FULL HEADER: Ngay sau đường kẻ phân tách, BẠN BẮT BUỘC PHẢI BẮT ĐẦU mỗi ảnh bằng câu "[tạo ảnh theo template sau:]" đặt ngay trước phần "# BRAND BACKGROUND (LOCK — KHÔNG THAY)". BẠN BẮT BUỘC PHẢI LẶP LẠI TOÀN BỘ CẤU TRÚC TEMPLATE TỪ ĐẦU ĐẾN CUỐI CHO TỪNG BỨC ẢNH MỘT. TUYỆT ĐỐI KHÔNG ĐƯỢC LƯỜI BIẾNG CHỈ ĐỂ Ở ẢNH ĐẦU TIÊN RỒI CÁC ẢNH SAU BỎ QUA.
+\` : ''}
+
 QUY TẮC FACEBOOK COMPLIANCE (BẮT BUỘC — ĐỂ TRÁNH BỊ GIẢM REACH):
 - TUYỆT ĐỐI KHÔNG sử dụng quá 2 con số trong toàn bài viết. Nếu cần đề cập số liệu, dùng từ ngữ mô tả thay thế (ví dụ: "phần lớn", "hầu hết", "rất nhiều", "một số ít" thay vì "90%", "78%", "50-55%").
 - KHÔNG viết giá tiền cụ thể (299K, 11M, 21M, 68M...). Thay vào đó dùng: "chi phí hợp lý", "đầu tư xứng đáng", "giá trị vượt xa kỳ vọng".
@@ -2512,53 +2568,6 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       userPromptParts.push(`\nPRODUCT HOOK: ${productHookLabel}`);
     }
     userPromptParts.push('\nTạo nội dung đầy đủ theo cấu trúc và quy tắc trong knowledge files.');
-    userPromptParts.push(`\nSau nội dung bài viết, thêm phần:
-===IMAGE_PROMPT===
-Viết 1 prompt chi tiết bằng tiếng Anh để tạo hình ảnh minh hoạ. Prompt PHẢI phản ánh chính xác NỘI DUNG CỤ THỂ của bài viết.
-
-QUAN TRỌNG — NGƯỜI VÀ BỐI CẢNH PHẢI KHỚP NỘI DUNG BÀI:
-- Mỗi bài viết có chủ đề riêng → hình ảnh PHẢI thể hiện đúng chủ đề đó.
-- TUYỆT ĐỐI KHÔNG dùng hình generic "người mặc blazer đứng cười". Đó là SAI.
-- Người trong ảnh PHẢI ĐANG LÀM một hành động liên quan đến nội dung bài:
-  * Bài về F&B → chủ quán đang nấu ăn, phục vụ khách, đứng trong bếp nhà hàng
-  * Bài về Clinic → bác sĩ đang khám bệnh nhân, y tá tại quầy lễ tân, phòng khám hiện đại
-  * Bài về PropTech → quản lý toà nhà đang kiểm tra căn hộ, khách hàng xem nhà
-  * Bài về Education → giáo viên đang giảng bài, học viên trong lớp học
-  * Bài về Spa/Salon → thợ đang làm tóc/nail, khách đang thư giãn, không gian spa
-  * Bài về ConTech → kỹ sư tại công trường, đang xem bản vẽ, mũ bảo hộ
-  * Bài về AgriTech → nông dân tại vườn/trang trại, thu hoạch, đóng gói
-  * Bài về Logistics → nhân viên kho bãi, xe tải giao hàng, scan barcode
-  * Bài về crypto/tài chính → trader xem biểu đồ, nhà đầu tư tại bàn làm việc
-  * Bài về lifestyle → người thật trong hoạt động đời thường, yoga, cafe, đọc sách
-- MÔI TRƯỜNG XUNG QUANH phải phù hợp: nhà hàng → bếp/phòng ăn, clinic → phòng khám, v.v.
-- ĐỒ VẬT trong ảnh phải liên quan: dao thớt cho F&B, ống nghe cho clinic, máy tính cho văn phòng, v.v.
-
-QUAN TRỌNG VỀ TEXT TRONG HÌNH:
-- Nếu hình ảnh cần có chữ/text/title/quote hiển thị trên hình, BẮT BUỘC viết chữ đó bằng TIẾNG VIỆT CÓ DẤU đầy đủ.
-- TUYỆT ĐỐI KHÔNG viết text nội dung bằng tiếng Anh.
-- Phần mô tả kỹ thuật (camera, lighting, style...) viết tiếng Anh bình thường, chỉ riêng TEXT HIỂN THỊ TRÊN HÌNH phải là tiếng Việt.
-
-QUY TẮC BẮT BUỘC CHO IMAGE PROMPT:
-- PHONG CÁCH: Luxurious high-end editorial photography. KHÔNG BAO GIỜ dùng illustration, digital art, cartoon, anime, painting. KHÔNG minimalist/tối giản.
-- NGƯỜI: Người thật Việt Nam, da châu Á, tóc đen, nét mặt tự nhiên. KHÔNG hoạt hình, CGI.
-- TRANG PHỤC: TUYỆT ĐỐI KHÔNG cho nhân vật mặc blazer, vest, suit jacket. Thay bằng elegant casual: áo lụa, áo trễ vai, áo cổ V thanh lịch, hoặc outfit phù hợp ngữ cảnh (ví dụ: trader mặc áo sơ mi đơn giản, yoga mặc đồ tập).
-- ĐỒ VẬT & BỐI CẢNH: Rich textures (marble, velvet, warm wood, golden accents). Không gian thật, sang trọng, premium.
-- CAMERA: lens (35mm environmental, 50mm, 85mm portrait), cinematic golden hour lighting, dramatic rim lighting, soft warm bokeh, depth of field.
-- BẮT ĐẦU PROMPT bằng: "Luxurious editorial photograph, cinematic golden hour lighting, shot on Canon EOS R5 with 85mm f/1.4 lens,"
-- Mô tả CHI TIẾT: ai đang làm gì, ở đâu, xung quanh có gì, cảm xúc, ánh sáng ấm, màu sắc sang trọng.${isNews ? `
-
-QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
-- TITLE OVERLAY: Hình ảnh PHẢI có text overlay — một câu tiêu đề ngắn gọn hoặc quote viral lấy từ nội dung bài tin tức.
-- Tiêu đề/quote phải: ngắn (tối đa 8-12 từ), gây tò mò, viral-worthy, PHẢI VIẾT BẰNG TIẾNG VIỆT CÓ DẤU ĐẦY ĐỦ.
-- HIỆU ỨNG NỀN: gradient background từ Navy #112250 → Deep Blue #0A1628, subtle purple glow effect (#6A5BFF at low opacity), scattered small light particles (bokeh-like sparkling dots).
-- FONT CHỮ: Montserrat Bold, Gold #FFBD59, IN HOA (UPPERCASE), kích thước lớn nổi bật, soft golden glow effect xung quanh chữ.
-- Vị trí text: centered, căn giữa hình.
-- PHẦN NỀN PHÍA SAU TEXT phải có hình ảnh mờ (blurred) liên quan đến nội dung bài viết, KHÔNG để nền trống.
-- Ví dụ: bài về F&B → nền mờ bếp nhà hàng, bài crypto → nền mờ biểu đồ trading.
-- Ví dụ câu tiêu đề: "KHÁCH CHỜ LÂU: ĐÃ CÓ LỜI GIẢI?", "5 XU HƯỚNG AI THAY ĐỔI DOANH NGHIỆP 2026"
-- TUYỆT ĐỐI KHÔNG viết title bằng tiếng Anh.
-- Text PHẢI liên quan trực tiếp đến nội dung chính của bài viết, KHÔNG generic.` : ''}`);
-
 
     const userPrompt = userPromptParts.join('');
     console.log('[DEBUG] userPrompt:', userPrompt);
@@ -2729,6 +2738,11 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
       console.log('[DEBUG] handleGenerate finished, setting generating to false');
       setGenerating(false);
       abortRef.current = null;
+      
+      // Tự động tắt batch sau khi xong (cho flow thường)
+      fetch('/api/ops/content-pipeline/batch/stop', { method: 'POST' })
+        .then(() => setBatchRunning(false))
+        .catch(e => console.error('[AUTO-BATCH] error stopping:', e));
     }
   };
 
@@ -3877,25 +3891,20 @@ QUY TẮC BỔ SUNG CHO HÌNH ẢNH BÀI TIN TỨC:
             <h2 className="font-heading text-xl font-semibold text-txt">
               Trình Tạo Nội Dung AI
             </h2>
-            <button
-              onClick={handleBatchToggle}
-              disabled={batchLoading}
-              title={batchRunning ? 'Dừng Batch Processor' : 'Chạy Batch Processor'}
-              className={[
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
-                batchLoading ? 'opacity-50 cursor-wait' :
-                batchRunning
-                  ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/30'
-                  : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30',
-              ].join(' ')}
-            >
-              {batchLoading
-                ? <Loader2 size={14} className="animate-spin" />
-                : batchRunning
-                  ? <Square size={14} />
-                  : <Play size={14} />}
-              {batchRunning ? 'Stop Batch' : 'Chạy Batch'}
-            </button>
+            {batchRunning && (
+              <button
+                onClick={handleBatchToggle}
+                disabled={batchLoading}
+                title="Dừng Batch Processor"
+                className={[
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all',
+                  batchLoading ? 'opacity-50 cursor-wait' : 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/30'
+                ].join(' ')}
+              >
+                {batchLoading ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
+                Stop Batch
+              </button>
+            )}
           </div>
           {hasActiveJobs && (
             <div className="flex items-center gap-2">
