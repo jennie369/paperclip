@@ -1848,7 +1848,7 @@ router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
           published_at: r.code === 0 ? new Date().toISOString() : null,
           error_message: r.code !== 0 ? r.stderr.slice(0, 2000) : null,
         })
-        .eq('script_id', id).eq('status', 'pending')
+        .eq('script_id', id).eq('status', 'processing')
         .then(() => {});
       // Fire-and-forget: sync Status=Published to Notion when publish succeeds.
       // Mirror approve flow's no-page fallback (page may be missing for
