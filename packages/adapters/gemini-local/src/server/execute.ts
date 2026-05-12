@@ -723,9 +723,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   instructionsPrefix = memoryPrefix + instructionsPrefix;
   const commandNotes = (() => {
     const notes: string[] = [
-      "Prompt is passed to Gemini via stdin when it contains newlines or exceeds 4000 chars",
-      "(Windows cmd.exe breaks raw newlines inside quoted .CMD wrapper args — see BUG-035).",
-      "Short single-line prompts are passed inline as --prompt \"<text>\" for debuggability.",
+      "Prompt is ALWAYS passed to Gemini via stdin (never via --prompt argv).",
+      "Closes BUG-035 (cmd.exe breaks newlines in quoted .CMD args) and incident",
+      "2026-05-11 (cmd.exe 8191 total command-line limit) at root. Matches Open",
+      "Design v2 pattern (apps/daemon/src/runtimes/defs/gemini.ts: promptViaStdin).",
     ];
     notes.push("Added --approval-mode yolo for unattended execution.");
     if (!instructionsFilePath) return notes;
@@ -834,18 +835,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     heartbeatPromptChars: renderedPrompt.length,
   };
 
-  // Windows `.CMD` launch goes through `cmd.exe /d /s /c "<commandLine>"`.
-  // A raw newline inside the quoted `--prompt "..."` arg terminates that wrapped
-  // command line — cmd.exe treats the rest as a new command, gemini.CMD runs with
-  // a truncated prompt, and the remainder gets re-interpreted as positional text,
-  // which then collides with the surviving `--prompt` flag. Symptom (reproduced
-  // 2026-04-14, exit 1):
-  //   Cannot use both a positional prompt and the --prompt (-p) flag together
-  // Pipe prompts that contain a newline (or exceed the safe argv budget) through
-  // stdin so cmd.exe never parses them. See troubleshooting_tips BUG-035 / BUG-028.
-  const PROMPT_ARG_SAFE_CHARS = 4000;
-  const promptHasNewline = /\r|\n/.test(prompt);
-  const usePromptStdin = promptHasNewline || prompt.length > PROMPT_ARG_SAFE_CHARS;
+  // ALWAYS pipe prompt via stdin — never via argv.
+  //
+  // Why (2 incidents fixed at root):
+  //   1. BUG-035 (2026-04-14): newline in `--prompt "..."` arg terminates the
+  //      `cmd.exe /d /s /c` wrapper, causing "Cannot use both a positional
+  //      prompt and the --prompt (-p) flag together".
+  //   2. Incident 2026-05-11 (lesson_paperclip_gemini_windows_cmd_limit.md):
+  //      cmd.exe 8191-char total command-line limit. Conditional threshold
+  //      (PROMPT_ARG_SAFE_CHARS = 4000) was a guess and could still bust when
+  //      path + flags + workspace took the remaining budget.
+  //
+  // Previously the code had a conditional (newline OR length > 4000 → stdin,
+  // else argv). Each rule was a patch on a symptom. Removing the argv branch
+  // entirely closes both bug classes at root and matches the Open Design v2
+  // approach (see apps/daemon/src/runtimes/defs/gemini.ts: `promptViaStdin: true`
+  // with comment "Passing the full composed prompt as a CLI arg causes
+  // ENAMETOOLONG on Windows").
+  //
+  // Trade-off: argv was a few milliseconds faster for short prompts. Negligible
+  // compared to the risk of resurrecting either bug.
   // NOTE 2026-04-14: tried `--include-directories ~/.gemini` to let the agent
   // read `~/.gemini/RULES.md` (which Gemini CLI auto-injects into context) and
   // stop the apologise-loop when the sandboxed `read_file` tool blocks that
@@ -870,7 +879,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // `--prompt ""` keeps Gemini CLI in non-interactive mode. When stdin is piped
     // (see below), the CLI reads the actual prompt from stdin per its own docs:
     //   "Appended to input on stdin (if any)."
-    args.push("--prompt", usePromptStdin ? "" : prompt);
+    // `--prompt ""` keeps Gemini CLI in non-interactive mode while telling it
+    // to read the actual prompt from stdin (per Gemini CLI docs: "Appended to
+    // input on stdin (if any)."). Stdin is always piped — see comment above.
+    args.push("--prompt", "");
     return args;
   };
 
@@ -899,10 +911,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       graceSec,
       onSpawn,
       onLog,
-      // When the prompt contains newlines or exceeds the Windows argv budget,
-      // runChildProcess writes + ends the child stdin for us. Short single-line
-      // prompts still go on argv for readability in run-details.
-      stdin: usePromptStdin ? prompt : undefined,
+      // Always pipe prompt via stdin (runChildProcess writes + ends it for us).
+      // See the comment block above buildArgs() for why argv was removed.
+      stdin: prompt,
     });
     return {
       proc,
