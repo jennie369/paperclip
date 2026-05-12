@@ -6,6 +6,7 @@ import {
   Loader2,
   RefreshCw,
   Copy,
+  Download,
   StopCircle,
   Clock,
   FileText,
@@ -128,6 +129,7 @@ const OUTPUT_TYPE_OPTIONS = [
   { value: 'email_html', label: 'Email Marketing HTML', jobType: 'email', contentType: 'email' },
   { value: 'outline_latc', label: 'Outline Kịch Bản LATC (Đề cương trước)', jobType: 'outline', contentType: 'latc' },
   { value: 'outline_tmt', label: 'Outline Kịch Bản TMT (Đề cương trước)', jobType: 'outline', contentType: 'tmt' },
+  { value: 'content_package_youtube', label: 'Content Package (Youtube)', jobType: 'content_package', contentType: 'content_package' },
   { value: 'brainstorm', label: 'Brainstorm Chủ Đề (Gợi ý topic từ trends)', jobType: 'brainstorm', contentType: '' },
   { value: 'repurpose', label: 'Repurpose (Tái chế content cũ → format mới)', jobType: 'repurpose', contentType: '' },
   { value: 'image_prompt', label: 'Image Prompt (Prompt tạo hình minh họa)', jobType: 'image_prompt', contentType: '' },
@@ -162,6 +164,7 @@ const DOC_SOP_OPTIONS = [
   { value: 'DOC-ONB-005', label: 'Onboarding Tần Số Tình Yêu (6 emails)', group: 'Onboarding Email', emailCount: 6 },
   { value: 'DOC-ONB-006', label: 'Onboarding Tư Duy Triệu Phú (7 emails)', group: 'Onboarding Email', emailCount: 7 },
   { value: 'DOC-ONB-007', label: 'Onboarding 7 Ngày Tần Số Gốc (7 emails)', group: 'Onboarding Email', emailCount: 7 },
+  { value: 'DOC-ONB-008', label: 'Onboarding CTV/KOL (5 emails)', group: 'Onboarding Email', emailCount: 5 },
   // Customer Support / User guides (2026-04-19)
   { value: 'DOC-CS-005', label: 'Hướng Dẫn Sử Dụng App Gemral', group: 'Hướng Dẫn App' },
   { value: 'DOC-CS-006', label: 'Hướng Dẫn Ritual & Vision Board', group: 'Hướng Dẫn App' },
@@ -1431,8 +1434,25 @@ export default function AiGenPage() {
   const [brandResult, setBrandResult] = useState(null);
   const [generationDone, setGenerationDone] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [resultCollapsed, setResultCollapsed] = useState(false);
+  const [copiedPromptIdx, setCopiedPromptIdx] = useState(null);
+  const [promptSectionCollapsed, setPromptSectionCollapsed] = useState(false);
+  const [collapsedCards, setCollapsedCards] = useState({});
   const [imagePrompt, setImagePrompt] = useState('');
   const [savedId, setSavedId] = useState(null);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const downloadMenuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (downloadMenuRef.current && !downloadMenuRef.current.contains(event.target)) {
+        setShowDownloadMenu(false);
+      }
+    };
+    if (showDownloadMenu) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDownloadMenu]);
+
   // -- Session reuse state (Persistent Session Architecture) --
   const [sessionId, setSessionId] = useState(null);       // Claude Code session ID cho iterate
   const [iterateHistory, setIterateHistory] = useState([]); // Lịch sử iterate [{role, text}]
@@ -1783,6 +1803,7 @@ export default function AiGenPage() {
   const isOutlineLatc = outputType === 'outline_latc';
   const isOutlineTmt = outputType === 'outline_tmt';
   const isOutline = isOutlineLatc || isOutlineTmt;
+  const isContentPackage = outputType === 'content_package_youtube';
   const isImagePrompt = outputType === 'image_prompt';
   // 2026-04-17 — Doc-Tài Liệu Nội Dung (25 SOPs checkbox group)
   const isDocTaiLieu = outputType === 'doc_tai_lieu';
@@ -1849,7 +1870,7 @@ export default function AiGenPage() {
       return true;
     }
     // Dynamic job types (có field riêng kiểu platform/topic/template) — bỏ qua brief.
-    const hasDynamicContent = isSocialPost || isShortClip || isNews || isEmail || isBanner || isPushNotification || isInAppStory || isSms || isChatbotScript || isContentPlanner;
+    const hasDynamicContent = isSocialPost || isShortClip || isNews || isEmail || isBanner || isPushNotification || isInAppStory || isSms || isChatbotScript || isContentPlanner || isContentPackage;
     if (!brief.trim() && !hasDynamicContent) {
       // Chỉ rõ job type đang cần brief để chị biết phải điền gì
       let needFor = 'Kịch bản / Tiêu đề';
@@ -1861,7 +1882,7 @@ export default function AiGenPage() {
     }
     setBriefError('');
     return true;
-  }, [brief, isSocialPost, isShortClip, isNews, isEmail, isBanner, isPushNotification, isInAppStory, isSms, isChatbotScript, isContentPlanner, isBrainstorm, isOutline, isRepurpose, isImagePrompt, isDocTaiLieu, selectedDocIds]);
+  }, [brief, isSocialPost, isShortClip, isNews, isEmail, isBanner, isPushNotification, isInAppStory, isSms, isChatbotScript, isContentPlanner, isContentPackage, isBrainstorm, isOutline, isRepurpose, isImagePrompt, isDocTaiLieu, selectedDocIds]);
 
   // -- Build context from dynamic fields --
   const buildDynamicContext = useCallback(() => {
@@ -2400,93 +2421,19 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
 
     const isNewsContent = isNews;
     const isEmailContent = isEmail;
-    const systemPrompt = isEmailContent
-      ? `Bạn là Email Marketing Designer chuyên nghiệp của Gemral. Tạo email HTML đẹp, responsive, tương thích mọi email client.
+    const systemPrompt = undefined;
 
-⚠️ QUY TẮC TUYỆT ĐỐI — VI PHẠM = BỊ TỪ CHỐI:
-- Output bắt đầu bằng <!DOCTYPE html> và kết thúc bằng </html>.
-- KHÔNG markdown, KHÔNG giải thích, KHÔNG text trước HTML.
+    const dynamicContext = buildDynamicContext();
+    const userPromptParts = [
+      `LOẠI NỘI DUNG: ${selectedOption.label}`,
+    ];
 
-QUY TẮC EMAIL HTML:
-- TABLE LAYOUT cho tương thích Outlook, Gmail, Apple Mail. KHÔNG div cho layout chính.
-- ALL CSS INLINE (style="..."). KHÔNG <style> tag (Outlook bỏ qua).
-- Max width: 600px, center align. Responsive: width="100%" cho mobile.
-- Font: font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif.
-
-BRAND DESIGN SYSTEM GEMRAL:
-- Primary background: #112250 (navy đậm) — TUYỆT ĐỐI KHÔNG dùng #000000 hay #0A0F1C.
-- Light content background: #FFFFFF
-- Gold accent: #FFBD59 (CTA buttons, highlights, logo text)
-- Purple accent: #6A5BFF (badges, links, secondary CTA)
-- Cyan accent: #00F0FF (decorative elements, icons)
-- Text primary: #FFFFFF (trên nền navy) hoặc #1A1A2E (trên nền trắng)
-- Text secondary: rgba(255,255,255,0.7) hoặc #666666
-- CTA button: <table> + <td> background-color:#FFBD59, color:#112250, padding 14px 32px, font-weight bold.
-
-HEADER (BẮT BUỘC — PHẢI CÓ LOGO HÌNH ẢNH):
-- Background: #112250, padding 24px, text-align center.
-- Logo hình ảnh GEM STAR: <img src="https://gemral.com/assets/gemral-logo.png" alt="Gemral" width="48" height="48" style="display:block;margin:0 auto 8px;" />
-- Bên dưới logo hình: text "GEMRAL" — font-size 28px, color #FFBD59, font-weight 800, letter-spacing 3px.
-- Dưới text logo: tagline "Công nghệ • Giáo dục • Tài chính" — font-size 12px, color rgba(255,255,255,0.5).
-
-CTA BUTTON LINKS (BẮT BUỘC — PHẢI CÓ LINK THẬT, TUYỆT ĐỐI KHÔNG dùng href="#"):
-- App Store: https://apps.apple.com/vn/app/gemral/id6756418547
-- Dùng App Store link làm mặc định cho tất cả CTA buttons (vì email client không hỗ trợ deep link gem://).
-- Map CTA text → link phù hợp:
-  * CTA về Vision Board / Goals / Affirmation → https://apps.apple.com/vn/app/gemral/id6756418547
-  * CTA về Scanner / Trading → https://apps.apple.com/vn/app/gemral/id6756418547
-  * CTA về Khóa học → https://gemral.com/khoa-hoc
-  * CTA về Tarot / Kinh Dịch / Tâm linh → https://apps.apple.com/vn/app/gemral/id6756418547
-  * CTA về Forum / Cộng đồng → https://gemral.com/cong-dong
-  * CTA về Shop / Sản phẩm → https://gemral.com/shop
-  * CTA đăng ký / Nâng cấp Tier → https://apps.apple.com/vn/app/gemral/id6756418547
-- TUYỆT ĐỐI KHÔNG để href="#" — mọi CTA button phải có link thật hoạt động được.
-
-FOOTER (BẮT BUỘC):
-- Background: #112250, padding 24px, text-align center.
-- Dòng 1: "GEMRAL" — font-size 16px, color #FFBD59, font-weight bold.
-- Dòng 2: "gemral.com" — font-size 12px, color rgba(255,255,255,0.5).
-- KHÔNG có link hủy đăng ký / unsubscribe. KHÔNG có địa chỉ công ty, KHÔNG "123 Innovation Drive", KHÔNG địa chỉ giả.
-- Footer chỉ có 2 dòng: GEMRAL + gemral.com. Giữ ngắn gọn.
-
-HÌNH ẢNH:
-- Dùng placeholder: https://placehold.co/600x300/112250/FFBD59?text=Hero+Image (hoặc tương tự).
-- Người dùng sẽ thay placeholder bằng hình thật sau. Có alt text tiếng Việt.
-- Preheader text: thêm hidden preheader ở đầu email body.
-- NỘI DUNG bằng tiếng Việt có dấu đầy đủ.
-
-CẤU TRÚC EMAIL: Header (Logo hình + GEMRAL text + tagline) → Preheader → Hero section → Nội dung chính → CTA → Footer.`
-      : isNewsContent
-      ? `Bạn là Content Editor chuyên nghiệp của Gemral — tổ chức công nghệ giáo dục. Viết bài tin tức/blog với giọng báo chí khách quan, uy tín.
-
-QUY TẮC BÀI TIN TỨC (BẮT BUỘC):
-- TUYỆT ĐỐI KHÔNG dùng tên "Jennie", "Jennie Uyên Chu" hay tên cá nhân. Chỉ dùng "Gemral", "đội ngũ Gemral", "Gemral Editorial".
-- TUYỆT ĐỐI KHÔNG dùng emoji. Bài báo chuyên nghiệp KHÔNG CÓ emoji.
-- KHÔNG viết giọng cá nhân, KHÔNG "chia sẻ với các bạn", KHÔNG "các bạn ơi". Giọng trung lập, khách quan.
-- Giọng văn: như VnExpress, CafeBiz, Tuổi Trẻ — chuyên nghiệp, rõ ràng, có chiều sâu.
-- MỖI BÀI PHẢI MỞ ĐẦU KHÁC NHAU. Đa dạng: nhận định, số liệu thị trường, câu hỏi, xu hướng...
-- Sáng tạo, không lặp khuôn mẫu.`
-      : `Bạn là Content Agent chuyên tạo nội dung sáng tạo cho Jennie Uyên Chu. Đọc knowledge files để hiểu phong cách và framework.
-
-QUY TẮC SÁNG TẠO BẮT BUỘC:
-- MỖI BÀI VIẾT PHẢI MỞ ĐẦU KHÁC NHAU. TUYỆT ĐỐI KHÔNG lặp lại câu mở đầu giống nhau.
-- KHÔNG copy nguyên mẫu câu từ knowledge files (ví dụ: "Nhiều bạn nhắn cho Jennie", "Có chị nhắn cho Jennie"). Đó là VÍ DỤ để tham khảo, KHÔNG phải template.
-- Sáng tạo các kiểu mở đầu đa dạng: câu hỏi, nhận định, câu chuyện ngắn, số liệu, trích dẫn, tình huống thực tế...
-- Mỗi lần tạo nội dung là một góc nhìn mới, cách tiếp cận mới.
-- Giữ giọng nói Jennie nhưng đừng lặp khuôn.
-
-QUY TẮC EMOJI (ÁP DỤNG CHO BÀI ĐĂNG MXH, KỊCH BẢN):
-- LUÔN thêm emoji vào nội dung bài viết ở những vị trí phù hợp để tạo sự bắt mắt và dễ đọc.
-- Sử dụng 3-8 emoji mỗi bài (tuỳ độ dài), KHÔNG quá lố, VỪA ĐỦ để tạo điểm nhấn.
-- Đặt emoji ở: đầu mỗi ý chính, sau tiêu đề phụ, ở CTA, và ở những điểm chuyển ý quan trọng.
-- Ưu tiên emoji phù hợp brand: ✨ 💎 🌟 💫 🔥 💪 🙏 💜 🌈 ⭐ 🎯 💡 🌸 🦋
-- TUYỆT ĐỐI KHÔNG dùng emoji thay thế từ ngữ, chỉ dùng để bổ sung visual.
-
-QUY TẮC NỘI DUNG ẢNH (BẮT BUỘC):
+    if (isSocialPost || jobType === 'social_post') {
+      userPromptParts.push(`\nQUY TẮC NỘI DUNG ẢNH (BẮT BUỘC):
 - Nếu bài đăng có kịch bản hình ảnh (slide/carousel), BẠN PHẢI viết ĐẦY ĐỦ nội dung cho TẤT CẢ 6 HÌNH ẢNH (hoặc đủ số lượng yêu cầu).
 - TUYỆT ĐỐI KHÔNG DÙNG PLACEHOLDER. KHÔNG viết kiểu "(Điền nội dung vào đây)" hay "Tương tự cho các hình tiếp theo".
 - Mọi text trên ảnh phải được viết hoàn thiện, chi tiết, bằng tiếng Việt có dấu, đúng văn phong của brand, sẵn sàng để sử dụng ngay lập tức.
-\${socialTopic === 'app_features' ? \`
+${socialTopic === 'app_features' ? `
 CẢNH BÁO QUAN TRỌNG VỀ ĐỘ DÀI & CHI TIẾT ẢNH INFOGRAPHIC (CHỐNG LƯỜI):
 Agent BẮT BUỘC phải tạo ĐẦY ĐỦ 6 HÌNH (Carousel 6 ảnh) và ĐIỀN KÍN CHỮ TIẾNG VIỆT CÓ DẤU cho toàn bộ các mục { }. 
 - TUYỆT ĐỐI KHÔNG được lười biếng.
@@ -2497,7 +2444,7 @@ Agent BẮT BUỘC phải tạo ĐẦY ĐỦ 6 HÌNH (Carousel 6 ảnh) và ĐI�
 LƯU Ý QUAN TRỌNG VỀ CẤU TRÚC PROMPT: 
 1. PHÂN TÁCH RÕ RÀNG: Giữa các prompt của từng bức ảnh, BẠN BẮT BUỘC phải có một đường kẻ ngang rõ ràng (ví dụ: =========================================) kèm theo tiêu đề chỉ rõ đây là ảnh nào (ví dụ: "PROMPT CHO ẢNH 2", "PROMPT CHO ẢNH 3").
 2. LẶP LẠI FULL HEADER: Ngay sau đường kẻ phân tách, BẠN BẮT BUỘC PHẢI BẮT ĐẦU mỗi ảnh bằng câu "[tạo ảnh theo template sau:]" đặt ngay trước phần "# BRAND BACKGROUND (LOCK — KHÔNG THAY)". BẠN BẮT BUỘC PHẢI LẶP LẠI TOÀN BỘ CẤU TRÚC TEMPLATE TỪ ĐẦU ĐẾN CUỐI CHO TỪNG BỨC ẢNH MỘT. TUYỆT ĐỐI KHÔNG ĐƯỢC LƯỜI BIẾNG CHỈ ĐỂ Ở ẢNH ĐẦU TIÊN RỒI CÁC ẢNH SAU BỎ QUA.
-\` : socialTopic === 'trading_mindset' ? \`
+` : socialTopic === 'trading_mindset' ? `
 CẢNH BÁO QUAN TRỌNG VỀ ĐỘ DÀI & CHI TIẾT ẢNH INFOGRAPHIC KỸ THUẬT (CHỐNG LƯỜI):
 Agent BẮT BUỘC phải tạo ĐẦY ĐỦ 6 HÌNH (Carousel 6 ảnh) và ĐIỀN KÍN CHỮ TIẾNG VIỆT CÓ DẤU cho toàn bộ các mục { }. 
 - TUYỆT ĐỐI KHÔNG được lười biếng.
@@ -2508,24 +2455,8 @@ Agent BẮT BUỘC phải tạo ĐẦY ĐỦ 6 HÌNH (Carousel 6 ảnh) và ĐI�
 LƯU Ý QUAN TRỌNG VỀ CẤU TRÚC PROMPT: 
 1. PHÂN TÁCH RÕ RÀNG: Giữa các prompt của từng bức ảnh, BẠN BẮT BUỘC phải có một đường kẻ ngang rõ ràng (ví dụ: =========================================) kèm theo tiêu đề chỉ rõ đây là ảnh nào (ví dụ: "PROMPT CHO ẢNH 2", "PROMPT CHO ẢNH 3").
 2. LẶP LẠI FULL HEADER: Ngay sau đường kẻ phân tách, BẠN BẮT BUỘC PHẢI BẮT ĐẦU mỗi ảnh bằng câu "[tạo ảnh theo template sau:]" đặt ngay trước phần "# BRAND BACKGROUND (LOCK — KHÔNG THAY)". BẠN BẮT BUỘC PHẢI LẶP LẠI TOÀN BỘ CẤU TRÚC TEMPLATE TỪ ĐẦU ĐẾN CUỐI CHO TỪNG BỨC ẢNH MỘT. TUYỆT ĐỐI KHÔNG ĐƯỢC LƯỜI BIẾNG CHỈ ĐỂ Ở ẢNH ĐẦU TIÊN RỒI CÁC ẢNH SAU BỎ QUA.
-\` : ''}
-
-QUY TẮC FACEBOOK COMPLIANCE (BẮT BUỘC — ĐỂ TRÁNH BỊ GIẢM REACH):
-- TUYỆT ĐỐI KHÔNG sử dụng quá 2 con số trong toàn bài viết. Nếu cần đề cập số liệu, dùng từ ngữ mô tả thay thế (ví dụ: "phần lớn", "hầu hết", "rất nhiều", "một số ít" thay vì "90%", "78%", "50-55%").
-- KHÔNG viết giá tiền cụ thể (299K, 11M, 21M, 68M...). Thay vào đó dùng: "chi phí hợp lý", "đầu tư xứng đáng", "giá trị vượt xa kỳ vọng".
-- KHÔNG liệt kê nhiều số phần trăm (%, ROI, win rate, lợi nhuận cụ thể). Facebook sẽ flag là "bán hàng" hoặc "lừa đảo tài chính".
-- KHÔNG dùng ngôn ngữ "làm giàu nhanh" hoặc "get-rich-quick": tránh các cụm từ như "kiếm tiền dễ dàng", "thu nhập thụ động ngay", "giàu sau X tháng", "tự do tài chính nhanh chóng", "lợi nhuận khủng", "x2 x3 tài khoản".
-- KHÔNG viết kiểu hứa hẹn kết quả cụ thể: "cam kết lợi nhuận", "chắc chắn thành công", "100% hiệu quả", "đảm bảo có lãi". Thay vào đó dùng: "nhiều học viên đã chia sẻ", "cộng đồng đã trải nghiệm".
-- KHÔNG viết nội dung có tính chất mê tín dị đoan quá mức: tránh đề cập trực tiếp "phong thuỷ quyết định giàu nghèo", "vận mệnh tiền bạc", "bùa may mắn tài chính". Thay vào đó dùng góc nhìn phát triển bản thân: "năng lượng", "tư duy", "mindset".
-- KHÔNG viết kiểu lừa đảo/deceive: tránh "bí mật mà KHÔNG AI nói cho bạn", "phương pháp ĐỘC QUYỀN chỉ có ở đây", "cơ hội CUỐI CÙNG". Thay vào đó dùng giọng chia sẻ chân thành.
-- KHÔNG viết clickbait quá mức: tránh viết hoa toàn bộ tiêu đề, tránh dùng quá nhiều dấu chấm than (!!!), tránh tạo FOMO giả.
-- Ưu tiên STORYTELLING thay vì hard-sell: kể câu chuyện thực → rút ra bài học → CTA nhẹ nhàng (câu hỏi mở, mời comment).
-- CTA nên dạng mềm: "Bạn nghĩ sao?", "Chia sẻ trải nghiệm của bạn nha", "Comment cho Jennie biết" — KHÔNG dùng "Đăng ký ngay", "Mua ngay", "Inbox ngay kẻo hết".`;
-
-    const dynamicContext = buildDynamicContext();
-    const userPromptParts = [
-      `LOẠI NỘI DUNG: ${selectedOption.label}`,
-    ];
+` : ''}`);
+    }
 
     // USE-CASE FIRST rule — UNIVERSAL, inject cho MỌI output type
     userPromptParts.push(`
@@ -2763,6 +2694,68 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       addToast({ type: 'error', message: 'Không thể sao chép.' });
     }
   }, [output, addToast]);
+
+  // -- Download --
+  const handleDownload = useCallback(async (mode = 'file') => {
+    if (!output) return;
+    const isDocHtml = outputType === 'doc_tai_lieu' || outputType === 'email_html';
+    const extension = isDocHtml ? 'html' : 'md';
+    const mimeType = isDocHtml ? 'text/html' : 'text/markdown';
+
+    // Tìm tiêu đề
+    let title = newsMetadata?.title || brief || '';
+    if (!title) {
+      const lines = output.split('\n');
+      title = lines[0]?.replace(/^#+\s*/, '').trim() || 'Gemral-Content';
+    }
+    // Lọc ký tự đặc biệt khỏi tên file
+    title = title.substring(0, 50).replace(/[^a-zA-Z0-9 À-ỹ]/g, '').trim() || 'Gemral-Content';
+
+    if (mode === 'folder') {
+      try {
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
+
+        // Remove accents and uppercase for folder name
+        const removeAccents = (str) =>
+          str.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+        const folderName =
+          removeAccents(title).replace(/[^A-Z0-9 ]/g, '').trim().replace(/\s+/g, '_') ||
+          'GEMRAL_CONTENT';
+        const filename = `${title}.${extension}`;
+
+        // Add file to folder
+        const folder = zip.folder(folderName);
+        folder.file(filename, output);
+
+        const content = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${folderName}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        addToast({ type: 'success', message: `Đã tải về thư mục ${folderName}.zip` });
+      } catch (err) {
+        console.error('Error creating zip:', err);
+        addToast({ type: 'error', message: 'Lỗi khi tạo file nén ZIP.' });
+      }
+    } else {
+      const filename = `${title}.${extension}`;
+      const blob = new Blob([output], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addToast({ type: 'success', message: `Đã tải về file ${filename}` });
+    }
+  }, [output, outputType, newsMetadata, brief, addToast]);
 
   // -- Auto-save: batch_processor đã tự động lưu (server-side)
   useEffect(() => {
@@ -5419,7 +5412,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                 {(() => {
                   // 2026-04-17 FIX: disable button when validation would fail so click
                   // không còn "im lặng". Now covers Doc-Tài Liệu flow too.
-                  const hasDynamicContent = isSocialPost || isShortClip || isNews || isEmail || isBanner || isPushNotification || isInAppStory || isSms || isChatbotScript || isContentPlanner;
+                  const hasDynamicContent = isSocialPost || isShortClip || isNews || isEmail || isBanner || isPushNotification || isInAppStory || isSms || isChatbotScript || isContentPlanner || isContentPackage;
                   const briefMissing = !brief.trim() && !hasDynamicContent && !isBrainstorm && !isDocTaiLieu;
                   const docMissing = isDocTaiLieu && selectedDocIds.length === 0;
                   const disabled = briefMissing || docMissing;
@@ -5610,8 +5603,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         <Card variant="glass" padding="md">
           {/* Toolbar */}
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setResultCollapsed(c => !c)}>
               <h3 className="text-sm font-semibold text-txt">Kết Quả</h3>
+              <span className="text-txt-3 text-xs">{resultCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
               {savedId && (
                 <Badge text="Đã lưu tự động" variant="success" size="sm" dot />
               )}
@@ -5643,11 +5637,44 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
               <Button variant="outline" size="sm" icon={Copy} onClick={handleCopy}>
                 Sao Chép
               </Button>
+              <div className="relative" ref={downloadMenuRef}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={Download}
+                  onClick={() => setShowDownloadMenu(!showDownloadMenu)}
+                  className="flex items-center gap-1"
+                >
+                  Tải Về <ChevronDown size={14} className="ml-1 opacity-70" />
+                </Button>
+                {showDownloadMenu && (
+                  <div className="absolute top-full left-0 mt-1 w-40 bg-card border border-border rounded-md shadow-lg py-1 z-50 overflow-hidden">
+                    <button
+                      onClick={() => { setShowDownloadMenu(false); handleDownload('file'); }}
+                      className="w-full text-left px-3 py-2 text-sm text-txt hover:bg-bg-3 transition-colors flex items-center gap-2"
+                    >
+                      <FileText size={14} className="text-txt-3" />
+                      Tải 1 file
+                    </button>
+                    <button
+                      onClick={() => { setShowDownloadMenu(false); handleDownload('folder'); }}
+                      className="w-full text-left px-3 py-2 text-sm text-txt hover:bg-bg-3 transition-colors flex items-center gap-2"
+                    >
+                      <Download size={14} className="text-txt-3" />
+                      Tải thư mục
+                    </button>
+                  </div>
+                )}
+              </div>
               <Button variant="outline" size="sm" icon={RefreshCw} onClick={handleRegenerate}>
                 Tạo Lại
               </Button>
             </div>
           </div>
+
+          {/* ═══ Collapsible: chỉ ẩn phần văn bản chính ═══ */}
+          {!resultCollapsed && (
+          <>
 
           {/* ═══ Iterate Chat Panel (Persistent Session) ═══ */}
           {sessionId && (
@@ -5899,34 +5926,106 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             </div>
           )}
 
-          {/* Image Prompt */}
-          {imagePrompt && (
-            <div className="p-4 rounded-card border border-purple/20 bg-purple/5 mb-4">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-xs font-semibold text-purple uppercase tracking-wider flex items-center gap-1.5">
-                  <ImageIcon size={14} />
-                  Prompt Tạo Hình Ảnh Minh Họa
-                </h4>
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" icon={Copy} onClick={handleCopyImagePrompt}>
-                    Sao Chép Tất Cả
-                  </Button>
+          {/* ═══ Đóng collapsible guard ═══ */}
+          </>
+          )}
+
+          {/* ═══ 7 Prompt Cards — LUÔN HIỂN DÙ thu gọn ═══ */}
+          {output && output.toLowerCase().includes('prompt cho ') && (() => {
+            const firstIdx = output.toLowerCase().indexOf('prompt cho ');
+            const workingText = firstIdx >= 0 ? output.slice(firstIdx) : output;
+            const parts = workingText.split(/(?=PROMPT CHO )/i).map(s => s.trim()).filter(Boolean).slice(0, 7);
+            const cards = parts.length > 1 ? parts : (() => {
+              const lines = output.split('\n');
+              const result = [];
+              let current = '';
+              const isHead = (l) =>
+                /^(?:#{1,3}\s*)?(?:Ảnh|Anh|ANH)\s*[1-7](?:\s*[-:—]|$)/i.test(l.trim())
+                || /^PROMPT CHO /i.test(l.trim());
+              for (const line of lines) {
+                if (isHead(line)) { if (current.trim()) result.push(current.trim()); current = line + '\n'; }
+                else { current += line + '\n'; }
+              }
+              if (current.trim()) result.push(current.trim());
+              return result.length > 1 ? result.slice(0, 7) : [output];
+            })();
+            const handleCopyCard = async (text, idx) => {
+              try {
+                await navigator.clipboard.writeText(text);
+                setCopiedPromptIdx(idx); setTimeout(() => setCopiedPromptIdx(null), 2000);
+              } catch { /* ignore */ }
+            };
+
+            const handleCopyAllCards = async () => {
+              try {
+                const fullText = cards.map(c => '=========================================\n' + c).join('\n\n');
+                await navigator.clipboard.writeText(fullText);
+                addToast({ type: 'success', message: 'Đã sao chép TẤT CẢ prompt.' });
+              } catch {
+                addToast({ type: 'error', message: 'Lỗi copy.' });
+              }
+            };
+
+            return (
+              <div className="mt-4 pt-4 border-t border-border">
+                {/* Header section với toggle toàn bộ */}
+                <div className="flex items-center justify-between mb-3">
+                  <div
+                    className="flex items-center gap-2 cursor-pointer select-none"
+                    onClick={() => setPromptSectionCollapsed(c => !c)}
+                  >
+                    <ImageIcon size={14} className="text-purple" />
+                    <h4 className="text-xs font-semibold text-purple uppercase tracking-wider">
+                      🎨 Prompt Hình Ảnh ({cards.length}/7)
+                    </h4>
+                    <span className="text-txt-3 text-xs">{promptSectionCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
+                  </div>
+                  <Button variant="outline" size="sm" icon={Copy} onClick={handleCopyAllCards}>Sao Chép Tất Cả</Button>
+                </div>
+
+                {/* 7 Cards — ẩn toàn bộ nếu section collapsed */}
+                {!promptSectionCollapsed && (
+                <div className="grid gap-2">
+                  {cards.map((card, idx) => {
+                    const isCardCollapsed = !!collapsedCards[idx];
+                    const toggleCard = () => setCollapsedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
+                    return (
+                    <div key={idx} className="rounded-card border border-purple/20 bg-purple/5">
+                      {/* Card header với toggle từng card */}
+                      <div
+                        className="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-purple/10 transition-colors rounded-card"
+                        onClick={toggleCard}
+                      >
+                        <span className="text-xs font-semibold text-purple">
+                          {isCardCollapsed ? '▶' : '▼'} Ảnh {idx + 1}
+                        </span>
+                        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={() => handleCopyCard(card, idx)}
+                            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-purple/30 bg-purple/10 text-purple hover:bg-purple/20 transition-all"
+                          >
+                            {copiedPromptIdx === idx ? <><Check size={11}/><span>Đã copy!</span></> : <><Copy size={11}/><span>Copy</span></>}
+                          </button>
+                        </div>
+                      </div>
+                      {/* Card content — ẩn nếu card collapsed */}
+                      {!isCardCollapsed && (
+                        <div className="px-3 pb-3">
+                          <pre className="text-xs text-txt-2 leading-relaxed whitespace-pre-wrap font-sans">{card}</pre>
+                        </div>
+                      )}
+                    </div>
+                    );
+                  })}
+                </div>
+                )}
+                <div className="mt-2 p-2 rounded-card bg-glass-bg border border-gold/20">
+                  <p className="text-xxs font-semibold text-gold mb-0.5">Design System (tự ghép khi copy từng ảnh)</p>
+                  <p className="text-xxs text-txt-3 font-mono">Navy #112250 · Gold #FFBD59 · Purple #6A5BFF · 3:4 · gemral.com</p>
                 </div>
               </div>
-              <textarea
-                value={imagePrompt}
-                onChange={(e) => setImagePrompt(e.target.value)}
-                className="w-full min-h-[120px] text-xs text-txt-2 leading-relaxed whitespace-pre-wrap bg-glass-bg rounded-card p-3 resize-y focus:outline-none focus:ring-1 focus:ring-purple/50 border border-transparent placeholder:text-txt-3"
-                placeholder="PROMPT Tạo hình ảnh minh họa..."
-                spellCheck={false}
-              />
-              {/* Default Design System */}
-              <div className="mt-3 p-3 rounded-card bg-glass-bg border border-gold/20">
-                <p className="text-xxs font-semibold text-gold uppercase tracking-wider mb-2">Quy Tắc &amp; Design System Mặc Định (tự động ghép khi sao chép)</p>
-                <p className="text-xxs text-txt-3 leading-relaxed whitespace-pre-wrap font-mono">QUY TẮC BẮT BUỘC:{'\n'}- Use my attached photo for character face.{'\n'}- Tất cả text bằng tiếng Việt có dấu{'\n'}- Người Việt thật 27-35 tuổi (KHÔNG cartoon, KHÔNG illustration){'\n'}- Style: Luxurious, premium, high-end editorial photography{'\n'}- Lighting: cinematic golden hour, dramatic rim lighting, soft bokeh{'\n'}- KHÔNG blazer, vest, suit jacket — elegant casual only{'\n'}- Background: rich textures (marble, velvet, warm wood, golden accents){'\n'}- Tỷ lệ mặc định: 3:4 (dọc){'\n'}{'\n'}DESIGN SYSTEM:{'\n'}Navy đậm #112250{'\n'}Gold #FFBD59{'\n'}Accent: Purple #6A5BFF{'\n'}Burgundy #9C0612{'\n'}Pink #FF6B9D{'\n'}Text: White #FFFFFF{'\n'}Footer: &quot;gemral.com&quot; centered</p>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Thống kê */}
           {generationDone && !isHtmlPreview && (
