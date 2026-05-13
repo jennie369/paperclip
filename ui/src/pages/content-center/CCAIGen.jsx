@@ -1553,6 +1553,7 @@ export default function AiGenPage() {
   }, [dripOverrideEnabled, activeOnbDoc, selectedSequenceId, dripSequences]);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailRecipients, setEmailRecipients] = useState('');
+  const [emailBcc, setEmailBcc] = useState('');
   const [emailSender, setEmailSender] = useState('Jennie Uyen Chu <hello@gemral.com>');
   const [emailSending, setEmailSending] = useState(false);
   const [emailSent, setEmailSent] = useState(null);
@@ -3193,12 +3194,14 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       const recipients = emailRecipients.split(',').map(e => e.trim()).filter(Boolean);
 
       // 1. Gửi email qua API
+      const bccList = emailBcc.split(',').map(e => e.trim()).filter(Boolean);
       const res = await fetch('/api/ops/email/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           from: emailSender,
           to: recipients,
+          ...(bccList.length > 0 && { bcc: bccList }),
           subject: emailSubject,
           html: htmlContent,
         }),
@@ -6989,6 +6992,16 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                     value={emailRecipients}
                     onChange={(e) => setEmailRecipients(e.target.value)}
                     placeholder="email1@gmail.com, email2@gmail.com"
+                    className="fi text-sm w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xxs font-medium text-txt-2 mb-1">BCC <span className="text-txt-3 font-normal">(tùy chọn, dấu phẩy phân cách)</span></label>
+                  <input
+                    type="text"
+                    value={emailBcc}
+                    onChange={(e) => setEmailBcc(e.target.value)}
+                    placeholder="bcc1@gmail.com, bcc2@gmail.com"
                     className="fi text-sm w-full"
                   />
                 </div>

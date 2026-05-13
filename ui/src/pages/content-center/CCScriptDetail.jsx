@@ -638,7 +638,9 @@ function ScriptDetailContent() {
   };
 
   // --- Email Send State ---
+  const [emailFrom, setEmailFrom] = useState('Gemral <hello@gemral.com>');
   const [emailTo, setEmailTo] = useState('');
+  const [emailBcc, setEmailBcc] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailSending, setEmailSending] = useState(false);
   const [showEmailPanel, setShowEmailPanel] = useState(false);
@@ -2234,12 +2236,32 @@ function ScriptDetailContent() {
           <div className="space-y-3">
             <div className="grid grid-cols-1 gap-2">
               <div>
+                <label className="text-xxs text-txt-3 block mb-1">Gửi từ (Sender) *</label>
+                <input
+                  type="text"
+                  value={emailFrom}
+                  onChange={(e) => setEmailFrom(e.target.value)}
+                  placeholder="Gemral <hello@gemral.com>"
+                  className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
                 <label className="text-xxs text-txt-3 block mb-1">Email người nhận *</label>
                 <input
                   type="text"
                   value={emailTo}
                   onChange={(e) => setEmailTo(e.target.value)}
                   placeholder="email@example.com (cách nhau bằng dấu phẩy nếu nhiều người)"
+                  className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-xxs text-txt-3 block mb-1">BCC <span className="text-txt-3 font-normal">(tùy chọn, cách nhau bằng dấu phẩy)</span></label>
+                <input
+                  type="text"
+                  value={emailBcc}
+                  onChange={(e) => setEmailBcc(e.target.value)}
+                  placeholder="bcc1@example.com, bcc2@example.com"
                   className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
                 />
               </div>
@@ -2281,13 +2303,20 @@ function ScriptDetailContent() {
                 setEmailSending(true);
                 try {
                   const recipients = emailTo.split(',').map(e => e.trim()).filter(Boolean);
+                  const bccList = emailBcc.split(',').map(e => e.trim()).filter(Boolean);
                   const htmlContent = isHtmlContent(mainContent)
                     ? stripCodeFence(mainContent)
                     : `<pre style="font-family:sans-serif;white-space:pre-wrap;line-height:1.6">${mainContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
-                  const res = await fetch('/api/email/send', {
+                  const res = await fetch('/api/ops/email/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent }),
+                    body: JSON.stringify({
+                      from: emailFrom,
+                      to: recipients,
+                      ...(bccList.length > 0 && { bcc: bccList }),
+                      subject: emailSubject,
+                      html: htmlContent,
+                    }),
                   });
                   const data = await res.json();
                   if (data.success) {

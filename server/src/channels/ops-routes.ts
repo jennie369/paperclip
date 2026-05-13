@@ -595,9 +595,13 @@ router.post('/content-pipeline/scripts', async (req, res) => {
       writing_mode: writing_mode || 'mode_1_calm',
       brand_voice: brand_voice || 'jennie',
       status: status || 'draft',
-      publish_mode: publish_mode || 'scheduled',
+      publish_mode: publish_mode
+        || (content_type === 'push_notification' ? 'immediate' : 'scheduled'),
     };
-    if (posted_account !== undefined) insertRow.posted_account = posted_account;
+    const resolvedPostedAccount = posted_account
+      || (content_type === 'news' ? 'forum' : undefined)
+      || (content_type === 'push_notification' ? 'push' : undefined);
+    if (resolvedPostedAccount !== undefined) insertRow.posted_account = resolvedPostedAccount;
     if (posted_time_slot !== undefined) insertRow.posted_time_slot = posted_time_slot;
     if (scheduled_at !== undefined) insertRow.scheduled_at = scheduled_at;
     if (Array.isArray(image_urls)) insertRow.image_urls = image_urls;
@@ -996,7 +1000,7 @@ router.put('/content-pipeline/skills/:name', (req, res) => {
 
 router.post('/email/send', async (req, res) => {
   try {
-    const { from, to, subject, html } = req.body;
+    const { from, to, bcc, subject, html } = req.body;
     if (!to || !subject || !html) {
       return res.status(400).json({ success: false, error: 'Thiếu to, subject hoặc html' });
     }
@@ -1006,12 +1010,17 @@ router.post('/email/send', async (req, res) => {
       return res.status(500).json({ success: false, error: 'RESEND_API_KEY chưa được cấu hình' });
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       from: from || 'GEM <noreply@gemral.com>',
       to: Array.isArray(to) ? to : [to],
       subject,
       html,
     };
+    if (bcc) {
+      const bccList = Array.isArray(bcc) ? bcc : [bcc];
+      const cleaned = bccList.map((e: string) => e.trim()).filter(Boolean);
+      if (cleaned.length > 0) payload.bcc = cleaned;
+    }
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
