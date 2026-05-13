@@ -60,7 +60,17 @@
     "DOC-AFF-003": {"sender": "partnership", "template": "onb-ctv-kol-e1", "segment": "partner_ctv", "track": "wealth"},
     "DOC-AFF-004": {"sender": "partnership", "template": "onb-ctv-kol-e3", "segment": "partner_ctv", "track": "wealth"},
     "DOC-AFF-005": {"sender": "partnership", "template": "onb-ctv-kol-e3", "segment": "partner_ctv", "track": "wealth"},
-    "DOC-CS-011": {"sender": "support", "template": "custom", "segment": "active_customer", "track": "wealth"}
+    "DOC-CS-011": {"sender": "support", "template": "custom", "segment": "active_customer", "track": "wealth"},
+    "DST-002": {"sender": "hello",        "template": "custom", "segment": "new_signup",       "track": "wealth"},
+    "DST-003": {"sender": "support",      "template": "custom", "segment": "active_customer", "track": "wealth"},
+    "DST-004": {"sender": "support",      "template": "custom", "segment": "dormant",         "track": "wealth"},
+    "DST-005": {"sender": "hello",        "template": "custom", "segment": "active_customer", "track": "wealth"},
+    "DST-006": {"sender": "hello",        "template": "custom", "segment": "active_customer", "track": "wealth"},
+    "DST-007": {"sender": "hello",        "template": "custom", "segment": "new_signup",       "track": "wealth"},
+    "DST-008": {"sender": "support",      "template": "custom", "segment": "active_customer", "track": "wealth"},
+    "DST-009": {"sender": "support",      "template": "custom", "segment": "active_customer", "track": "wealth"},
+    "DST-010": {"sender": "hello",        "template": "custom", "segment": "dormant",         "track": "wealth"},
+    "DST-011": {"sender": "partnership",  "template": "custom", "segment": "partner_ctv",     "track": "partnership"}
   },
   "segment_priority_rule": {
     "_note": "Khi 1 user match nhiều segment, chỉ gửi 1 lần theo highest priority. VIP cao nhất → manual 1-1 không vào automation drip.",

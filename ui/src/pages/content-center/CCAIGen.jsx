@@ -173,6 +173,17 @@ const DOC_SOP_OPTIONS = [
   { value: 'DOC-CS-009', label: 'Hướng Dẫn Paper Trading', group: 'Hướng Dẫn App' },
   { value: 'DOC-CS-010', label: 'Hướng Dẫn Forum (Tạo bài, badges)', group: 'Hướng Dẫn App' },
   { value: 'DOC-CS-011', label: 'Post-Purchase Care', group: 'Hướng Dẫn App' },
+  // Daily SOP Email Sequences (2026-05-13) — render dropdown email_day giống DOC-ONB
+  { value: 'DST-002', label: 'Lead Nurture Email Sequence (5 emails)',           group: 'Email Automation (DST)', emailCount: 5 },
+  { value: 'DST-003', label: 'Post-Purchase Onboarding course (5 emails)',       group: 'Email Automation (DST)', emailCount: 5 },
+  { value: 'DST-004', label: 'Churn Prevention Sequence (4 emails)',             group: 'Email Automation (DST)', emailCount: 4 },
+  { value: 'DST-005', label: 'Birthday & Anniversary Automation (5 touchpoints)', group: 'Email Automation (DST)', emailCount: 5 },
+  { value: 'DST-006', label: 'Market Update Broadcast (1 weekly)',               group: 'Email Automation (DST)', emailCount: 1 },
+  { value: 'DST-007', label: 'Welcome Drip Flow 7 ngày (3 emails)',              group: 'Email Automation (DST)', emailCount: 3 },
+  { value: 'DST-008', label: 'Trial Expiry Flow (3 emails)',                     group: 'Email Automation (DST)', emailCount: 3 },
+  { value: 'DST-009', label: 'Post-Purchase Flow vật lý/combo (3 emails)',       group: 'Email Automation (DST)', emailCount: 3 },
+  { value: 'DST-010', label: 'Re-engagement / Win Back Inactive (3 emails)',     group: 'Email Automation (DST)', emailCount: 3 },
+  { value: 'DST-011', label: 'CTV Onboard Sequence (5 emails + messages)',       group: 'Email Automation (DST)', emailCount: 5 },
 ];
 
 // Quick-select title chips for DOC — grouped by doc family for fast picking.
@@ -1510,13 +1521,15 @@ export default function AiGenPage() {
       .then((data) => setDripSequences(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, []);
-  // Khi sequence đổi hoặc DOC-ONB-* selection đổi → reset map theo emailCount
+  // Khi sequence đổi hoặc DOC-ONB-* / DST-* selection đổi → reset map theo emailCount
   // + prefill stepId theo thứ tự + extraPrompt từ step.generation_hint (baseline DB).
+  // 2026-05-13: extended từ DOC-ONB-* sang cả DST-* (Daily SOP email sequences).
   const activeOnbDoc = useMemo(() => {
     if (!dripOverrideEnabled) return null;
     for (const id of selectedDocIds) {
       const opt = DOC_SOP_OPTIONS.find((o) => o.value === id);
-      if (opt?.emailCount && String(id).startsWith('DOC-ONB-')) return opt;
+      const idStr = String(id);
+      if (opt?.emailCount && (idStr.startsWith('DOC-ONB-') || idStr.startsWith('DST-'))) return opt;
     }
     return null;
   }, [selectedDocIds, dripOverrideEnabled]);
@@ -2147,7 +2160,9 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
         const isOnbOverride = (docId) => {
           if (!dripOverrideEnabled || !selectedSequenceId || !overrideEmailMap.length) return false;
           const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
-          return opt?.emailCount && String(docId).startsWith('DOC-ONB-');
+          const idStr = String(docId);
+          // 2026-05-13: extended drip override sang DST-* (Daily SOP email sequences).
+          return opt?.emailCount && (idStr.startsWith('DOC-ONB-') || idStr.startsWith('DST-'));
         };
         for (const docId of selectedDocIds) {
           const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
@@ -5455,7 +5470,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                           </div>
                           {selectedDocIds.map((docId) => {
                             const opt = DOC_SOP_OPTIONS.find((o) => o.value === docId);
-                            const isOnb = String(docId).startsWith('DOC-ONB-') && opt?.emailCount;
+                            const idStr = String(docId);
+                            // 2026-05-13: drip preview cũng áp cho DST-* multi-email.
+                            const isOnb = (idStr.startsWith('DOC-ONB-') || idStr.startsWith('DST-')) && opt?.emailCount;
                             const day = selectedDocEmailDays[docId];
                             return (
                               <div key={docId} className="mt-0.5">
