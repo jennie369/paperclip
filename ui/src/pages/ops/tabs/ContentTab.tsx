@@ -1052,6 +1052,17 @@ const ScriptRow = memo(function ScriptRow({
           <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Xóa bài này?')) deleteMut.mutate(s.id); }}>
             <Trash2 className="h-3 w-3" />
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/GEM/ops/content-pipeline?tab=aigen&scriptId=${s.id}`);
+            }}
+            title="Mở full ở tab Trình Tạo Nội Dung AI"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </Button>
           {isExpanded
             ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
             : <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -1263,7 +1274,8 @@ export function ContentTab() {
     refetchInterval: 30_000,
   });
 
-  const inv = () => qc.invalidateQueries({ queryKey: ['ops'] });
+  // Memoize inv — pass as stable prop to memoized ScriptRow (prevents memo bust on parent re-render)
+  const inv = useCallback(() => qc.invalidateQueries({ queryKey: ['ops'] }), [qc]);
 
   const approveMut = useMutation({
     mutationFn: (id: string) => opsApi.approveScript(id),
@@ -1294,6 +1306,14 @@ export function ContentTab() {
   });
 
   const list = scripts || [];
+
+  // Virtualization reverted 2026-05-13: useWindowVirtualizer had scrollMargin
+  // computation issues (ref null on first render → wrong offsets → blank-page
+  // bug). Default limit=20 + memoized `inv` + lazy-mount ScriptExpandedPanel
+  // + CSS display:none toggle is enough for typical usage. If user needs to
+  // load 1000 rows, perf will degrade — consider re-implementing virtualizer
+  // with proper getBoundingClientRect-based scrollMargin or container-based
+  // useVirtualizer with fixed-height parent.
 
   return (
     <div className="space-y-4">

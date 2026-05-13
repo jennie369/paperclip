@@ -677,9 +677,10 @@ router.post('/content-pipeline/generate', async (req, res) => {
       extra_prompt,
     } = req.body || {};
     const ct: string = content_type || 'social_post';
-    // For DOC-* rows we want job_type = 'doc_tai_lieu' so batch_processor knows
-    // it's a knowledge-driven doc write. Other content_types keep legacy mapping.
-    const jobType = ct.startsWith('DOC-') ? 'doc_tai_lieu' : ct;
+    // For DOC-* and DST-* rows we want job_type = 'doc_tai_lieu' so batch_processor
+    // knows it's a knowledge-driven doc write. Other content_types keep legacy mapping.
+    // 2026-05-13: extended DST- (Daily SOP email sequences) — same semantic as DOC-ONB-*.
+    const jobType = (ct.startsWith('DOC-') || ct.startsWith('DST-')) ? 'doc_tai_lieu' : ct;
     // Default to 'gemini' — Claude is BLOCKED in batch_processor per Jennie's
     // directive (scripts/batch_processor.py line 3542 fallback). If UI doesn't
     // pass ai_provider, batch would default to 'claude' and fail. Keep BE default

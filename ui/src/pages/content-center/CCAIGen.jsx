@@ -181,7 +181,7 @@ const DOC_SOP_OPTIONS = [
   { value: 'DST-006', label: 'Market Update Broadcast (1 weekly)',               group: 'Email Automation (DST)', emailCount: 1 },
   { value: 'DST-007', label: 'Welcome Drip Flow 7 ngày (3 emails)',              group: 'Email Automation (DST)', emailCount: 3 },
   { value: 'DST-008', label: 'Trial Expiry Flow (3 emails)',                     group: 'Email Automation (DST)', emailCount: 3 },
-  { value: 'DST-009', label: 'Post-Purchase Flow vật lý/combo (3 emails)',       group: 'Email Automation (DST)', emailCount: 3 },
+  { value: 'DST-009', label: 'Post-Purchase Physical/Crystal (6 emails — Day 0/1/5/10/21/45)', group: 'Email Automation (DST)', emailCount: 6 },
   { value: 'DST-010', label: 'Re-engagement / Win Back Inactive (3 emails)',     group: 'Email Automation (DST)', emailCount: 3 },
   { value: 'DST-011', label: 'CTV Onboard Sequence (5 emails + messages)',       group: 'Email Automation (DST)', emailCount: 5 },
 ];
@@ -1566,6 +1566,7 @@ export default function AiGenPage() {
   );
   const emailFileInputRef = useRef(null);
   const emailIframeRef = useRef(null);
+  const resultSectionRef = useRef(null);  // 2026-05-13: scroll to "Kết Quả" section when loading via ?scriptId=
   const emailSrcDocRef = useRef('');  // Cache srcDoc to prevent re-render during editing
   const emailSyncingRef = useRef(false);  // Flag to skip srcDoc recalc on iframe-initiated syncs
   const [canUndo, setCanUndo] = useState(false);
@@ -1678,6 +1679,87 @@ export default function AiGenPage() {
         if (mapped) setOutputType(mapped);
       }
     }
+  }, [searchParams]);
+
+  // -- ContentTab → AI Gen: load existing cc_scripts row when ?scriptId=X --
+  // Pattern from 2026-05-13: "Mở Full" button in ContentTab navigates here so user
+  // can review/edit the generated output with the same prompt-card UI as right
+  // after generation. Populates a subset of state (output + content_type + brand_voice
+  // + persona + writing_mode + image_prompt + title). Form fields like `brief` are
+  // best-effort recovered from input_params JSON if present.
+  useEffect(() => {
+    const scriptId = searchParams.get('scriptId');
+    if (!scriptId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { supabase: supa } = await import('../../lib/supabaseClient');
+        const { data, error } = await supa
+          .from('cc_scripts')
+          .select('*')
+          .eq('id', scriptId)
+          .single();
+        if (cancelled || error || !data) return;
+
+        // Mark this as a restore so the session-save useEffect doesn't overwrite later
+        isRestoringRef.current = true;
+
+        // Output (body/content/caption — best-effort)
+        const bodyContent = data.body || data.content || data.caption || '';
+        if (bodyContent) setOutput(bodyContent);
+
+        // Content type → outputType mapping
+        const ct = data.content_type || '';
+        const contentTypeToOutputType = {
+          latc: 'script_latc',
+          tmt: 'script_tmt',
+          short_clip: 'script_short_clip',
+          social_post: 'social_post',
+          news: 'news',
+          email: 'email_html',
+          outline: 'outline',
+          title: 'title',
+          image_prompt: 'image_prompt',
+          content_package: 'content_package',
+        };
+        if (contentTypeToOutputType[ct]) setOutputType(contentTypeToOutputType[ct]);
+        else if (ct.startsWith('DOC-') || ct.startsWith('DST-')) {
+          setOutputType('doc_tai_lieu');
+          if (typeof setSelectedDocIds === 'function') setSelectedDocIds([ct]);
+        }
+
+        // Brand / persona / writing_mode / pillar
+        if (data.brand_voice) setBrandResult({ brand: data.brand_voice });
+        if (data.persona) setPersona(data.persona);
+        if (data.writing_mode) setWritingMode(data.writing_mode);
+        if (data.image_prompt) setImagePrompt(data.image_prompt);
+
+        // Recover brief / topic from input_params if present
+        const ip = data.input_params || {};
+        if (ip.userPrompt && !brief) setBrief(ip.userPrompt);
+        if (ip.topic && !brief) setBrief(ip.topic);
+
+        // Mark generation as done so prompt cards render (same as just-generated UI)
+        setGenerationDone(true);
+        setSavedId(data.id);
+
+        // Auto-scroll to "Kết Quả" section after a brief delay (let render settle)
+        setTimeout(() => {
+          resultSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 300);
+
+        // Email fields restore
+        if (data.posted_account === 'email_hello' || ct === 'email' || ct.startsWith('DST-') || ct.startsWith('DOC-ONB-')) {
+          if (ip.emailSubject || data.title) setEmailSubject(ip.emailSubject || data.title);
+        }
+
+        setTimeout(() => { isRestoringRef.current = false; }, 200);
+      } catch (e) {
+        console.error('[load scriptId]', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   // Save state on every change (debounced via key states)
@@ -5618,8 +5700,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
           </div>
       )}
 
-      {/* -- Kết quả -- */}
-      {output && (
+      {/* -- Kết quả -- 2026-05-13: always render so user can paste content directly even on fresh page. */}
+      <div ref={resultSectionRef}>
         <Card variant="glass" padding="md">
           {/* Toolbar */}
           <div className="flex items-center justify-between mb-3">
@@ -5628,6 +5710,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
               <span className="text-txt-3 text-xs">{resultCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
               {savedId && (
                 <Badge text="Đã lưu tự động" variant="success" size="sm" dot />
+              )}
+              {!output && (
+                <Badge text="Trống — paste vào textarea bên dưới" variant="info" size="sm" />
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -7080,8 +7165,34 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
               </div>
             </div>
           )}
+
+          {/* Empty-state paste textarea — visible when output is empty. 2026-05-13.
+              User can paste any content (markdown/HTML/image prompts) and the UI auto-detects
+              prompt cards via the existing `output.includes('prompt cho ')` block below. */}
+          {!output && !resultCollapsed && (
+            <div className="space-y-2 mt-2">
+              <label className="text-xs text-txt-3 block">
+                Paste nội dung vào textarea bên dưới để xem prompt cards + format đẹp:
+              </label>
+              <textarea
+                value=""
+                onChange={(e) => {
+                  setOutput(e.target.value);
+                  setGenerationDone(true);
+                }}
+                placeholder={`Paste output (markdown / HTML / image prompts) vào đây...\n\nVí dụ:\n# Tiêu đề\n\nNội dung bài viết...\n\n===IMAGE_PROMPT===\nPROMPT CHO ẢNH 1\n=========================================\n[prompt content]\n\nPROMPT CHO ẢNH 2\n=========================================\n[prompt content]`}
+                className="w-full min-h-[280px] p-3 rounded-card bg-glass-bg border border-border text-sm text-txt font-mono leading-relaxed resize-y focus:outline-none focus:border-gold/40 focus:ring-1 focus:ring-gold/20 placeholder:text-txt-3"
+                spellCheck={false}
+                autoFocus
+              />
+              <p className="text-xxs text-txt-3">
+                💡 Sau khi paste, prompt cards sẽ tự hiển thị nếu nội dung có "PROMPT CHO ẢNH N".
+                Cũng có thể edit output sau đó qua nút "Sửa" ở toolbar.
+              </p>
+            </div>
+          )}
         </Card>
-      )}
+      </div>{/* end ref={resultSectionRef} */}
       </div>{/* end main content */}
     </div>
   );
