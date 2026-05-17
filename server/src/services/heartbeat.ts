@@ -247,8 +247,8 @@ const heartbeatRunListColumns = {
   logBytes: heartbeatRuns.logBytes,
   logSha256: heartbeatRuns.logSha256,
   logCompressed: heartbeatRuns.logCompressed,
-  stdoutExcerpt: sql<string | null>`NULL`.as("stdoutExcerpt"),
-  stderrExcerpt: sql<string | null>`NULL`.as("stderrExcerpt"),
+  stdoutExcerpt: heartbeatRuns.stdoutExcerpt,
+  stderrExcerpt: heartbeatRuns.stderrExcerpt,
   errorCode: heartbeatRuns.errorCode,
   externalRunId: heartbeatRuns.externalRunId,
   processPid: heartbeatRuns.processPid,
@@ -261,7 +261,9 @@ const heartbeatRunListColumns = {
 } as const;
 
 function appendExcerpt(prev: string, chunk: string) {
-  return appendWithCap(prev, chunk, MAX_EXCERPT_BYTES);
+  const combined = prev + chunk;
+  if (combined.length <= MAX_EXCERPT_BYTES) return combined;
+  return "..." + combined.slice(-(MAX_EXCERPT_BYTES - 3));
 }
 
 function normalizeMaxConcurrentRuns(value: unknown) {
@@ -879,8 +881,102 @@ function resolveNextSessionState(input: {
     legacySessionId,
   };
 }
+/**
+ * Xây dựng comment Markdown tóm tắt một run để inject vào issue thread.
+ * Luôn trả về string (ít nhất là header status) — không trả null trừ khi
+ * outcome là "succeeded" mà không có bất kỳ nội dung nào để hiển thị.
+ */
+function buildRunSummaryComment(input: {
+  run: { id: string; createdAt: Date | string; finishedAt?: Date | string | null };
+  agentId: string;
+  outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
+  resultJson: Record<string, unknown> | null;
+  errorMessage: string | null;
+  agentName: string;
+  stdoutExcerpt?: string | null;
+  stderrExcerpt?: string | null;
+}): string | null {
+  const { run, agentId, outcome, resultJson, errorMessage, agentName, stdoutExcerpt, stderrExcerpt } = input;
+  const runIdShort = run.id.slice(0, 8);
+
+  // Ưu tiên: resultJson.summary > resultJson.result > resultJson.message > tail of stdoutExcerpt
+  // Lấy ĐUÔI (tail) của stdout vì đó là phần agent kết luận/summary
+  let summaryText: string | null = null;
+  let isRawLog = false;
+
+  /** Normalize: unescape literal \r\n và \n thành newline thật */
+  const unescapeNewlines = (s: string) =>
+    s.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+
+  /** Strip // prefix (code-comment style lines từ Claude agents) */
+  const stripDoubleSlash = (s: string) => s.replace(/^\/\/\s?/gm, "");
+
+  if (typeof resultJson?.summary === "string" && resultJson.summary.trim()) {
+    summaryText = unescapeNewlines(resultJson.summary.trim());
+  } else if (typeof resultJson?.result === "string" && resultJson.result.trim()) {
+    summaryText = unescapeNewlines(resultJson.result.trim());
+  } else if (typeof resultJson?.message === "string" && resultJson.message.trim()) {
+    summaryText = unescapeNewlines(resultJson.message.trim());
+  } else if (typeof stdoutExcerpt === "string" && stdoutExcerpt.trim()) {
+    summaryText = unescapeNewlines(stdoutExcerpt.trim());
+    isRawLog = true;
+  }
+
+  // Với succeeded mà không có content gì → skip để tránh spam comment rỗng
+  if (outcome === "succeeded" && !summaryText) return null;
+
+  const outcomeEmoji =
+    outcome === "succeeded" ? "✅" :
+    outcome === "cancelled" ? "⏹️" :
+    outcome === "timed_out" ? "⏱️" : "❌";
+
+  const outcomeLabel =
+    outcome === "succeeded" ? "Hoàn thành" :
+    outcome === "cancelled" ? "Đã huỷ" :
+    outcome === "timed_out" ? "Hết thời gian" : "Thất bại";
+
+  const lines: string[] = [];
+  lines.push(`${outcomeEmoji} **${agentName}** ${outcomeLabel} — run \`${runIdShort}\``);
+  // Metadata tag ẩn — UI sẽ parse để render Run ID badge với link
+  lines.push(`<!-- paperclip-run:${run.id} agent:${agentId} -->`);
+  lines.push("");
+
+  if (summaryText) {
+    let display = summaryText;
+
+    // Strip '// ' prefix từ mọi source (Claude agent hay stdout đều có thể có)
+    display = stripDoubleSlash(display);
+
+    // Nếu quá dài → hiện ĐUÔI (tail) — nơi agent kết luận/summary thường nằm ở cuối
+    if (display.length > 2000) {
+      const tail = display.slice(-2000);
+      const firstNewline = tail.indexOf("\n");
+      const cleanTail = firstNewline !== -1 ? tail.slice(firstNewline + 1) : tail;
+      display = "…_(bỏ qua phần đầu — xem đầy đủ tại trang Runs)_\n\n" + cleanTail;
+    }
+
+    if (isRawLog) {
+      // Wrap raw stdout trong code block nếu chưa có
+      if (!display.includes("```")) {
+        display = "```text\n" + display.trim() + "\n```";
+      }
+    }
+
+    lines.push(display);
+  }
+
+  if (errorMessage && outcome !== "succeeded") {
+    const errDisplay = stderrExcerpt?.trim() || errorMessage;
+    lines.push("");
+    lines.push(`> **Lỗi:** ${errDisplay.slice(-400)}`);
+  }
+
+  return lines.join("\n");
+}
+
 
 export function heartbeatService(db: Db) {
+
   const instanceSettings = instanceSettingsService(db);
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
@@ -2003,10 +2099,20 @@ export function heartbeatService(db: Db) {
       .where(eq(heartbeatRuns.status, "queued"));
 
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
-    for (const agentId of agentIds) {
-      await startNextQueuedRunForAgent(agentId);
+    for (let i = 0; i < agentIds.length; i++) {
+      // GEMRAL FIX 2026-05-10: Stagger subprocess spawning across agents.
+      // executeRun() inside startNextQueuedRunForAgent is fire-and-forget (void),
+      // so even though we await the claim step, all subprocesses still end up
+      // spawning nearly simultaneously. With 4+ agents each making their first
+      // Gemini API call at the same instant, Google's burst rate limiter fires
+      // "Reset after 0s" (429). A 2s gap between agents prevents the burst.
+      if (i > 0) {
+        await new Promise<void>((res) => setTimeout(res, 2000));
+      }
+      await startNextQueuedRunForAgent(agentIds[i]!);
     }
   }
+
 
   async function updateRuntimeState(
     agent: typeof agents.$inferSelect,
@@ -2913,10 +3019,46 @@ export function heartbeatService(db: Db) {
           },
         });
         await releaseIssueExecutionAndPromote(finalizedRun);
+
+        // Auto-inject run summary vào issue comment thread để user không cần
+        // switch sang Runs tab để đọc kết quả. Chỉ fire khi có issueId và có nội dung.
+        logger.info(
+          { runId: finalizedRun.id, issueId, outcome, stdoutLen: stdoutExcerpt.length, resultJsonKeys: Object.keys(adapterResult.resultJson ?? {}) },
+          "heartbeat: run-summary injection check",
+        );
+        if (issueId) {
+          try {
+            const summaryComment = buildRunSummaryComment({
+              run: finalizedRun,
+              agentId: agent.id,
+              outcome,
+              resultJson: adapterResult.resultJson ?? null,
+              errorMessage: adapterResult.errorMessage ?? null,
+              agentName: agent.name,
+              // Dùng local excerpt variable (accumulated in onLog) thay vì
+              // finalizedRun.stdoutExcerpt vì runColumns hardcode NULL cho field đó.
+              stdoutExcerpt: stdoutExcerpt || null,
+              stderrExcerpt: stderrExcerpt || null,
+            });
+            if (summaryComment) {
+              await issuesSvc.addComment(issueId, summaryComment, { agentId: agent.id });
+              logger.info({ runId: finalizedRun.id, issueId }, "heartbeat: run-summary comment posted OK");
+            } else {
+              logger.info({ runId: finalizedRun.id, issueId, outcome }, "heartbeat: buildRunSummaryComment returned null — skip post");
+            }
+          } catch (err) {
+            logger.warn(
+              { err, runId: finalizedRun.id, issueId },
+              "heartbeat: failed to post run-summary comment to issue",
+            );
+          }
+        }
       }
+
 
       if (finalizedRun) {
         await updateRuntimeState(agent, finalizedRun, adapterResult, {
+
           legacySessionId: nextSessionState.legacySessionId,
         }, normalizedUsage);
         if (taskKey) {
@@ -4205,6 +4347,11 @@ export function heartbeatService(db: Db) {
       }
 
       // Pass 2: enqueue wakeups, skipping agents that only have blocked tasks.
+      // GEMRAL FIX 2026-05-10: Stagger enqueues across agents that fire in the same tick.
+      // Without this, all agents whose cron/interval elapsed simultaneously have their
+      // executeRun() kicked off nearly at the same instant, causing Google Gemini API
+      // burst-rate 429 errors ("Reset after 0s"). The 2 s gap matches resumeQueuedRuns.
+      let enqueuedInThisTick = 0;
       for (const { agent, policy, reason } of pendingFires) {
         const flags = agentTaskFlags.get(agent.id) ?? { hasActionable: false, hasBlocked: false };
 
@@ -4217,6 +4364,12 @@ export function heartbeatService(db: Db) {
           );
           skipped += 1;
           continue;
+        }
+
+        // Stagger: wait 2 s before the 2nd, 3rd, ... enqueue in this tick so
+        // their subprocess spawns don't all hit the Gemini API simultaneously.
+        if (enqueuedInThisTick > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
         }
 
         const run = await enqueueWakeup(agent.id, {
@@ -4233,7 +4386,7 @@ export function heartbeatService(db: Db) {
             intervalSec: policy.cron ? undefined : policy.intervalSec,
           },
         });
-        if (run) enqueued += 1;
+        if (run) { enqueued += 1; enqueuedInThisTick += 1; }
         else skipped += 1;
       }
 

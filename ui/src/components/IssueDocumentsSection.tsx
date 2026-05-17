@@ -41,21 +41,25 @@ type DocumentConflictState = {
 const DOCUMENT_AUTOSAVE_DEBOUNCE_MS = 900;
 const DOCUMENT_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const getFoldedDocumentsStorageKey = (issueId: string) => `paperclip:issue-document-folds:${issueId}`;
+const getFoldedDocumentsInitializedKey = (issueId: string) => `paperclip:issue-document-folds-init:${issueId}`;
 
-function loadFoldedDocumentKeys(issueId: string) {
-  if (typeof window === "undefined") return [];
+function loadFoldedDocumentKeys(issueId: string): { keys: string[]; hasInitialized: boolean } {
+  if (typeof window === "undefined") return { keys: [], hasInitialized: false };
   try {
+    const hasInitialized = window.localStorage.getItem(getFoldedDocumentsInitializedKey(issueId)) === "1";
     const raw = window.localStorage.getItem(getFoldedDocumentsStorageKey(issueId));
-    if (!raw) return [];
+    if (!raw) return { keys: [], hasInitialized };
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    const keys = Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    return { keys, hasInitialized };
   } catch {
-    return [];
+    return { keys: [], hasInitialized: false };
   }
 }
 
 function saveFoldedDocumentKeys(issueId: string, keys: string[]) {
   if (typeof window === "undefined") return;
+  window.localStorage.setItem(getFoldedDocumentsInitializedKey(issueId), "1");
   window.localStorage.setItem(getFoldedDocumentsStorageKey(issueId), JSON.stringify(keys));
 }
 
@@ -117,7 +121,8 @@ export function IssueDocumentsSection({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [documentConflict, setDocumentConflict] = useState<DocumentConflictState | null>(null);
-  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => loadFoldedDocumentKeys(issue.id));
+  const [foldedDocumentsInitialized, setFoldedDocumentsInitialized] = useState<boolean>(() => loadFoldedDocumentKeys(issue.id).hasInitialized);
+  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => loadFoldedDocumentKeys(issue.id).keys);
   const [autosaveDocumentKey, setAutosaveDocumentKey] = useState<string | null>(null);
   const [copiedDocumentKey, setCopiedDocumentKey] = useState<string | null>(null);
   const [highlightDocumentKey, setHighlightDocumentKey] = useState<string | null>(null);
@@ -504,7 +509,9 @@ export function IssueDocumentsSection({
   };
 
   useEffect(() => {
-    setFoldedDocumentKeys(loadFoldedDocumentKeys(issue.id));
+    const loaded = loadFoldedDocumentKeys(issue.id);
+    setFoldedDocumentsInitialized(loaded.hasInitialized);
+    setFoldedDocumentKeys(loaded.keys);
   }, [issue.id]);
 
   useEffect(() => {
@@ -514,13 +521,21 @@ export function IssueDocumentsSection({
   useEffect(() => {
     const validKeys = new Set(sortedDocuments.map((doc) => doc.key));
     setFoldedDocumentKeys((current) => {
+      // Nếu chưa khởi tạo (lần đầu vào issue), mặc định đóng TẤT CẢ document
+      if (!foldedDocumentsInitialized && sortedDocuments.length > 0) {
+        const allKeys = sortedDocuments.map((doc) => doc.key);
+        setFoldedDocumentsInitialized(true);
+        saveFoldedDocumentKeys(issue.id, allKeys);
+        return allKeys;
+      }
+      // Lần sau: chỉ lọc bỏ key đã xóa khỏi danh sách
       const next = current.filter((key) => validKeys.has(key));
       if (next.length !== current.length) {
         saveFoldedDocumentKeys(issue.id, next);
       }
       return next;
     });
-  }, [issue.id, sortedDocuments]);
+  }, [issue.id, sortedDocuments, foldedDocumentsInitialized]);
 
   useEffect(() => {
     saveFoldedDocumentKeys(issue.id, foldedDocumentKeys);
@@ -615,6 +630,19 @@ export function IssueDocumentsSection({
     );
   };
 
+  const allDocumentKeys = sortedDocuments.map((doc) => doc.key);
+  const allFolded = allDocumentKeys.length > 0 && allDocumentKeys.every((key) => foldedDocumentKeys.includes(key));
+
+  const toggleAllDocuments = () => {
+    if (allFolded) {
+      // Mở tất cả
+      setFoldedDocumentKeys([]);
+    } else {
+      // Đóng tất cả
+      setFoldedDocumentKeys(allDocumentKeys);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {isEmpty && !draft?.isNew ? (
@@ -628,7 +656,20 @@ export function IssueDocumentsSection({
         </div>
       ) : (
         <div className="flex items-center justify-between gap-2 min-w-0">
-          <h3 className="text-sm font-medium text-muted-foreground shrink-0">Documents</h3>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 shrink-0 group"
+            onClick={toggleAllDocuments}
+            aria-label={allFolded ? "Expand all documents" : "Collapse all documents"}
+            title={allFolded ? "Expand all documents" : "Collapse all documents"}
+          >
+            {allFolded
+              ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
+              : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />}
+            <h3 className="text-sm font-medium text-muted-foreground group-hover:text-foreground transition-colors">
+              Documents{sortedDocuments.length > 0 ? ` (${sortedDocuments.length})` : ""}
+            </h3>
+          </button>
           <div className="flex items-center gap-2 min-w-0">
             {extraActions}
             <Button variant="outline" size="sm" onClick={beginNewDocument} className="shrink-0">
@@ -734,7 +775,21 @@ export function IssueDocumentsSection({
           const displayedBody = selectedHistoricalRevision?.body ?? activeDraft?.body ?? doc.body;
           const displayedRevisionNumber = selectedHistoricalRevision?.revisionNumber ?? doc.latestRevisionNumber;
           const displayedUpdatedAt = selectedHistoricalRevision?.createdAt ?? doc.updatedAt;
-          const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim() && !titlesMatchKey(displayedTitle, doc.key);
+          // Hiển thị title nếu không phải plan key VÀ có title (bất kể title có trùng với key hay không)
+          const showTitle = !isPlanKey(doc.key) && !!displayedTitle.trim();
+
+          // Khi không có title và đang đóng → hiện preview dòng đầu tiên của body
+          const previewText =
+            !showTitle && isFolded && displayedBody
+              ? (displayedBody
+                  .replace(/^#{1,6}\s+/gm, "") // bỏ heading markers
+                  .replace(/[*_`~\[\]]/g, "")  // bỏ markdown inline
+                  .split("\n")
+                  .map((l) => l.trim())
+                  .find((l) => l.length > 0)
+                  ?.slice(0, 130) ?? "")
+              : "";
+          const showPreview = !!previewText;
 
           return (
             <div
@@ -821,7 +876,14 @@ export function IssueDocumentsSection({
                       updated {relativeTime(displayedUpdatedAt)}
                     </span>
                   </div>
-                  {showTitle && <p className="mt-2 text-sm font-medium">{displayedTitle}</p>}
+                  {/* Title luôn hiển thị bên dưới header bất kể document đang đóng hay mở */}
+                  {showTitle && (
+                    <p className="mt-1.5 text-sm font-medium text-foreground leading-snug">{displayedTitle}</p>
+                  )}
+                  {/* Preview dòng đầu body khi không có title và đang đóng */}
+                  {showPreview && (
+                    <p className="mt-1 text-xs text-muted-foreground leading-snug truncate italic">{previewText}…</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {!isHistoricalPreview && !activeDraft && !activeConflict && (

@@ -454,8 +454,14 @@ export function Dashboard() {
                                 ) : null;
                               })()}
                             <span className="text-xs text-muted-foreground sm:hidden">&middot;</span>
-                            <span className="text-xs text-muted-foreground shrink-0 sm:order-last">
-                              {timeAgo(issue.updatedAt)}
+                            <span className="text-[11px] text-muted-foreground shrink-0 sm:order-last min-w-[110px]">
+                              {new Date(issue.updatedAt).toLocaleString("vi-VN", {
+                                day: "2-digit",
+                                month: "2-digit",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
                             </span>
                           </span>
                         </span>
@@ -505,8 +511,14 @@ export function Dashboard() {
                               {event.action?.replace(/_/g, ".")} <strong>{entityLabel}</strong>
                             </span>
                           </div>
-                          <span className="text-xs text-muted-foreground shrink-0">
-                            {timeAgo(event.createdAt)}
+                          <span className="text-[11px] text-muted-foreground shrink-0 min-w-[110px] text-right">
+                            {new Date(event.createdAt).toLocaleString("vi-VN", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </span>
                         </div>
                       </Link>

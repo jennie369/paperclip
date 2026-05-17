@@ -141,6 +141,12 @@ const OUTPUT_TYPE_OPTIONS = [
 const DOC_SOP_OPTIONS = [
   { value: 'DOC-MKT-001', label: 'Brand Overview Kit', group: 'Marketing' },
   { value: 'DOC-MKT-006', label: 'Social Media Kit', group: 'Marketing' },
+  { value: 'DOC-CRS-001', label: 'Khóa 7 Ngày Tần Số Gốc (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-002', label: 'Khóa Tần Số Tình Yêu (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-003', label: 'Khóa Tư Duy Triệu Phú (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-004', label: 'Trading Starter (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-005', label: 'Trading Tier 1-2-3 (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-006', label: 'So Sánh Tất Cả Khóa Học (Dài)', group: 'Khóa học' },
   { value: 'DOC-CRS-001S', label: 'Khóa 7 Ngày Tần Số Gốc (Ngắn)', group: 'Khóa học' },
   { value: 'DOC-CRS-002S', label: 'Khóa Tần Số Tình Yêu (Ngắn)', group: 'Khóa học' },
   { value: 'DOC-CRS-003S', label: 'Khóa Tư Duy Triệu Phú (Ngắn)', group: 'Khóa học' },
@@ -297,6 +303,10 @@ const EMAIL_TYPE_OPTIONS = [
   { value: 'seasonal', label: 'Theo mùa (Tết, Valentine, Trung Thu...)' },
   { value: 'weekly_digest', label: 'Weekly Digest (Tổng hợp tuần)' },
   { value: 'personal_note', label: 'Thư cá nhân từ Jennie' },
+  { value: 'lead_magnet', label: 'Lead Magnets' },
+  { value: 'magazine_article', label: 'Magazine / Article' },
+  { value: 'prototype', label: 'Prototype' },
+  { value: 'jennies_hobbies', label: "Jennie's Hobbies" },
 ];
 
 // 2026-05-06 — Resend MCP migration v3 (Stage A.17): segment values legacy → 5 plan v3 segments.
@@ -322,6 +332,57 @@ const EMAIL_TYPE_TO_TEMPLATE = {
   seasonal: { template: 'custom', segment: 'active_customer' },
   weekly_digest: { template: 'daily_newsletter_general', segment: 'active_customer' },
   personal_note: { template: 'vip-personal-touch', segment: 'vip_high_spender' },
+  lead_magnet: { template: 'custom', segment: 'new_signup' },
+  magazine_article: { template: 'custom', segment: 'active_customer' },
+  prototype: { template: 'custom', segment: 'active_customer' },
+  jennies_hobbies: { template: 'custom', segment: 'active_customer' },
+};
+
+// 2026-05-14 — Sub-options per emailType. Hiển thị dạng checkbox nhóm sau khi chọn emailType.
+// Mỗi entry: { value, label, skillFile } — value dùng để gửi lên input_params,
+// skillFile là knowledge file tương ứng trong batch_processor.py.
+const EMAIL_TYPE_SUBOPTIONS = {
+  lead_magnet: [
+    { value: 'lm_cheat_sheet',    label: 'Cheat sheet',                               skillFile: 'SKILL_Lead_Magnet_Cheat_Sheet.md' },
+    { value: 'lm_checklist',      label: 'Checklist',                                 skillFile: 'SKILL_Lead_Magnet_Checklist.md' },
+    { value: 'lm_template',       label: 'Template (doc/spreadsheet/Notion)',         skillFile: 'SKILL_Lead_Magnet_Template.md' },
+    { value: 'lm_ebook',          label: 'Ebook / Guide',                             skillFile: 'SKILL_Lead_Magnet_Ebook.md' },
+    { value: 'lm_minicourse',     label: 'Mini-course (email drip)',                  skillFile: 'SKILL_Lead_Magnet_Mini_Course.md' },
+    { value: 'lm_quiz',           label: 'Quiz / Assessment',                         skillFile: 'SKILL_Lead_Magnet_Quiz.md' },
+    { value: 'lm_resource_lib',   label: 'Resource library',                          skillFile: 'SKILL_Lead_Magnet_Resource_Library.md' },
+    { value: 'lm_free_trial',     label: 'Free trial / Community access',             skillFile: 'SKILL_Lead_Magnet_Free_Trial.md' },
+    { value: 'lm_workflow',       label: 'Workflow / SOP template',                   skillFile: 'SKILL_Lead_Magnet_Workflow.md' },
+    { value: 'lm_swipe_file',     label: 'Swipe file / Copy templates',               skillFile: 'SKILL_Lead_Magnet_Swipe_File.md' },
+  ],
+  magazine_article: [
+    { value: 'mag_profile',       label: 'Profile / Chân dung nhân vật',              skillFile: 'SKILL_Magazine_Profile.md' },
+    { value: 'mag_trend',         label: 'Xu hướng / Trend report',                   skillFile: 'SKILL_Magazine_Trend.md' },
+    { value: 'mag_interview',     label: 'Phỏng vấn / Q&A',                           skillFile: 'SKILL_Magazine_Interview.md' },
+    { value: 'mag_opinion',       label: 'Opinion / Góc nhìn cá nhân',                skillFile: 'SKILL_Magazine_Opinion.md' },
+    { value: 'mag_how_to',        label: 'How-to / Hướng dẫn chuyên sâu',             skillFile: 'SKILL_Magazine_HowTo.md' },
+    { value: 'mag_case_study',    label: 'Case study / Phân tích case',               skillFile: 'SKILL_Magazine_CaseStudy.md' },
+    { value: 'mag_listicle',      label: 'Listicle / Top N danh sách',                skillFile: 'SKILL_Magazine_Listicle.md' },
+    { value: 'mag_behind_scenes', label: 'Behind the scenes / Hậu trường',            skillFile: 'SKILL_Magazine_BehindScenes.md' },
+  ],
+  prototype: [
+    { value: 'proto_email_seq',   label: 'Email sequence (draft chuỗi mẫu)',           skillFile: 'SKILL_Prototype_EmailSeq.md' },
+    { value: 'proto_landing',     label: 'Landing page copy',                          skillFile: 'SKILL_Prototype_LandingPage.md' },
+    { value: 'proto_funnel',      label: 'Funnel prototype (ads → landing → email)',   skillFile: 'SKILL_Prototype_Funnel.md' },
+    { value: 'proto_script',      label: 'Video / Webinar script prototype',           skillFile: 'SKILL_Prototype_Script.md' },
+    { value: 'proto_chatbot',     label: 'Chatbot script prototype',                   skillFile: 'SKILL_Prototype_Chatbot.md' },
+    { value: 'proto_offer',       label: 'Offer stack / Pricing page copy',            skillFile: 'SKILL_Prototype_Offer.md' },
+  ],
+  jennies_hobbies: [
+    { value: 'hobby_crystal',     label: 'Crystal & Đá quý',                           skillFile: 'SKILL_Hobbies_Crystal.md' },
+    { value: 'hobby_tarot',       label: 'Tarot & Tâm linh',                            skillFile: 'SKILL_Hobbies_Tarot.md' },
+    { value: 'hobby_travel',      label: 'Du lịch & Trải nghiệm',                      skillFile: 'SKILL_Hobbies_Travel.md' },
+    { value: 'hobby_fitness',     label: 'Fitness & Sức khoẻ',                         skillFile: 'SKILL_Hobbies_Fitness.md' },
+    { value: 'hobby_fashion',     label: 'Fashion & Lifestyle',                         skillFile: 'SKILL_Hobbies_Fashion.md' },
+    { value: 'hobby_cooking',     label: 'Nấu ăn & Food',                              skillFile: 'SKILL_Hobbies_Cooking.md' },
+    { value: 'hobby_reading',     label: 'Đọc sách & Bài học cuộc sống',              skillFile: 'SKILL_Hobbies_Reading.md' },
+    { value: 'hobby_astrology',   label: 'Chiêm tinh / Astrology',                     skillFile: 'SKILL_Hobbies_Astrology.md' },
+    { value: 'hobby_journaling',  label: 'Journaling & Tự phát triển bản thân',        skillFile: 'SKILL_Hobbies_Journaling.md' },
+  ],
 };
 
 // ============================================================================
@@ -1487,6 +1548,7 @@ export default function AiGenPage() {
   // -- Email state --
   const [manualEmailHtml, setManualEmailHtml] = useState('');
   const [emailType, setEmailType] = useState('newsletter');
+  const [selectedEmailSubOptions, setSelectedEmailSubOptions] = useState([]);
   // 2026-04-19 — Auto-apply campaign defaults khi emailType đổi (Email Marketing section).
   // Placed right after emailType declaration để tránh TDZ (ReferenceError 'Cannot access before initialization').
   useEffect(() => {
@@ -1494,7 +1556,10 @@ export default function AiGenPage() {
     if (!map) return;
     if (map.template) setCampaignTemplate(map.template);
     if (map.segment) setCampaignSegment(map.segment);
+    // 2026-05-14 — Reset sub-options khi đổi emailType
+    setSelectedEmailSubOptions([]);
   }, [emailType]);
+
 
   // 2026-04-19 Cách B — Drip Override state + sequences fetch
   // V2 (2026-04-19) — overrideEmailMap thay thế selectedStepId đơn-step:
@@ -2284,7 +2349,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
             sop_id: docId,
             topic: brief.trim() || resolvedTitle,
             title: resolvedTitle,
-            brand_voice: brandVoice || 'jennie',
+            brand_voice: brandVoice,
             pillar: resolvedPillar,
             track: resolvedTrack,
             persona: persona && persona !== 'auto' ? persona : undefined,
@@ -2618,6 +2683,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         writingMode: writingMode !== 'auto' ? writingMode : undefined,
         brandVoice,
         contentTopic: isSocialPost ? socialTopic : undefined,
+        emailType: isEmail ? emailType : undefined,
+        emailSubOptions: (isEmail && selectedEmailSubOptions.length > 0) ? selectedEmailSubOptions : undefined,
         onStream: (chunk) => {
           setOutput(chunk);
           setPipelineStep('processing');
@@ -3909,7 +3976,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         content_type: contentType ?? 'social_post',
         track: 'integration',
         pillar: 'lifestyle',
-        persona: (persona !== 'auto' ? persona : (brandVoice === 'generic' ? 'jennie_educator' : 'jennie_mentor')),
+        persona: persona !== 'auto' ? persona : undefined,
         writing_mode: (writingMode !== 'auto' ? writingMode : 'mode_1_calm'),
         priority: 'medium',
         scheduled_date: calendarScheduleDate,
@@ -5032,6 +5099,69 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                 onChange={setEmailType}
                 disabled={generating}
               />
+
+              {/* ── Email Sub-options (checkbox nhóm, hiện khi emailType có sub-options) ── */}
+              {EMAIL_TYPE_SUBOPTIONS[emailType] && (
+                <div className="space-y-2 p-3 rounded-lg border border-border bg-bg-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-txt-2 uppercase tracking-wider">
+                      Chọn dạng nội dung cụ thể
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={generating}
+                        onClick={() => setSelectedEmailSubOptions(EMAIL_TYPE_SUBOPTIONS[emailType].map((o) => o.value))}
+                        className="text-[11px] text-blue hover:text-blue/80 disabled:opacity-50"
+                      >
+                        Chọn tất cả
+                      </button>
+                      <span className="text-txt-4 text-[11px]">·</span>
+                      <button
+                        type="button"
+                        disabled={generating}
+                        onClick={() => setSelectedEmailSubOptions([])}
+                        className="text-[11px] text-txt-3 hover:text-txt-2 disabled:opacity-50"
+                      >
+                        Bỏ chọn
+                      </button>
+                      <span className="ml-1 text-[11px] text-txt-3">
+                        Đã chọn: {selectedEmailSubOptions.length}/{EMAIL_TYPE_SUBOPTIONS[emailType].length}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1">
+                    {EMAIL_TYPE_SUBOPTIONS[emailType].map((opt) => {
+                      const checked = selectedEmailSubOptions.includes(opt.value);
+                      return (
+                        <label
+                          key={opt.value}
+                          className={`flex items-center gap-2.5 px-3 py-2 rounded-md cursor-pointer transition-all select-none ${
+                            checked
+                              ? 'bg-blue/10 border border-blue/30 text-txt'
+                              : 'bg-bg-5 border border-transparent text-txt-2 hover:border-border hover:text-txt'
+                          } ${generating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={generating}
+                            checked={checked}
+                            onChange={() =>
+                              setSelectedEmailSubOptions((prev) =>
+                                prev.includes(opt.value)
+                                  ? prev.filter((v) => v !== opt.value)
+                                  : [...prev, opt.value]
+                              )
+                            }
+                            className="w-3.5 h-3.5 accent-blue"
+                          />
+                          <span className="text-[13px]">{opt.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-txt-2 mb-1.5">Tiêu đề email (Subject)</label>

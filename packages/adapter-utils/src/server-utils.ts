@@ -1055,7 +1055,6 @@ export async function runChildProcess(
     for (const key of GEMINI_API_KEY_VARS) {
       delete rawMerged[key];
     }
-    rawMerged["GOOGLE_GENAI_USE_GCA"] = "true";
 
     const mergedEnv = ensurePathInEnv(rawMerged);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv)

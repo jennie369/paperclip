@@ -1,2 +1,2 @@
-export { default as zaloPersonalRoutes, restoreChannels } from './routes';
-export { ZaloPersonalChannel } from './channel';
+export { default as zaloPersonalRoutes, restoreChannels } from './routes.js';
+export { ZaloPersonalChannel } from './channel.js';

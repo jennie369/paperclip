@@ -57,6 +57,7 @@ import {
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { runGeminiLogin } from "@paperclipai/adapter-gemini-local/server";
 import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
 import {
   loadDefaultAgentInstructionsBundle,
@@ -1734,6 +1735,28 @@ export function agentRoutes(db: Db) {
     const patchData = { ...(req.body as Record<string, unknown>) };
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
+
+    // GEM-heartbeat-sched-fix: If the heartbeat schedule (cron/intervalSec) is changing,
+    // reset lastHeartbeatAt to now(). Without this, tickTimers uses the old baseline
+    // (e.g. lastHeartbeatAt = 3 hours ago) and computes nextCronTick(newCron, baseline)
+    // as a time that has already passed → immediate spurious wakeup on the very next tick.
+    const incomingRuntimeConfig = asRecord(patchData.runtimeConfig);
+    const incomingHeartbeat = asRecord(incomingRuntimeConfig?.heartbeat);
+    if (incomingHeartbeat) {
+      const existingHeartbeat = asRecord(
+        asRecord(existing.runtimeConfig)?.heartbeat,
+      ) ?? {};
+      const scheduleChanged =
+        (incomingHeartbeat.cronExpression !== undefined &&
+          incomingHeartbeat.cronExpression !== existingHeartbeat.cronExpression) ||
+        (incomingHeartbeat.intervalSec !== undefined &&
+          incomingHeartbeat.intervalSec !== existingHeartbeat.intervalSec);
+      if (scheduleChanged) {
+        // Reset the heartbeat baseline so the new schedule fires from "now", not "last run".
+        (patchData as Record<string, unknown>).lastHeartbeatAt = new Date();
+      }
+    }
+
     if (Object.prototype.hasOwnProperty.call(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {
@@ -2084,6 +2107,37 @@ export function agentRoutes(db: Db) {
     const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
     const result = await runClaudeLogin({
       runId: `claude-login-${randomUUID()}`,
+      agent: {
+        id: agent.id,
+        companyId: agent.companyId,
+        name: agent.name,
+        adapterType: agent.adapterType,
+        adapterConfig: agent.adapterConfig,
+      },
+      config: runtimeConfig,
+    });
+
+    res.json(result);
+  });
+
+  router.post("/agents/:id/gemini-login", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+    if (agent.adapterType !== "gemini_local") {
+      res.status(400).json({ error: "Login is only supported for gemini_local agents" });
+      return;
+    }
+
+    const config = asRecord(agent.adapterConfig) ?? {};
+    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
+    const result = await runGeminiLogin({
+      runId: `gemini-login-${randomUUID()}`,
       agent: {
         id: agent.id,
         companyId: agent.companyId,

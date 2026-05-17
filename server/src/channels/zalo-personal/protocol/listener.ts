@@ -7,8 +7,8 @@
 import { EventEmitter } from 'events';
 import * as https from 'https';
 import * as crypto from 'crypto';
-import { ZaloSession, WS_CMD, ZALO_API } from './message';
-import { decryptEnvelope } from './crypto';
+import { ZaloSession, WS_CMD, ZALO_API } from './message.js';
+import { decryptEnvelope } from './crypto.js';
 
 const DEFAULT_WS_URLS = [
   'wss://ws1-msg.chat.zalo.me',

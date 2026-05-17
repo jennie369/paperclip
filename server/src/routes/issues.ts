@@ -1266,9 +1266,13 @@ export function issueRoutes(db: Db, storage: StorageService) {
       // the issue via /agents/me/inbox-lite (which filters to todo|in_progress|blocked) and
       // escalation breaks silently. SKILL.md tells the assignee to honor PAPERCLIP_TASK_ID,
       // so the wake context + env var will route them straight to the delegated issue.
+      // Never wake the assignee when the issue is already closed (cancelled / done).
+      // Reassigning a cancelled issue is a board housekeeping operation — no work for the agent.
+      const isIssueClosed = issue.status === "cancelled" || issue.status === "done";
       const shouldWakeOnAssigneeChange =
         assigneeChanged &&
         issue.assigneeAgentId &&
+        !isIssueClosed &&
         (issue.status !== "backlog" || actor.actorType === "agent");
       if (shouldWakeOnAssigneeChange) {
         wakeups.set(issue.assigneeAgentId!, {

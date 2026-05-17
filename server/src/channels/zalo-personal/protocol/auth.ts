@@ -2,9 +2,9 @@
 
 import axios from 'axios';
 import * as crypto from 'crypto';
-import { ZaloCookieManager } from './cookies';
-import { ZaloCredentials, ZaloLoginInfo, ZaloSession, ZALO_API } from './message';
-import { buildEncryptedApiParams, decryptAESCBC } from './crypto';
+import { ZaloCookieManager } from './cookies.js';
+import { ZaloCredentials, ZaloLoginInfo, ZaloSession, ZALO_API } from './message.js';
+import { buildEncryptedApiParams, decryptAESCBC } from './crypto.js';
 
 const QR_HEADERS: Record<string, string> = {
   'Accept': '*/*',
@@ -119,10 +119,10 @@ export class ZaloAuth {
       let hops = 0;
       while (url && hops < 15) {
         hops++;
-        const parsed = new URL(url);
+        const parsed = new URL(url as string);
         // Domain-filtered cookies per hop (like Go's CookieJar)
-        const cookieHeader = this.cm.buildCookieHeaderForHost(parsed.hostname);
-        const res = await axios.get(url, {
+        const cookieHeader: string = this.cm.buildCookieHeaderForHost(parsed.hostname);
+        const res: any = await axios.get(url as string, {
           headers: {
             'User-Agent': ZALO_API.USER_AGENT,
             'Cookie': cookieHeader,
@@ -133,7 +133,7 @@ export class ZaloAuth {
         });
         this.cm.collectFromResponse(res.headers);
         const sc = res.headers['set-cookie'];
-        const cookieNames = cookieHeader.split('; ').map(c => c.split('=')[0]).filter(Boolean).join(', ');
+        const cookieNames = cookieHeader.split('; ').map((c: string) => c.split('=')[0]).filter(Boolean).join(', ');
         console.log(`[ZaloAuth] checksession hop ${hops} (${res.status}) ${parsed.hostname} → sent: [${cookieNames}]${sc ? ` got: ${sc.length} cookies` : ''}`);
 
         if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.location) {
@@ -161,13 +161,13 @@ export class ZaloAuth {
       params.nretry = '0';
 
       const url = new URL('https://wpa.chat.zalo.me/api/login/getLoginInfo');
-      for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+      for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v as string);
       url.searchParams.set('zpw_ver', '665');
       url.searchParams.set('zpw_type', '30');
 
       // DOMAIN-FILTERED cookies — only send cookies matching wpa.chat.zalo.me
       const filteredCookies = this.cm.buildCookieHeaderForHost('wpa.chat.zalo.me');
-      console.log('[ZaloAuth] getLoginInfo cookies (filtered):', filteredCookies.split('; ').map(c => c.split('=')[0]).join(', '));
+      console.log('[ZaloAuth] getLoginInfo cookies (filtered):', filteredCookies.split('; ').map((c: string) => c.split('=')[0]).join(', '));
 
       const res = await axios.get(url.toString(), {
         headers: {
@@ -217,7 +217,7 @@ export class ZaloAuth {
   }
 
   buildSessionFromCookies(imei: string, loginInfo?: ZaloLoginInfo | null): { session: ZaloSession; credentials: ZaloCredentials } {
-    const cookies = this.cm.exportCookies().map(c => ({
+    const cookies = this.cm.exportCookies().map((c: any) => ({
       ...c,
       secure: true,
       httpOnly: true,
@@ -297,8 +297,8 @@ export class ZaloAuth {
 
     console.log('[ZaloAuth] Session ready:');
     console.log('[ZaloAuth]   uid:', session.uid || '(empty)');
-    console.log('[ZaloAuth]   zpw_sek:', session.cookies.some(c => c.name === 'zpw_sek'));
-    console.log('[ZaloAuth]   cookies:', session.cookies.map(c => c.name).join(', '));
+    console.log('[ZaloAuth]   zpw_sek:', session.cookies.some((c: any) => c.name === 'zpw_sek'));
+    console.log('[ZaloAuth]   cookies:', session.cookies.map((c: any) => c.name).join(', '));
     onEvent('qr_done', { uid: session.uid });
     return { session, credentials };
   }

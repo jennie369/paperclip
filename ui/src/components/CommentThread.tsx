@@ -8,6 +8,12 @@ import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySel
 import { MarkdownBody } from "./MarkdownBody";
 import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
 import { StatusBadge } from "./StatusBadge";
+
+/** Strip HTML comment metadata tag khỏi body trước khi render */
+const PAPERCLIP_META_RE = /<!--\s*paperclip-run:[a-zA-Z0-9_-]+\s+agent:[a-zA-Z0-9_-]+\s*-->/g;
+function stripPaperclipMeta(body: string): string {
+  return body.replace(PAPERCLIP_META_RE, "").trim();
+}
 import { AgentIcon } from "./AgentIconPicker";
 import { formatDateTime } from "../lib/utils";
 import { restoreSubmittedCommentDraft } from "../lib/comment-submit-draft";
@@ -255,7 +261,7 @@ function CommentCard({
         </span>
       </div>
       <div ref={contentRef}>
-        <MarkdownBody className="text-sm">{comment.body}</MarkdownBody>
+        <MarkdownBody className="text-sm">{stripPaperclipMeta(comment.body)}</MarkdownBody>
       </div>
       {hasChecklists && onAddAndReassign && !isPending && (
         <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between">

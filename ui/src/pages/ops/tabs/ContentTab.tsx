@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check, X, Calendar, Copy, Trash2, Plus, ChevronDown, ChevronUp,
-  Shield, Loader2, ExternalLink, Image, Send, Mail, FileCode, Eye
+  Shield, Loader2, ExternalLink, Image, Send, Mail, FileCode, Eye, AlignLeft
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -467,6 +467,219 @@ function getEmailSubject(script: any): string {
 }
 
 // ---------------------------------------------------------------------------
+// MetadataEditor — editable grid of all cc_scripts fields with DB column tooltips
+// ---------------------------------------------------------------------------
+
+const BLOG_CATEGORY_OPTIONS = ['Tâm Linh', 'Tài Chính', 'Sức Khỏe', 'Trading', 'Lifestyle', 'Giáo Dục', 'Âm Nhạc'];
+const PUBLISH_MODE_OPTIONS = ['immediate', 'scheduled', 'schedule2week', 'manual'];
+const ACCOUNT_OPTIONS = ['forum', 'jennie', 'profile_jennie', 'fanpage_gemral', 'ig_jennie', 'tiktok_jennie', 'youtube_gemral'];
+
+function MetaField({
+  label, dbCol, children, className,
+}: { label: string; dbCol: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`flex flex-col gap-0.5 ${className ?? ''}`}>
+      <label
+        className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/60 flex items-center gap-1 cursor-help"
+        title={`DB column: cc_scripts.${dbCol}`}
+      >
+        {label}
+        <span className="text-[8px] text-muted-foreground/30 font-normal normal-case tracking-normal">↔ {dbCol}</span>
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function MetaInput({
+  value, onCommit, placeholder, type = 'text', mono = false, validate,
+}: { value: string; onCommit: (v: string) => void; placeholder?: string; type?: string; mono?: boolean; validate?: (v: string) => string | null }) {
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { setDraft(value); setError(null); }, [value]);
+
+  const commit = () => { 
+    if (draft !== value) {
+      if (validate) {
+        const err = validate(draft);
+        if (err) {
+          setError(err);
+          return;
+        }
+      }
+      setError(null);
+      onCommit(draft); 
+    } 
+  };
+
+  return (
+    <div className="relative pb-0.5">
+      <input
+        type={type}
+        value={draft}
+        onChange={e => {
+          setDraft(e.target.value);
+          if (error && validate) setError(validate(e.target.value));
+        }}
+        onBlur={commit}
+        onKeyDown={e => { 
+          if (e.key === 'Enter') { 
+            commit(); 
+            if (!validate || !validate(draft)) (e.target as HTMLInputElement).blur(); 
+          } 
+          if (e.key === 'Escape') { 
+            setDraft(value); 
+            setError(null); 
+          } 
+        }}
+        placeholder={placeholder}
+        className={`w-full text-[11px] px-2 py-1 border rounded bg-white focus:outline-none focus:ring-1 ${error ? 'border-destructive focus:ring-destructive/30' : 'focus:ring-primary/30'} ${mono ? 'font-mono' : ''}`}
+      />
+      {error && <div className="absolute top-full mt-0.5 left-0 text-[9px] text-destructive leading-tight">{error}</div>}
+    </div>
+  );
+}
+
+function MetaSelect({
+  value, options, onCommit, allowCustom = false,
+}: { value: string; options: string[]; onCommit: (v: string) => void; allowCustom?: boolean }) {
+  return (
+    <select
+      value={options.includes(value) ? value : (allowCustom ? '__custom__' : '')}
+      onChange={e => { if (e.target.value !== '__custom__') onCommit(e.target.value); }}
+      className="w-full text-[11px] px-2 py-1 border rounded bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
+    >
+      {!options.includes(value) && value && <option value={value}>{value}</option>}
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+
+function MetadataEditor({
+  script, onUpdate, wordCount, readTime,
+}: { script: any; onUpdate: (patch: Record<string, any>) => Promise<void>; wordCount: number; readTime: number }) {
+  const [open, setOpen] = useState(false);
+  const meta = script.metadata || {};
+
+  const save = (field: string) => (val: string) => onUpdate({ [field]: val || null });
+  const saveArr = (field: string) => (val: string) =>
+    onUpdate({ [field]: val ? val.split(',').map((s: string) => s.trim()).filter(Boolean) : null });
+
+  return (
+    <div className="rounded-lg border bg-white overflow-hidden">
+      {/* Header row — always visible summary + toggle */}
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-muted/30 transition-colors"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+          <span className="font-mono font-semibold text-zinc-700">{script.id?.substring(0, 8)}…</span>
+          <span className="opacity-40">·</span>
+          <span>{wordCount} từ · ~{readTime} phút</span>
+          {script.content_type && <><span className="opacity-40">·</span><span className="font-mono bg-zinc-100 px-1 rounded">{script.content_type}</span></>}
+          {script.pillar && <><span className="opacity-40">·</span><span>{script.pillar}</span></>}
+          {script.brand_voice && <><span className="opacity-40">·</span><span>Voice: {script.brand_voice}</span></>}
+          {script.blog_category && <><span className="opacity-40">·</span><span>{script.blog_category}</span></>}
+          {script.posted_account && <><span className="opacity-40">·</span><span className="text-blue-500">{script.posted_account}</span></>}
+        </div>
+        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {/* Collapsible detail grid */}
+      {open && (
+        <div className="border-t px-3 py-3 grid grid-cols-2 gap-x-4 gap-y-3" onClick={e => e.stopPropagation()}>
+          {/* Row 1 */}
+          <MetaField label="Trạng thái" dbCol="status">
+            <MetaSelect value={script.status || ''} options={STATUS_OPTIONS} onCommit={save('status')} />
+          </MetaField>
+          <MetaField label="Content Type" dbCol="content_type">
+            <div className="flex gap-1">
+              <input
+                type="text"
+                defaultValue={script.content_type || ''}
+                onBlur={e => { if (e.target.value !== script.content_type) onUpdate({ content_type: e.target.value || null }); }}
+                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                placeholder="vd: latc, blog_post, DOC-CRS-001"
+                className="flex-1 text-[11px] px-2 py-1 border rounded-l bg-white focus:outline-none focus:ring-1 focus:ring-primary/30 font-mono"
+                title="18 enum values + DOC-XXX-NNN pattern. Hover để xem full list."
+              />
+              <select
+                className="text-[10px] px-1 border-y border-r rounded-r bg-zinc-50"
+                defaultValue=""
+                onChange={e => { if (e.target.value) onUpdate({ content_type: e.target.value }); e.target.value = ''; }}
+              >
+                <option value="">↓ pick</option>
+                {CONTENT_TYPE_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.value}</option>)}
+              </select>
+            </div>
+          </MetaField>
+
+          {/* Row 2 */}
+          <MetaField label="Pillar" dbCol="pillar">
+            <MetaSelect value={script.pillar || ''} options={PILLAR_OPTIONS} onCommit={save('pillar')} allowCustom />
+          </MetaField>
+          <MetaField label="Brand Voice" dbCol="brand_voice">
+            <MetaSelect value={script.brand_voice || ''} options={BRAND_OPTIONS} onCommit={save('brand_voice')} />
+          </MetaField>
+
+          {/* Row 3 — Blog fields */}
+          <MetaField label="Blog Category" dbCol="blog_category">
+            <MetaSelect value={script.blog_category || ''} options={BLOG_CATEGORY_OPTIONS} onCommit={save('blog_category')} allowCustom />
+          </MetaField>
+          <MetaField label="Blog Tags" dbCol="blog_tags">
+            <MetaInput
+              value={(script.blog_tags || []).join(', ')}
+              onCommit={saveArr('blog_tags')}
+              placeholder="wealth, wellness, spiritual (cách nhau dấu phẩy)"
+            />
+          </MetaField>
+
+          {/* Row 4 */}
+          <MetaField label="Slug" dbCol="slug" className={open ? "mb-2" : ""}>
+            <MetaInput 
+              value={script.slug || ''} 
+              onCommit={save('slug')} 
+              placeholder="vd: 7-luan-xa-tien-bac" 
+              mono 
+              validate={(v) => {
+                if (v && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v)) return "Chỉ dùng chữ thường, số, và dấu gạch ngang (-)";
+                return null;
+              }}
+            />
+          </MetaField>
+          <MetaField label="Excerpt (tóm tắt SEO)" dbCol="excerpt">
+            <MetaInput value={script.excerpt || ''} onCommit={save('excerpt')} placeholder="Tóm tắt ngắn cho SEO / meta description" />
+          </MetaField>
+
+          {/* Row 5 — Publish */}
+          <MetaField label="Posted Account" dbCol="posted_account">
+            <MetaSelect value={script.posted_account || ''} options={ACCOUNT_OPTIONS} onCommit={save('posted_account')} allowCustom />
+          </MetaField>
+          <MetaField label="Publish Mode" dbCol="publish_mode">
+            <MetaSelect value={script.publish_mode || ''} options={PUBLISH_MODE_OPTIONS} onCommit={save('publish_mode')} />
+          </MetaField>
+
+          {/* Row 6 */}
+          <MetaField label="Scheduled At" dbCol="scheduled_at">
+            <MetaInput value={script.scheduled_at ? new Date(script.scheduled_at).toISOString().slice(0, 16) : ''} onCommit={save('scheduled_at')} type="datetime-local" />
+          </MetaField>
+          <MetaField label="Track / Series" dbCol="track">
+            <MetaInput value={script.track || meta.track || ''} onCommit={save('track')} placeholder="vd: onb-trading-starter" mono />
+          </MetaField>
+
+          {/* Row 7 — Read-only stats */}
+          <MetaField label="Số từ" dbCol="word_count" className="col-span-2">
+            <span className="text-[11px] text-muted-foreground">{wordCount} từ · ~{readTime} phút đọc</span>
+          </MetaField>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ScriptExpandedPanel
 // ---------------------------------------------------------------------------
 
@@ -608,28 +821,12 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
   return (
     <div className="border-t bg-gray-50/60 space-y-4 p-4" onClick={e => e.stopPropagation()}>
 
-      {/* Metadata */}
-      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
-        {script.content_type && (
-          <span className="px-2 py-0.5 bg-zinc-100 border rounded text-[10px] font-mono uppercase">
-            {script.content_type}
-          </span>
-        )}
-        {script.track && <><span className="opacity-40">·</span><span>{script.track}</span></>}
-        {script.pillar && <><span className="opacity-40">·</span><span>{script.pillar}</span></>}
-        {(script.persona || meta.persona) && (
-          <><span className="opacity-40">·</span><span>{script.persona || meta.persona}</span></>
-        )}
-        {(script.writing_mode || meta.writing_mode) && (
-          <><span className="opacity-40">·</span><span>{script.writing_mode || meta.writing_mode}</span></>
-        )}
-        <span className="opacity-40">·</span>
-        <span>{wordCount} từ · ~{readTime} phút</span>
-        {(script.brand_voice || meta.brand_voice) && (
-          <><span className="opacity-40">·</span><span>Voice: {script.brand_voice || meta.brand_voice}</span></>
-        )}
-        <span className="ml-auto font-mono text-[10px] opacity-40">{script.id?.substring(0, 8)}…</span>
-      </div>
+      {/* ─── Metadata Editor (editable, real-time sync) ─── */}
+      <MetadataEditor script={script} onUpdate={async (patch) => {
+        try { await opsApi.updateScript(script.id, patch); inv(); } catch (e: any) {
+          pushToast({ title: `Lỗi lưu: ${e?.message || e}`, tone: 'error' });
+        }
+      }} wordCount={wordCount} readTime={readTime} />
 
       {/* Toggle + Action bar */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -881,15 +1078,17 @@ const MemoizedMarkdownPreview = memo(function MemoizedMarkdownPreview({ body, vi
 // re-render toàn bộ list mỗi khi một row được expand → fix freeze.
 // ---------------------------------------------------------------------------
 const ScriptRow = memo(function ScriptRow({
-  s, isExpanded, isSeen, customTag,
-  onToggle, onMarkSeen, onSaveCustomTag,
+  s, isExpanded, isSeen, customTag, isSelected, isFocused,
+  onToggle, onMarkSeen, onSaveCustomTag, onSelect, onContextMenu,
   approveMut, onReject, deleteMut, complianceMut,
   pushToast, navigate, inv,
 }: {
-  s: any; isExpanded: boolean; isSeen: boolean; customTag: string;
+  s: any; isExpanded: boolean; isSeen: boolean; customTag: string; isSelected?: boolean; isFocused?: boolean;
   onToggle: (id: string) => void;
   onMarkSeen: (id: string) => void;
   onSaveCustomTag: (id: string, tag: string) => void;
+  onSelect?: (id: string, checked: boolean) => void;
+  onContextMenu?: (e: React.MouseEvent, id: string) => void;
   approveMut: any; onReject: (id: string) => void; deleteMut: any; complianceMut: any;
   pushToast: any; navigate: any; inv: () => void;
 }) {
@@ -901,17 +1100,28 @@ const ScriptRow = memo(function ScriptRow({
   const fullText = s.body || s.caption || s.content || '';
 
   return (
-    <div className="hover:bg-muted/20 transition-colors">
+    <div 
+      className={`transition-colors border-l-2 ${isFocused ? 'border-l-primary bg-primary/5' : 'border-l-transparent hover:bg-muted/20'} ${isSelected ? 'bg-primary/10' : ''}`}
+      onContextMenu={(e) => onContextMenu?.(e, s.id)}
+    >
       {/* Row header */}
       <div
-        className={`p-4 cursor-pointer flex items-start justify-between gap-3 ${
-          isSeen ? 'opacity-70' : ''
+        className={`p-4 cursor-pointer flex items-start gap-3 ${
+          isSeen && !isSelected ? 'opacity-70' : ''
         }`}
         onClick={() => {
           onToggle(s.id);
           onMarkSeen(s.id);
         }}
       >
+        <div className="pt-1" onClick={e => e.stopPropagation()}>
+          <input 
+            type="checkbox" 
+            checked={!!isSelected}
+            onChange={e => onSelect?.(s.id, e.target.checked)}
+            className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+          />
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
             {isSeen && (
@@ -1228,6 +1438,12 @@ export function ContentTab() {
   // "Đã xem" tracking — localStorage: giữ qua đóng browser, reset bằng tay nếu cần
   const [seenIds, setSeenIds] = useLocalState<string[]>('contentTab.seenIds', []);
   const seenSet = useMemo(() => new Set(seenIds), [seenIds]);
+
+  // Advanced Grid States
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, scriptId: string } | null>(null);
+  const [groupBy, setGroupBy] = useSessionState<string>('contentTab.groupBy', 'none');
   const markSeen = useCallback((id: string) => {
     setSeenIds((prev) => prev.includes(id) ? prev : [...prev, id]);
   }, [setSeenIds]);
@@ -1315,6 +1531,71 @@ export function ContentTab() {
   // with proper getBoundingClientRect-based scrollMargin or container-based
   // useVirtualizer with fixed-height parent.
 
+  // Keyboard navigation & Context Menu logic
+  useEffect(() => {
+    if (!list || list.length === 0) return;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
+      
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setFocusedIndex(prev => Math.min(prev + 1, list.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setFocusedIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter' && focusedIndex >= 0) {
+        e.preventDefault();
+        const scriptId = list[focusedIndex].id;
+        handleToggle(scriptId);
+        markSeen(scriptId);
+      } else if (e.key === 'x' && focusedIndex >= 0) {
+        e.preventDefault();
+        const scriptId = list[focusedIndex].id;
+        handleSelect(scriptId, !selectedIds.has(scriptId));
+      } else if (e.key === 'a' && e.ctrlKey) {
+        e.preventDefault();
+        if (selectedIds.size === list.length) {
+          setSelectedIds(new Set());
+        } else {
+          setSelectedIds(new Set(list.map((s: any) => s.id)));
+        }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [list, focusedIndex, selectedIds]);
+
+  const handleSelect = useCallback((id: string, checked: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, scriptId: id });
+  }, []);
+  
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  const groupedList = useMemo(() => {
+    if (groupBy === 'none') return null;
+    const groups: Record<string, any[]> = {};
+    list.forEach((s: any) => {
+      const key = s[groupBy] || 'Chưa phân loại';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(s);
+    });
+    return groups;
+  }, [list, groupBy]);
+
   return (
     <div className="space-y-4">
       {/* 2026-04-18 — Jobs Queue sub-tab removed. It now lives at the top of
@@ -1344,6 +1625,17 @@ export function ContentTab() {
             <option value="trading">Trading</option>
             <option value="spiritual">Spiritual</option>
             <option value="lifestyle">Lifestyle</option>
+          </select>
+          <div className="h-6 w-px bg-border self-center" />
+          <select
+            value={groupBy}
+            onChange={e => setGroupBy(e.target.value)}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="none">Không nhóm</option>
+            <option value="status">Nhóm theo Trạng thái</option>
+            <option value="pillar">Nhóm theo Pillar</option>
+            <option value="content_type">Nhóm theo Loại nội dung</option>
           </select>
         </div>
         <div className="flex gap-2">
@@ -1503,6 +1795,73 @@ export function ContentTab() {
           </div>
         </div>
       </SimpleModal>
+
+      {/* Floating Bulk Actions Bar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white rounded-full shadow-2xl border px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5">
+          <span className="text-sm font-medium">{selectedIds.size} đã chọn</span>
+          <div className="h-4 w-px bg-border" />
+          <Button 
+            size="sm" 
+            variant="ghost" 
+            className="h-8" 
+            onClick={async () => {
+              const ids = Array.from(selectedIds);
+              for (const id of ids) await opsApi.approveScript(id);
+              setSelectedIds(new Set());
+              inv();
+              pushToast({ title: `Đã duyệt ${ids.length} script`, tone: 'success' });
+            }}
+          >
+            <Check className="w-4 h-4 mr-2" /> Duyệt hàng loạt
+          </Button>
+          <Button 
+            size="sm" 
+            variant="ghost" 
+            className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10" 
+            onClick={async () => {
+              if (!confirm(`Xóa vĩnh viễn ${selectedIds.size} script?`)) return;
+              const ids = Array.from(selectedIds);
+              for (const id of ids) await opsApi.deleteScript(id);
+              setSelectedIds(new Set());
+              inv();
+              pushToast({ title: `Đã xóa ${ids.length} script`, tone: 'info' });
+            }}
+          >
+            <Trash2 className="w-4 h-4 mr-2" /> Xóa hàng loạt
+          </Button>
+          <div className="h-4 w-px bg-border" />
+          <Button size="sm" variant="ghost" className="h-8" onClick={() => setSelectedIds(new Set())}>
+            Bỏ chọn
+          </Button>
+        </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={closeContextMenu} onContextMenu={e => { e.preventDefault(); closeContextMenu(); }} />
+          <div 
+            className="fixed z-50 min-w-48 bg-white border rounded-md shadow-lg py-1 text-sm animate-in fade-in zoom-in-95 duration-100"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <div className="px-3 py-1.5 hover:bg-muted cursor-pointer flex items-center gap-2" onClick={() => { handleToggle(contextMenu.scriptId); closeContextMenu(); }}>
+              <Eye className="w-4 h-4" /> Xem chi tiết
+            </div>
+            <div className="px-3 py-1.5 hover:bg-muted cursor-pointer flex items-center gap-2" onClick={() => { handleSelect(contextMenu.scriptId, !selectedIds.has(contextMenu.scriptId)); closeContextMenu(); }}>
+              <Check className="w-4 h-4" /> Chọn / Bỏ chọn
+            </div>
+            <div className="h-px bg-border my-1" />
+            <div className="px-3 py-1.5 hover:bg-muted cursor-pointer text-destructive flex items-center gap-2" onClick={() => { 
+              if (confirm('Xóa script này?')) deleteMut.mutate(contextMenu.scriptId); 
+              closeContextMenu(); 
+            }}>
+              <Trash2 className="w-4 h-4" /> Xóa script
+            </div>
+          </div>
+        </>
+      )}
+
       </>
     </div>
   );

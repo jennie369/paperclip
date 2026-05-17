@@ -710,6 +710,8 @@ function AgentRow({
                     <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</option>
                     <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                     <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                    <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                    <option value="gemma-4-31b">gemma-4-31b</option>
                     <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                     <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                     <option value="gemini-2.0-flash">gemini-2.0-flash</option>
