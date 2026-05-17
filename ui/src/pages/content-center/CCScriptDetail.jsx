@@ -47,6 +47,8 @@ import { useToast } from '@gem/ui';
 import { useScript, useUpdateScript, useSocialPost, useUpdateSocialPost } from '@gem/hooks/useQueryHooks';
 import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
+import { MetaSelect, SlugUrlHandle, generateSlug } from './components/ContentMetaShared';
+import { PromptImageCards } from './components/PromptImageCards';
 
 // ============================================================================
 // Status Configuration
@@ -593,7 +595,6 @@ function ScriptDetailContent() {
     content_type: 'latc',
     job_type: 'script',
     pillar: 'trading',
-    track: 'wealth',
     persona: 'jennie_mentor',
     writing_mode: 'mode_1_calm',
     brand_voice: 'jennie',
@@ -608,12 +609,26 @@ function ScriptDetailContent() {
   useEffect(() => {
     if (script && !isDirty) {
       const extraMeta = script.metadata || {};
+      
+      let initialSlug = extraMeta.slug || script.slug || '';
+      if (!initialSlug && script.title) {
+        initialSlug = generateSlug(script.title);
+      }
+      
+      let initialExcerpt = extraMeta.excerpt || '';
+      if (!initialExcerpt) {
+        const sourceText = script.body || script.title || '';
+        const text = sourceText.replace(/[#*\n]/g, ' ').trim();
+        if (text) {
+          initialExcerpt = text.slice(0, 160) + (text.length > 160 ? '...' : '');
+        }
+      }
+
       setMetaFields(prev => ({
         ...prev,
         content_type: script.content_type || 'latc',
         job_type: script.job_type || 'script',
         pillar: script.pillar || 'trading',
-        track: script.track || 'wealth',
         persona: script.persona || 'jennie_mentor',
         writing_mode: script.writing_mode || 'mode_1_calm',
         brand_voice: script.brand_voice || 'jennie',
@@ -622,15 +637,44 @@ function ScriptDetailContent() {
         model: script.model || '',
         provider: script.provider || '',
         sop_id: script.sop_id || '',
+        slug: initialSlug,
         email_day: extraMeta.email_day || '',
         from_email: extraMeta.from_email || '',
         email_template: extraMeta.email_template || '',
         audience_type: extraMeta.audience_type || '',
         preview_text: extraMeta.preview_text || '',
         campaign_type: extraMeta.campaign_type || '',
+        tags: extraMeta.tags || [],
+        excerpt: initialExcerpt,
       }));
     }
   }, [script, isDirty]);
+
+  // Auto-fill for new scripts
+  useEffect(() => {
+    if (isNew && !isDirty) {
+      setMetaFields(prev => {
+        let updated = false;
+        const next = { ...prev };
+        
+        if (!next.slug && editableTitle) {
+          next.slug = generateSlug(editableTitle);
+          updated = true;
+        }
+        
+        if (!next.excerpt) {
+          const sourceText = body || editableTitle || '';
+          const text = sourceText.replace(/[#*\n]/g, ' ').trim();
+          if (text) {
+            next.excerpt = text.slice(0, 160) + (text.length > 160 ? '...' : '');
+            updated = true;
+          }
+        }
+        
+        return updated ? next : prev;
+      });
+    }
+  }, [isNew, isDirty, editableTitle, body]);
 
   const handleMetaChange = (field, value) => {
     setMetaFields(prev => ({ ...prev, [field]: value }));
@@ -813,8 +857,8 @@ function ScriptDetailContent() {
     setIsSaving(true);
     try {
       // Chỉ gửi những trường có trong schema cc_scripts
-      const validFields = ['content_type', 'pillar', 'track', 'persona', 'writing_mode', 'publish_mode', 'posted_account', 'brand_voice'];
-      const metadataKeys = ['email_day', 'from_email', 'email_template', 'audience_type', 'preview_text', 'campaign_type'];
+      const validFields = ['content_type', 'pillar', 'persona', 'writing_mode', 'publish_mode', 'posted_account', 'brand_voice', 'slug'];
+      const metadataKeys = ['email_day', 'from_email', 'email_template', 'audience_type', 'preview_text', 'campaign_type', 'tags', 'excerpt'];
       const validMetaFields = {};
       const extraMetadataFields = {};
       Object.keys(metaFields).forEach(k => {
@@ -851,6 +895,7 @@ function ScriptDetailContent() {
         const fieldName = resolvedIsSocialPost ? 'content' : 'body';
         const updates = { 
           [fieldName]: body,
+          title: editableTitle || script?.title,
           ...(resolvedIsSocialPost ? {} : validMetaFields),
           metadata: {
             ...(script?.metadata || {}),
@@ -1402,6 +1447,7 @@ function ScriptDetailContent() {
                   autoFocus
                   value={editableTitle}
                   onChange={e => setEditableTitle(e.target.value)}
+                  onBlur={handleSaveTitle}
                   onKeyDown={e => { if (e.key === 'Enter') handleSaveTitle(); if (e.key === 'Escape') setIsEditingTitle(false); }}
                   className="flex-1 font-heading text-lg font-semibold text-txt bg-bg-3 border border-gold/40 rounded-card px-2 py-0.5 focus:outline-none focus:border-gold/70"
                 />
@@ -1450,7 +1496,6 @@ function ScriptDetailContent() {
           variant={contentType === 'LATC' ? 'gold' : contentType === 'TMT' ? 'key' : 'default'}
           size="sm"
         />
-        {track && <span>{TRACK_LABELS[track] ?? track}</span>}
         {personaKey && <span>{PERSONA_LABELS[personaKey] ?? personaKey}</span>}
         {writingMode && <span>{MODE_LABELS[writingMode] ?? writingMode}</span>}
         <span className="text-txt-3">|</span>
@@ -1656,75 +1701,70 @@ function ScriptDetailContent() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Content Type</label>
-                <select value={metaFields.content_type || ''} onChange={e => handleMetaChange('content_type', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="latc">LATC</option>
-                  <option value="tmt">TMT</option>
-                  <option value="short_clip">Short Clip</option>
-                  <option value="social_post">Social Post</option>
-                  <option value="news">News</option>
-                  <option value="banner">Banner</option>
-                  <option value="push_notification">Push Notification</option>
-                  <option value="inapp_story">In-app Story</option>
-                  <option value="sms">SMS</option>
-                  <option value="chatbot_script">Chatbot Script</option>
-                  <option value="email">Email</option>
-                  <option value="content_planner">Content Planner</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.content_type || ''}
+                  onCommit={v => handleMetaChange('content_type', v)}
+                  options={['latc', 'tmt', 'short_clip', 'social_post', 'news', 'banner', 'push_notification', 'inapp_story', 'sms', 'chatbot_script', 'email', 'content_planner']}
+                  storageKey="content_type"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Pillar</label>
-                <select value={metaFields.pillar || ''} onChange={e => handleMetaChange('pillar', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="trading">Trading</option>
-                  <option value="wealth">Wealth</option>
-                  <option value="spiritual">Spiritual</option>
-                  <option value="integration">Integration</option>
-                  <option value="education">Education</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.pillar || ''}
+                  onCommit={v => handleMetaChange('pillar', v)}
+                  options={['trading', 'wealth', 'spiritual', 'integration', 'education']}
+                  storageKey="pillar"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gold">Track</label>
-                <select value={metaFields.track || ''} onChange={e => handleMetaChange('track', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="wealth">Wealth</option>
-                  <option value="spiritual">Spiritual</option>
-                  <option value="integration">Integration</option>
-                  <option value="education">Education</option>
-                </select>
-              </div>
+
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Persona</label>
-                <select value={metaFields.persona || ''} onChange={e => handleMetaChange('persona', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="jennie_mentor">Jennie Mentor</option>
-                  <option value="jennie_provocateur">Jennie Provocateur</option>
-                  <option value="jennie_storyteller">Jennie Storyteller</option>
-                  <option value="jennie_analyst">Jennie Analyst</option>
-                  <option value="jennie_motivator">Jennie Motivator</option>
-                  <option value="jennie_confidante">Jennie Confidante</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.persona || ''}
+                  onCommit={v => handleMetaChange('persona', v)}
+                  options={['jennie_mentor', 'jennie_provocateur', 'jennie_storyteller', 'jennie_analyst', 'jennie_motivator', 'jennie_confidante']}
+                  storageKey="persona"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Writing Mode</label>
-                <select value={metaFields.writing_mode || ''} onChange={e => handleMetaChange('writing_mode', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="mode_1_calm">Mode 1: Calm</option>
-                  <option value="mode_2_provocative">Mode 2: Provocative</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.writing_mode || ''}
+                  onCommit={v => handleMetaChange('writing_mode', v)}
+                  options={['mode_1_calm', 'mode_2_provocative']}
+                  storageKey="writing_mode"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Publish Mode</label>
-                <select value={metaFields.publish_mode || ''} onChange={e => handleMetaChange('publish_mode', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="scheduled">Lên lịch tự động (Scheduled)</option>
-                  <option value="immediate">Đăng ngay (Immediate)</option>
-                  <option value="threshold_5">Gom đủ 5 bài (Threshold)</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.publish_mode || ''}
+                  onCommit={v => handleMetaChange('publish_mode', v)}
+                  options={['scheduled', 'immediate', 'threshold_5']}
+                  storageKey="publish_mode"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Posted Account</label>
-                <select value={metaFields.posted_account || ''} onChange={e => handleMetaChange('posted_account', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="page_jennie">Page Jennie Chu</option>
-                  <option value="page_gemral">Page Gemral Official</option>
-                  <option value="profile_jennie">Profile Uyen Chu</option>
-                  <option value="forum_gemral">Forum Gemral</option>
-                  <option value="telegram_channel">Telegram Channel</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.posted_account || ''}
+                  onCommit={v => handleMetaChange('posted_account', v)}
+                  options={['page_jennie', 'page_gemral', 'profile_jennie', 'forum_gemral', 'telegram_channel']}
+                  storageKey="posted_account"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Model</label>
@@ -1746,6 +1786,75 @@ function ScriptDetailContent() {
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">SOP ID</label>
                 <input disabled value={metaFields.sop_id || ''} placeholder="UUID..." className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold opacity-50 cursor-not-allowed" />
+              </div>
+              <div className="space-y-1 col-span-2">
+                <label className="text-xs font-bold text-gold">Slug</label>
+                <div className="flex gap-2 mb-1">
+                  <input 
+                    value={metaFields.slug || ''} 
+                    onChange={e => handleMetaChange('slug', e.target.value)} 
+                    placeholder={generateSlug(editableTitle || scriptTitle)} 
+                    className="flex-1 bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" 
+                  />
+                  <button
+                    onClick={() => {
+                      if (editableTitle || scriptTitle) {
+                        handleMetaChange('slug', generateSlug(editableTitle || scriptTitle));
+                      }
+                    }}
+                    title="Tạo Slug từ Title"
+                    className="px-2 py-1 bg-bg-3 border border-border rounded hover:border-gold text-txt-3 transition-colors shrink-0"
+                  >
+                    <i className="fas fa-magic mr-1"></i> Tạo Slug
+                  </button>
+                </div>
+                <SlugUrlHandle slug={metaFields.slug || generateSlug(editableTitle || scriptTitle)} contentType={metaFields.content_type || ''} />
+              </div>
+
+              <div className="space-y-1 col-span-2">
+                <label className="text-xs font-bold text-gold">Blog Tags</label>
+                <MetaSelect
+                  value={Array.isArray(metaFields.tags) ? metaFields.tags.join(', ') : (metaFields.tags || '')}
+                  onCommit={v => {
+                     const arr = v.split(',').map(t => t.trim()).filter(Boolean);
+                     handleMetaChange('tags', arr);
+                  }}
+                  options={['crypto', 'trading', 'mindset', 'tutorial', 'news', 'update', 'gemral', 'market-analysis', 'onchain']}
+                  storageKey="blog_tags"
+                  allowCustom
+                  className="w-full"
+                  placeholder="tag1, tag2..."
+                />
+              </div>
+
+              <div className="space-y-1 col-span-4">
+                <label className="text-xs font-bold text-gold">Excerpt (Tóm tắt SEO)</label>
+                <div className="flex gap-2 items-start">
+                  <div className="flex-1">
+                    <MetaSelect
+                      value={metaFields.excerpt || ''}
+                      onCommit={v => handleMetaChange('excerpt', v)}
+                      options={[]}
+                      storageKey="blog_excerpts"
+                      allowCustom
+                      className="w-full"
+                      placeholder="Mô tả ngắn gọn về bài viết..."
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      const sourceText = body || mainContent || scriptTitle || '';
+                      const text = sourceText.replace(/[#*\n]/g, ' ').trim();
+                      if (text) {
+                        handleMetaChange('excerpt', text.slice(0, 160) + (text.length > 160 ? '...' : ''));
+                      }
+                    }}
+                    title="Tạo Excerpt tự động từ nội dung"
+                    className="px-2 py-1 text-xs bg-bg-3 border border-border rounded hover:border-gold text-txt-3 transition-colors shrink-0"
+                  >
+                    <i className="fas fa-magic mr-1"></i> Gợi ý
+                  </button>
+                </div>
               </div>
 
               {metaFields.content_type === 'email' && (
@@ -1795,6 +1904,7 @@ function ScriptDetailContent() {
             <textarea
               value={body}
               onChange={handleBodyChange}
+              onBlur={handleSave}
               style={{ minHeight: `${textareaMinHeight}px` }}
               className="w-full p-5 bg-transparent text-sm text-txt font-body leading-relaxed resize-y focus:outline-none placeholder:text-txt-3"
               placeholder="Bắt đầu viết kịch bản tại đây..."
@@ -1824,6 +1934,9 @@ function ScriptDetailContent() {
           </div>
         )}
       </Card>
+
+      {/* ===== 7 Prompt Cards — LUÔN HIỂN DÙ thu gọn ===== */}
+      <PromptImageCards output={mainContent} addToast={addToast} />
 
       {/* ===== Brand Voice + GEM Tools (2 columns) ===== */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check, X, Calendar, Copy, Trash2, Plus, ChevronDown, ChevronUp,
-  Shield, Loader2, ExternalLink, Image, Send, Mail, FileCode, Eye, AlignLeft
+  Shield, Loader2, ExternalLink, Image, Send, Mail, FileCode, Eye, AlignLeft,
+  Undo, Redo, Settings2, Search, MoreVertical, LayoutGrid, Filter, Bookmark, Clock, History
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,10 @@ import { useNavigate, Link } from "@/lib/router";
 import { supabase } from "@/lib/supabaseClient";
 // BatchJobsView moved to ContentPipelinePage aigen tab (2026-04-18).
 import { MarkdownBody } from "@/components/MarkdownBody";
+// SSOT shared components — keep ContentTab/CCScriptDetail/CCAIGen UI consistent.
+// Local definitions of MetaSelect/SlugUrlHandle removed 2026-05-17 (refactor commit).
+// @ts-expect-error — JS module, no .d.ts but signature stable
+import { MetaSelect, SlugUrlHandle } from "../../content-center/components";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -541,28 +546,51 @@ function MetaInput({
   );
 }
 
-function MetaSelect({
-  value, options, onCommit, allowCustom = false,
-}: { value: string; options: string[]; onCommit: (v: string) => void; allowCustom?: boolean }) {
-  return (
-    <select
-      value={options.includes(value) ? value : (allowCustom ? '__custom__' : '')}
-      onChange={e => { if (e.target.value !== '__custom__') onCommit(e.target.value); }}
-      className="w-full text-[11px] px-2 py-1 border rounded bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
-    >
-      {!options.includes(value) && value && <option value={value}>{value}</option>}
-      {options.map(o => <option key={o} value={o}>{o}</option>)}
-    </select>
-  );
-}
-
 function MetadataEditor({
   script, onUpdate, wordCount, readTime,
 }: { script: any; onUpdate: (patch: Record<string, any>) => Promise<void>; wordCount: number; readTime: number }) {
   const [open, setOpen] = useState(false);
   const meta = script.metadata || {};
 
-  const save = (field: string) => (val: string) => onUpdate({ [field]: val || null });
+  // --- Metadata Undo/Redo ---
+  const metaUndoStack = useRef<Record<string, any>[]>([]);
+  const metaRedoStack = useRef<Record<string, any>[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const save = (field: string) => (val: string) => {
+    // Snapshot current value before update
+    metaUndoStack.current.push({ [field]: script[field] ?? null });
+    if (metaUndoStack.current.length > 30) metaUndoStack.current.shift();
+    metaRedoStack.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+    return onUpdate({ [field]: val || null });
+  };
+
+  const handleMetaUndo = useCallback(async () => {
+    if (metaUndoStack.current.length === 0) return;
+    const prev = metaUndoStack.current.pop()!;
+    // Build redo snapshot from current state
+    const redoPatch: Record<string, any> = {};
+    for (const k of Object.keys(prev)) redoPatch[k] = script[k] ?? null;
+    metaRedoStack.current.push(redoPatch);
+    setCanUndo(metaUndoStack.current.length > 0);
+    setCanRedo(true);
+    await onUpdate(prev);
+  }, [script, onUpdate]);
+
+  const handleMetaRedo = useCallback(async () => {
+    if (metaRedoStack.current.length === 0) return;
+    const next = metaRedoStack.current.pop()!;
+    const undoPatch: Record<string, any> = {};
+    for (const k of Object.keys(next)) undoPatch[k] = script[k] ?? null;
+    metaUndoStack.current.push(undoPatch);
+    setCanUndo(true);
+    setCanRedo(metaRedoStack.current.length > 0);
+    await onUpdate(next);
+  }, [script, onUpdate]);
+
   const saveArr = (field: string) => (val: string) =>
     onUpdate({ [field]: val ? val.split(',').map((s: string) => s.trim()).filter(Boolean) : null });
 
@@ -587,6 +615,25 @@ function MetadataEditor({
         <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
+      {/* Metadata Undo/Redo toolbar — hiện khi panel mở */}
+      {open && (canUndo || canRedo) && (
+        <div className="flex items-center gap-1 px-3 py-1 border-b bg-amber-50/50 text-[10px] text-muted-foreground">
+          <span className="text-amber-600 font-medium">Metadata history:</span>
+          <button
+            onClick={handleMetaUndo}
+            disabled={!canUndo}
+            title="Undo thay đổi metadata (Ctrl+Z)"
+            className="px-2 py-0.5 rounded border border-border/50 disabled:opacity-30 hover:bg-muted transition-colors"
+          >↩ Undo</button>
+          <button
+            onClick={handleMetaRedo}
+            disabled={!canRedo}
+            title="Redo thay đổi metadata (Ctrl+Y)"
+            className="px-2 py-0.5 rounded border border-border/50 disabled:opacity-30 hover:bg-muted transition-colors"
+          >↪ Redo</button>
+          <span className="ml-auto opacity-50">{metaUndoStack.current.length} bước có thể undo</span>
+        </div>
+      )}
       {/* Collapsible detail grid */}
       {open && (
         <div className="border-t px-3 py-3 grid grid-cols-2 gap-x-4 gap-y-3" onClick={e => e.stopPropagation()}>
@@ -595,78 +642,93 @@ function MetadataEditor({
             <MetaSelect value={script.status || ''} options={STATUS_OPTIONS} onCommit={save('status')} />
           </MetaField>
           <MetaField label="Content Type" dbCol="content_type">
-            <div className="flex gap-1">
-              <input
-                type="text"
-                defaultValue={script.content_type || ''}
-                onBlur={e => { if (e.target.value !== script.content_type) onUpdate({ content_type: e.target.value || null }); }}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                placeholder="vd: latc, blog_post, DOC-CRS-001"
-                className="flex-1 text-[11px] px-2 py-1 border rounded-l bg-white focus:outline-none focus:ring-1 focus:ring-primary/30 font-mono"
-                title="18 enum values + DOC-XXX-NNN pattern. Hover để xem full list."
-              />
-              <select
-                className="text-[10px] px-1 border-y border-r rounded-r bg-zinc-50"
-                defaultValue=""
-                onChange={e => { if (e.target.value) onUpdate({ content_type: e.target.value }); e.target.value = ''; }}
-              >
-                <option value="">↓ pick</option>
-                {CONTENT_TYPE_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.value}</option>)}
-              </select>
-            </div>
+            <MetaSelect 
+              value={script.content_type || ''} 
+              options={CONTENT_TYPE_OPTIONS.map(c => c.value)} 
+              onCommit={save('content_type')} 
+              allowCustom 
+              storageKey="content_type" 
+            />
           </MetaField>
 
           {/* Row 2 */}
           <MetaField label="Pillar" dbCol="pillar">
-            <MetaSelect value={script.pillar || ''} options={PILLAR_OPTIONS} onCommit={save('pillar')} allowCustom />
+            <MetaSelect value={script.pillar || ''} options={PILLAR_OPTIONS} onCommit={save('pillar')} allowCustom storageKey="pillar" />
           </MetaField>
           <MetaField label="Brand Voice" dbCol="brand_voice">
-            <MetaSelect value={script.brand_voice || ''} options={BRAND_OPTIONS} onCommit={save('brand_voice')} />
+            <MetaSelect value={script.brand_voice || ''} options={BRAND_OPTIONS} onCommit={save('brand_voice')} storageKey="brand_voice" />
           </MetaField>
 
           {/* Row 3 — Blog fields */}
           <MetaField label="Blog Category" dbCol="blog_category">
-            <MetaSelect value={script.blog_category || ''} options={BLOG_CATEGORY_OPTIONS} onCommit={save('blog_category')} allowCustom />
+            <MetaSelect value={script.blog_category || ''} options={BLOG_CATEGORY_OPTIONS} onCommit={save('blog_category')} allowCustom storageKey="blog_category" />
           </MetaField>
           <MetaField label="Blog Tags" dbCol="blog_tags">
-            <MetaInput
-              value={(script.blog_tags || []).join(', ')}
-              onCommit={saveArr('blog_tags')}
-              placeholder="wealth, wellness, spiritual (cách nhau dấu phẩy)"
+            <MetaSelect 
+              value={(script.blog_tags || []).join(', ')} 
+              options={['wealth', 'wellness', 'spiritual']} 
+              onCommit={saveArr('blog_tags')} 
+              allowCustom 
+              storageKey="blog_tags" 
+              placeholder="vd: wealth, wellness" 
             />
           </MetaField>
 
-          {/* Row 4 */}
-          <MetaField label="Slug" dbCol="slug" className={open ? "mb-2" : ""}>
-            <MetaInput 
-              value={script.slug || ''} 
-              onCommit={save('slug')} 
-              placeholder="vd: 7-luan-xa-tien-bac" 
-              mono 
-              validate={(v) => {
-                if (v && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v)) return "Chỉ dùng chữ thường, số, và dấu gạch ngang (-)";
-                return null;
-              }}
-            />
+          {/* Row 4 — Slug + URL Handle */}
+          <MetaField label="Slug" dbCol="slug" className="">
+            <div className="flex gap-1">
+              <div className="flex-1">
+                <MetaInput 
+                  value={script.slug || ''} 
+                  onCommit={save('slug')} 
+                  placeholder={script.title ? script.title.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') : "vd: 7-luan-xa-tien-bac"} 
+                  mono 
+                  validate={(v) => {
+                    if (v && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v)) return "Chỉ dùng chữ thường, số, và dấu gạch ngang (-)";
+                    return null;
+                  }}
+                />
+              </div>
+              {!script.slug && script.title && (
+                <button 
+                  onClick={() => save('slug')(script.title.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''))} 
+                  className="px-2 h-[26px] bg-primary text-primary-foreground text-[10px] rounded hover:bg-primary/90 shrink-0 border-none"
+                  title="Tạo slug tự động từ tiêu đề"
+                >
+                  Tạo Slug
+                </button>
+              )}
+            </div>
           </MetaField>
           <MetaField label="Excerpt (tóm tắt SEO)" dbCol="excerpt">
-            <MetaInput value={script.excerpt || ''} onCommit={save('excerpt')} placeholder="Tóm tắt ngắn cho SEO / meta description" />
+            <MetaSelect 
+              value={script.excerpt || ''} 
+              options={[]} 
+              onCommit={save('excerpt')} 
+              allowCustom 
+              storageKey="excerpt" 
+              placeholder="Tóm tắt ngắn cho SEO / meta description" 
+            />
           </MetaField>
+          {/* URL Handle — auto-derived from slug, full row */}
+          {script.slug && (
+            <div className="col-span-2">
+              <SlugUrlHandle slug={script.slug} contentType={script.content_type} />
+            </div>
+          )}
+
 
           {/* Row 5 — Publish */}
           <MetaField label="Posted Account" dbCol="posted_account">
-            <MetaSelect value={script.posted_account || ''} options={ACCOUNT_OPTIONS} onCommit={save('posted_account')} allowCustom />
+            <MetaSelect value={script.posted_account || ''} options={ACCOUNT_OPTIONS} onCommit={save('posted_account')} allowCustom storageKey="posted_account" />
           </MetaField>
           <MetaField label="Publish Mode" dbCol="publish_mode">
-            <MetaSelect value={script.publish_mode || ''} options={PUBLISH_MODE_OPTIONS} onCommit={save('publish_mode')} />
+            <MetaSelect value={script.publish_mode || ''} options={PUBLISH_MODE_OPTIONS} onCommit={save('publish_mode')} storageKey="publish_mode" />
           </MetaField>
 
           {/* Row 6 */}
           <MetaField label="Scheduled At" dbCol="scheduled_at">
             <MetaInput value={script.scheduled_at ? new Date(script.scheduled_at).toISOString().slice(0, 16) : ''} onCommit={save('scheduled_at')} type="datetime-local" />
-          </MetaField>
-          <MetaField label="Track / Series" dbCol="track">
-            <MetaInput value={script.track || meta.track || ''} onCommit={save('track')} placeholder="vd: onb-trading-starter" mono />
           </MetaField>
 
           {/* Row 7 — Read-only stats */}
@@ -702,6 +764,44 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
   const [body, setBody] = useState(() => initialBody);
   const [title, setTitle] = useState(() => initialTitle);
   const [saving, setSaving] = useState(false);
+
+  // Undo/Redo custom history
+  const [history, setHistory] = useState<{t: string, b: string}[]>([{ t: initialTitle, b: initialBody }]);
+  const [hIndex, setHIndex] = useState(0);
+
+  // Save to history debounce
+  useEffect(() => {
+    const tId = setTimeout(() => {
+      if (history[hIndex].b !== body || history[hIndex].t !== title) {
+        setHistory(prev => {
+          const newH = prev.slice(0, hIndex + 1);
+          newH.push({ t: title, b: body });
+          // Limit to 50 steps
+          if (newH.length > 50) newH.shift();
+          return newH;
+        });
+        setHIndex(prev => Math.min(prev + 1, 50));
+      }
+    }, 600);
+    return () => clearTimeout(tId);
+  }, [body, title, hIndex, history]);
+
+  const handleUndo = () => {
+    if (hIndex > 0) {
+      const prev = hIndex - 1;
+      setHIndex(prev);
+      setBody(history[prev].b);
+      setTitle(history[prev].t);
+    }
+  };
+  const handleRedo = () => {
+    if (hIndex < history.length - 1) {
+      const next = hIndex + 1;
+      setHIndex(next);
+      setBody(history[next].b);
+      setTitle(history[next].t);
+    }
+  };
   // 'saved' | 'unsaved' | 'saving' — indicator auto-save
   const [saveState, setSaveState] = useState<'saved' | 'unsaved' | 'saving'>('saved');
 
@@ -848,7 +948,25 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
             Chỉnh Sửa
           </button>
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5 items-center">
+          {mode === 'edit' && (
+            <div className="flex items-center bg-white border rounded-md mr-1 p-0.5">
+              <button 
+                className="p-1 hover:bg-muted rounded text-zinc-600 disabled:opacity-30" 
+                disabled={hIndex <= 0} 
+                onClick={handleUndo} title="Hoàn tác"
+              >
+                <Undo className="w-3.5 h-3.5" />
+              </button>
+              <button 
+                className="p-1 hover:bg-muted rounded text-zinc-600 disabled:opacity-30" 
+                disabled={hIndex >= history.length - 1} 
+                onClick={handleRedo} title="Làm lại"
+              >
+                <Redo className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           <Button size="sm" variant="outline" onClick={handleCopy}>
             <Copy className="h-3 w-3 mr-1" />Sao chép
           </Button>
@@ -925,6 +1043,7 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
             type="text"
             value={title}
             onChange={e => setTitle(e.target.value)}
+            onBlur={handleSave}
             className="w-full px-3 py-2 text-sm font-medium border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
             placeholder="Nhập tiêu đề..."
           />
@@ -936,6 +1055,7 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
           <textarea
             value={body}
             onChange={e => setBody(e.target.value)}
+            onBlur={handleSave}
             className="w-full min-h-[300px] p-4 font-mono text-sm border rounded-lg resize-y bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
             placeholder="Nhập nội dung..."
           />
@@ -1078,12 +1198,12 @@ const MemoizedMarkdownPreview = memo(function MemoizedMarkdownPreview({ body, vi
 // re-render toàn bộ list mỗi khi một row được expand → fix freeze.
 // ---------------------------------------------------------------------------
 const ScriptRow = memo(function ScriptRow({
-  s, isExpanded, isSeen, customTag, isSelected, isFocused,
+  s, isExpanded, isSeen, customTag, visibleBadges, isSelected, isFocused,
   onToggle, onMarkSeen, onSaveCustomTag, onSelect, onContextMenu,
   approveMut, onReject, deleteMut, complianceMut,
   pushToast, navigate, inv,
 }: {
-  s: any; isExpanded: boolean; isSeen: boolean; customTag: string; isSelected?: boolean; isFocused?: boolean;
+  s: any; isExpanded: boolean; isSeen: boolean; customTag: string; visibleBadges: string[]; isSelected?: boolean; isFocused?: boolean;
   onToggle: (id: string) => void;
   onMarkSeen: (id: string) => void;
   onSaveCustomTag: (id: string, tag: string) => void;
@@ -1127,16 +1247,18 @@ const ScriptRow = memo(function ScriptRow({
             {isSeen && (
               <Eye className="h-2.5 w-2.5 text-muted-foreground/50 shrink-0" aria-label="Đã xem" />
             )}
-            <EditableBadge
-              value={statusLabels[s.status] || s.status}
-              options={STATUS_OPTIONS}
-              onSave={async (v) => {
-                const key = Object.entries(statusLabels).find(([, lbl]) => lbl === v)?.[0] || v;
-                try { await opsApi.updateScript(s.id, { status: key }); inv(); } catch {}
-              }}
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColors[s.status] || 'bg-muted'}`}
-            />
-            {s.brand_voice && (
+            {visibleBadges.includes('status') && (
+              <EditableBadge
+                value={statusLabels[s.status] || s.status}
+                options={STATUS_OPTIONS}
+                onSave={async (v) => {
+                  const key = Object.entries(statusLabels).find(([, lbl]) => lbl === v)?.[0] || v;
+                  try { await opsApi.updateScript(s.id, { status: key }); inv(); } catch {}
+                }}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColors[s.status] || 'bg-muted'}`}
+              />
+            )}
+            {visibleBadges.includes('brand_voice') && s.brand_voice && (
               <EditableBadge
                 value={s.brand_voice}
                 options={BRAND_OPTIONS}
@@ -1144,7 +1266,7 @@ const ScriptRow = memo(function ScriptRow({
                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${brandColors[s.brand_voice] || 'bg-muted'}`}
               />
             )}
-            {s.pillar && (
+            {visibleBadges.includes('pillar') && s.pillar && (
               <EditableBadge
                 value={s.pillar}
                 options={PILLAR_OPTIONS}
@@ -1152,9 +1274,7 @@ const ScriptRow = memo(function ScriptRow({
                 className="text-[10px] text-muted-foreground"
               />
             )}
-            {s.content_type && (() => {
-              // isDoc: check CONTENT_TYPE_OPTIONS (bao gồm onb-*, welcome-*, winback-*, vip-*)
-              // không chỉ regex DOC- như cũ
+            {visibleBadges.includes('content_type') && s.content_type && (() => {
               const isDoc = CONTENT_TYPE_OPTIONS.find(c => c.value === s.content_type)?.isDoc
                 ?? /^(DOC-|onb-|welcome-|winback-|vip-)/.test(s.content_type);
               return (
@@ -1165,12 +1285,9 @@ const ScriptRow = memo(function ScriptRow({
                     try {
                       await opsApi.updateScript(s.id, { content_type: v });
                       inv();
-                      // Auto-copy sang Custom Badge → Filename
                       onSaveCustomTag(s.id, v);
                     } catch (e: any) {
-                      const msg = e?.message || String(e);
-                      console.error('[content_type save error]', msg, { id: s.id, v });
-                      pushToast({ type: 'error', message: `Lỗi lưu content_type: ${msg}` });
+                      pushToast({ type: 'error', message: `Lỗi lưu content_type: ${e?.message || String(e)}` });
                     }
                   }}
                   className={isDoc
@@ -1180,18 +1297,19 @@ const ScriptRow = memo(function ScriptRow({
                 />
               );
             })()}
-            {/* Custom label badge — nhập tên file tùy ý, style chữ nhật như DOC- */}
-            <EditableBadge
-              value={customTag}
-              isText
-              placeholder="+ nhãn..."
-              onSave={(v) => onSaveCustomTag(s.id, v)}
-              className={`rounded-md px-2 py-0.5 text-[10px] font-mono ${
-                customTag
-                  ? 'bg-indigo-900 text-white font-semibold'
-                  : 'bg-transparent border border-dashed border-muted-foreground/30 text-muted-foreground/50 hover:border-primary/50'
-              }`}
-            />
+            {visibleBadges.includes('custom_tag') && (
+              <EditableBadge
+                value={customTag}
+                isText
+                placeholder="+ nhãn..."
+                onSave={(v) => onSaveCustomTag(s.id, v)}
+                className={`rounded-md px-2 py-0.5 text-[10px] font-mono ${
+                  customTag
+                    ? 'bg-indigo-900 text-white font-semibold'
+                    : 'bg-transparent border border-dashed border-muted-foreground/30 text-muted-foreground/50 hover:border-primary/50'
+                }`}
+              />
+            )}
             {s.posted_account && <span className="text-[10px] text-blue-500">· {s.posted_account}</span>}
             {s.posted_time_slot && <span className="text-[10px] text-muted-foreground">· {s.posted_time_slot}</span>}
           </div>
@@ -1435,15 +1553,21 @@ export function ContentTab() {
   const [limit, setLimit] = useSessionState<number>('contentTab.limit', 20);
   const [expandedId, setExpandedId] = useSessionState<string | null>('contentTab.expandedId', null);
 
-  // "Đã xem" tracking — localStorage: giữ qua đóng browser, reset bằng tay nếu cần
-  const [seenIds, setSeenIds] = useLocalState<string[]>('contentTab.seenIds', []);
-  const seenSet = useMemo(() => new Set(seenIds), [seenIds]);
-
+  // Advanced features state
+  const [visibleBadges, setVisibleBadges] = useLocalState<string[]>('contentTab.visibleBadges', [
+    'status', 'brand_voice', 'pillar', 'content_type', 'custom_tag'
+  ]);
+  const [searchQuery, setSearchQuery] = useState('');
   // Advanced Grid States
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, scriptId: string } | null>(null);
   const [groupBy, setGroupBy] = useSessionState<string>('contentTab.groupBy', 'none');
+
+  // "Đã xem" tracking — localStorage: giữ qua đóng browser, reset bằng tay nếu cần
+  const [seenIds, setSeenIds] = useLocalState<string[]>('contentTab.seenIds', []);
+  const seenSet = useMemo(() => new Set(seenIds), [seenIds]);
+
   const markSeen = useCallback((id: string) => {
     setSeenIds((prev) => prev.includes(id) ? prev : [...prev, id]);
   }, [setSeenIds]);
@@ -1521,7 +1645,126 @@ export function ContentTab() {
     }),
   });
 
-  const list = scripts || [];
+  // Sort state (multi-sort)
+  const [sorts, setSorts] = useSessionState<{ field: string; dir: 'asc'|'desc' }[]>('contentTab.sorts', [{ field: 'created_at', dir: 'desc' }]);
+  // Extra filters
+  const [categoryFilter, setCategoryFilter] = useSessionState<string>('contentTab.categoryFilter', '');
+  const [accountFilter, setAccountFilter] = useSessionState<string>('contentTab.accountFilter', '');
+  const [dateFrom, setDateFrom] = useSessionState<string>('contentTab.dateFrom', '');
+  const [dateTo, setDateTo] = useSessionState<string>('contentTab.dateTo', '');
+  // Saved filters/views
+  const [savedFilters, setSavedFilters] = useLocalState<{ name: string; state: any }[]>('contentTab.savedFilters', []);
+  // Recent searches
+  const [recentSearches, setRecentSearches] = useLocalState<string[]>('contentTab.recentSearches', []);
+  const [showSearchSug, setShowSearchSug] = useState(false);
+  // Version history modal
+  const [versionHistoryScript, setVersionHistoryScript] = useState<any>(null);
+  // Audit log
+  const [auditLog, setAuditLog] = useLocalState<{ ts: string; action: string; id: string; detail: string }[]>('contentTab.auditLog', []);
+  const addAudit = useCallback((action: string, id: string, detail: string) => {
+    setAuditLog(prev => [{ ts: new Date().toISOString(), action, id, detail }, ...prev].slice(0, 200));
+  }, [setAuditLog]);
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  // Advanced filter builder
+  const [showAdvFilter, setShowAdvFilter] = useState(false);
+  const [advFilters, setAdvFilters] = useLocalState<{ field: string; op: string; value: string; logic: 'AND'|'OR' }[]>('contentTab.advFilters', []);
+
+  const list = useMemo(() => {
+    let res: any[] = scripts || [];
+    // Basic search (title + body full-text)
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      res = res.filter((s: any) =>
+        (s.title || '').toLowerCase().includes(q) ||
+        (s.body || '').toLowerCase().includes(q) ||
+        (s.content || '').toLowerCase().includes(q)
+      );
+    }
+    // Category (blog_category)
+    if (categoryFilter) res = res.filter((s: any) => s.blog_category === categoryFilter);
+    // Account
+    if (accountFilter) res = res.filter((s: any) => s.posted_account === accountFilter);
+    // Date range
+    if (dateFrom) res = res.filter((s: any) => s.created_at && s.created_at >= dateFrom);
+    if (dateTo) res = res.filter((s: any) => s.created_at && s.created_at <= dateTo + 'T23:59:59');
+    // Advanced AND/OR filters
+    if (advFilters.length > 0) {
+      res = res.filter((s: any) => {
+        let result = true;
+        for (let i = 0; i < advFilters.length; i++) {
+          const f = advFilters[i];
+          const val = String(s[f.field] || '').toLowerCase();
+          const fval = f.value.toLowerCase();
+          let match = false;
+          if (f.op === 'eq') match = val === fval;
+          else if (f.op === 'contains') match = val.includes(fval);
+          else if (f.op === 'gt') match = val > fval;
+          else if (f.op === 'lt') match = val < fval;
+          if (i === 0) result = match;
+          else if (f.logic === 'AND') result = result && match;
+          else result = result || match;
+        }
+        return result;
+      });
+    }
+    // Multi-sort
+    if (sorts.length > 0) {
+      res = [...res].sort((a, b) => {
+        for (const s of sorts) {
+          const av = a[s.field] ?? '';
+          const bv = b[s.field] ?? '';
+          const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+          if (cmp !== 0) return s.dir === 'asc' ? cmp : -cmp;
+        }
+        return 0;
+      });
+    }
+    return res;
+  }, [scripts, searchQuery, categoryFilter, accountFilter, dateFrom, dateTo, advFilters, sorts]);
+
+  // Save search to recent
+  const commitSearch = useCallback((q: string) => {
+    setSearchQuery(q);
+    if (q.trim()) setRecentSearches(prev => [q, ...prev.filter(x => x !== q)].slice(0, 8));
+  }, [setRecentSearches]);
+
+  // Save current filter state as named view
+  const saveCurrentView = useCallback((name: string) => {
+    setSavedFilters(prev => [
+      { name, state: { statusFilter, pillarFilter, categoryFilter, accountFilter, dateFrom, dateTo, searchQuery, sorts, advFilters } },
+      ...prev.filter(f => f.name !== name),
+    ]);
+  }, [statusFilter, pillarFilter, categoryFilter, accountFilter, dateFrom, dateTo, searchQuery, sorts, advFilters, setSavedFilters]);
+
+  const loadView = useCallback((view: any) => {
+    if (!view?.state) return;
+    const st = view.state;
+    if (st.statusFilter !== undefined) setStatusFilter(st.statusFilter);
+    if (st.pillarFilter !== undefined) setPillarFilter(st.pillarFilter);
+    if (st.categoryFilter !== undefined) setCategoryFilter(st.categoryFilter);
+    if (st.accountFilter !== undefined) setAccountFilter(st.accountFilter);
+    if (st.dateFrom !== undefined) setDateFrom(st.dateFrom);
+    if (st.dateTo !== undefined) setDateTo(st.dateTo);
+    if (st.searchQuery !== undefined) setSearchQuery(st.searchQuery);
+    if (st.sorts !== undefined) setSorts(st.sorts);
+    if (st.advFilters !== undefined) setAdvFilters(st.advFilters);
+  }, [setStatusFilter, setPillarFilter, setCategoryFilter, setAccountFilter, setDateFrom, setDateTo, setSorts, setAdvFilters]);
+  const handleSelectAll = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!list) return;
+    if (e.target.checked) setSelectedIds(new Set(list.map((s:any) => s.id)));
+    else setSelectedIds(new Set());
+  }, [list]);
+
+  const groupedList = useMemo(() => {
+    if (!groupBy || groupBy === 'none') return { ungrouped: list };
+    const groups: Record<string, any[]> = {};
+    list.forEach((s: any) => {
+      let key = s[groupBy] || 'Chưa phân loại';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(s);
+    });
+    return groups;
+  }, [list, groupBy]);
 
   // Virtualization reverted 2026-05-13: useWindowVirtualizer had scrollMargin
   // computation issues (ref null on first render → wrong offsets → blank-page
@@ -1585,72 +1828,213 @@ export function ContentTab() {
     setContextMenu(null);
   }, []);
 
-  const groupedList = useMemo(() => {
-    if (groupBy === 'none') return null;
-    const groups: Record<string, any[]> = {};
-    list.forEach((s: any) => {
-      const key = s[groupBy] || 'Chưa phân loại';
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(s);
-    });
-    return groups;
-  }, [list, groupBy]);
-
   return (
     <div className="space-y-4">
       {/* 2026-04-18 — Jobs Queue sub-tab removed. It now lives at the top of
           the "AI Tạo Nội Dung" tab so all generation controls are in one
           place. This tab is now Scripts-only. */}
       <>
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex gap-2 flex-wrap">
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="">Tất cả trạng thái</option>
-            <option value="draft">Nháp</option>
-            <option value="approved">Đã duyệt</option>
-            <option value="rejected">Từ chối</option>
-            <option value="published">Đã đăng</option>
-          </select>
-          <select
-            value={pillarFilter}
-            onChange={e => setPillarFilter(e.target.value)}
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="">Tất cả pillar</option>
-            <option value="trading">Trading</option>
-            <option value="spiritual">Spiritual</option>
-            <option value="lifestyle">Lifestyle</option>
-          </select>
-          <div className="h-6 w-px bg-border self-center" />
-          <select
-            value={groupBy}
-            onChange={e => setGroupBy(e.target.value)}
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="none">Không nhóm</option>
-            <option value="status">Nhóm theo Trạng thái</option>
-            <option value="pillar">Nhóm theo Pillar</option>
-            <option value="content_type">Nhóm theo Loại nội dung</option>
-          </select>
-        </div>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" asChild>
-            <Link to="/GEM/cc/ai-gen">✨ AI Tạo nội dung</Link>
+      {/* ── Search bar with suggestions ─────────────────────────────── */}
+      <div className="relative">
+        <div className="flex gap-2 items-center">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onFocus={() => setShowSearchSug(true)}
+              onBlur={() => setTimeout(() => setShowSearchSug(false), 150)}
+              onKeyDown={e => { if (e.key === 'Enter') commitSearch(searchQuery); if (e.key === 'Escape') { setSearchQuery(''); setShowSearchSug(false); } }}
+              placeholder="Tìm tiêu đề, nội dung..."
+              className="w-full pl-9 pr-4 py-2 border rounded-md text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <Button size="sm" variant={showAdvFilter ? 'default' : 'outline'} onClick={() => setShowAdvFilter(v => !v)} title="Bộ lọc nâng cao AND/OR">
+            <Filter className="h-4 w-4 mr-1" />{advFilters.length > 0 ? `Filter (${advFilters.length})` : 'Filter'}
           </Button>
-          <Button size="sm" variant="outline" asChild>
-            <Link to="/GEM/cc/scripts">📄 Kịch bản CC</Link>
-          </Button>
-          <Button size="sm" onClick={() => { setCreateForm(defaultCreateForm); setShowCreate(true); }}>
-            <Plus className="h-4 w-4 mr-1" />Tạo nội dung
+          <Button size="sm" variant="outline" onClick={() => setShowAuditLog(v => !v)} title="Lịch sử thao tác">
+            <History className="h-4 w-4" />
           </Button>
         </div>
+        {/* Search suggestions dropdown */}
+        {showSearchSug && (recentSearches.length > 0 || searchQuery.trim()) && (
+          <div className="absolute top-full left-0 right-0 z-30 mt-1 bg-white border rounded-md shadow-lg py-1 text-sm">
+            {recentSearches.length > 0 && (
+              <>
+                <div className="px-3 py-1 text-xs text-muted-foreground font-medium">Tìm gần đây</div>
+                {recentSearches.map((q, i) => (
+                  <button key={i} className="w-full text-left px-3 py-1.5 hover:bg-muted flex items-center gap-2" onMouseDown={() => { commitSearch(q); setShowSearchSug(false); }}>
+                    <Clock className="h-3 w-3 text-muted-foreground" />{q}
+                  </button>
+                ))}
+                <div className="h-px bg-border my-1" />
+                <button className="w-full text-left px-3 py-1 text-xs text-muted-foreground hover:bg-muted" onMouseDown={() => setRecentSearches([])}>Xóa lịch sử</button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
+      {/* ── Filter row ──────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
+          <option value="">Tất cả trạng thái</option>
+          <option value="draft">Nháp</option>
+          <option value="approved">Đã duyệt</option>
+          <option value="rejected">Từ chối</option>
+          <option value="published">Đã đăng</option>
+        </select>
+        <select value={pillarFilter} onChange={e => setPillarFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
+          <option value="">Tất cả pillar</option>
+          <option value="trading">Trading</option>
+          <option value="spiritual">Spiritual</option>
+          <option value="lifestyle">Lifestyle</option>
+        </select>
+        <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
+          <option value="">Tất cả danh mục</option>
+          <option value="trading-mindset">Trading Mindset</option>
+          <option value="personal-finance">Personal Finance</option>
+          <option value="wellness">Wellness</option>
+          <option value="lifestyle">Lifestyle</option>
+        </select>
+        <select value={accountFilter} onChange={e => setAccountFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
+          <option value="">Tất cả tài khoản</option>
+          <option value="@jenniechu">@jenniechu</option>
+          <option value="@gemral">@gemral</option>
+        </select>
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" title="Từ ngày" />
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" title="Đến ngày" />
+        <div className="h-6 w-px bg-border self-center" />
+        {/* Sort */}
+        <select
+          value={sorts[0]?.field || 'created_at'}
+          onChange={e => setSorts([{ field: e.target.value, dir: sorts[0]?.dir || 'desc' }])}
+          className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+        >
+          <option value="created_at">Ngày tạo</option>
+          <option value="title">Tiêu đề</option>
+          <option value="status">Trạng thái</option>
+          <option value="pillar">Pillar</option>
+          <option value="content_type">Loại</option>
+        </select>
+        <button
+          onClick={() => setSorts(prev => [{ field: prev[0]?.field || 'created_at', dir: prev[0]?.dir === 'asc' ? 'desc' : 'asc' }])}
+          className="px-2 py-1.5 border rounded-md text-sm bg-background hover:bg-muted"
+          title={sorts[0]?.dir === 'asc' ? 'Đang tăng dần — click để đổi' : 'Đang giảm dần — click để đổi'}
+        >
+          {sorts[0]?.dir === 'asc' ? '↑ Tăng' : '↓ Giảm'}
+        </button>
+        <div className="h-6 w-px bg-border self-center" />
+        {/* Group */}
+        <select value={groupBy} onChange={e => setGroupBy(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
+          <option value="none">Không nhóm</option>
+          <option value="status">Nhóm: Trạng thái</option>
+          <option value="pillar">Nhóm: Pillar</option>
+          <option value="content_type">Nhóm: Loại</option>
+          <option value="blog_category">Nhóm: Danh mục</option>
+        </select>
+      </div>
+
+      {/* ── Saved views bar ─────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        <span className="text-muted-foreground font-medium">Views đã lưu:</span>
+        {savedFilters.length === 0 && <span className="text-muted-foreground/60 italic">Chưa có view nào</span>}
+        {savedFilters.map((v, i) => (
+          <button key={i} onClick={() => loadView(v)} className="px-2 py-0.5 rounded-full bg-muted border hover:bg-primary/10 hover:border-primary/30 transition-colors flex items-center gap-1">
+            <Bookmark className="h-3 w-3" />{v.name}
+          </button>
+        ))}
+        <button
+          onClick={() => { const n = prompt('Tên view:'); if (n?.trim()) saveCurrentView(n.trim()); }}
+          className="px-2 py-0.5 rounded-full border border-dashed hover:bg-muted transition-colors flex items-center gap-1 text-muted-foreground"
+        >
+          <Plus className="h-3 w-3" />Lưu view hiện tại
+        </button>
+        <span className="ml-auto text-muted-foreground/60">{list.length} kết quả</span>
+      </div>
+
+      {/* ── Advanced filter builder ──────────────────────────────────── */}
+      {showAdvFilter && (
+        <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
+          <div className="text-xs font-semibold text-muted-foreground flex items-center gap-2">
+            <Filter className="h-3.5 w-3.5" />Bộ lọc nâng cao
+            <span className="ml-auto text-xs text-muted-foreground/60">AND = thỏa cả hai · OR = thỏa một trong hai</span>
+          </div>
+          {advFilters.map((f, i) => (
+            <div key={i} className="flex items-center gap-2">
+              {i > 0 && (
+                <select value={f.logic} onChange={e => setAdvFilters(prev => prev.map((x, j) => j === i ? { ...x, logic: e.target.value as 'AND'|'OR' } : x))} className="text-xs border rounded px-1 py-0.5 w-14">
+                  <option value="AND">AND</option>
+                  <option value="OR">OR</option>
+                </select>
+              )}
+              {i === 0 && <span className="text-xs text-muted-foreground w-14 text-center">WHERE</span>}
+              <select value={f.field} onChange={e => setAdvFilters(prev => prev.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="text-xs border rounded px-2 py-0.5">
+                <option value="status">status</option>
+                <option value="pillar">pillar</option>
+                <option value="content_type">content_type</option>
+                <option value="brand_voice">brand_voice</option>
+                <option value="blog_category">blog_category</option>
+                <option value="posted_account">posted_account</option>
+                <option value="title">title</option>
+              </select>
+              <select value={f.op} onChange={e => setAdvFilters(prev => prev.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="text-xs border rounded px-2 py-0.5">
+                <option value="eq">= bằng</option>
+                <option value="contains">chứa</option>
+                <option value="gt">&gt; lớn hơn</option>
+                <option value="lt">&lt; nhỏ hơn</option>
+              </select>
+              <input value={f.value} onChange={e => setAdvFilters(prev => prev.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="giá trị..." className="text-xs border rounded px-2 py-0.5 flex-1 min-w-0" />
+              <button onClick={() => setAdvFilters(prev => prev.filter((_, j) => j !== i))} className="text-destructive hover:bg-destructive/10 rounded p-0.5">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          <button onClick={() => setAdvFilters(prev => [...prev, { field: 'status', op: 'eq', value: '', logic: 'AND' }])} className="text-xs text-primary hover:underline flex items-center gap-1">
+            <Plus className="h-3 w-3" />Thêm điều kiện
+          </button>
+          {advFilters.length > 0 && (
+            <button onClick={() => setAdvFilters([])} className="text-xs text-destructive hover:underline ml-3">Xóa tất cả filter</button>
+          )}
+        </div>
+      )}
+
+      {/* ── Audit log panel ─────────────────────────────────────────── */}
+      {showAuditLog && (
+        <div className="border rounded-lg p-3 space-y-1.5 bg-muted/20 max-h-56 overflow-y-auto">
+          <div className="text-xs font-semibold text-muted-foreground flex items-center gap-2">
+            <History className="h-3.5 w-3.5" />Lịch sử thao tác ({auditLog.length})
+            <button onClick={() => setAuditLog([])} className="ml-auto text-destructive hover:underline text-xs">Xóa log</button>
+          </div>
+          {auditLog.length === 0 && <p className="text-xs text-muted-foreground/60 italic">Chưa có thao tác nào được ghi.</p>}
+          {auditLog.map((a, i) => (
+            <div key={i} className="text-xs flex items-start gap-2 py-0.5 border-b border-border/20 last:border-0">
+              <span className="text-muted-foreground/60 tabular-nums shrink-0">{new Date(a.ts).toLocaleTimeString('vi-VN')}</span>
+              <span className="font-medium text-primary/80">{a.action}</span>
+              <span className="text-muted-foreground flex-1">{a.detail}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Action bar (right side) ─────────────────────────────────── */}
+      <div className="flex gap-2 justify-end">
+        <Button size="sm" variant="outline" asChild>
+          <Link to="/GEM/cc/ai-gen">✨ AI Tạo nội dung</Link>
+        </Button>
+        <Button size="sm" variant="outline" asChild>
+          <Link to="/GEM/cc/scripts">📄 Kịch bản CC</Link>
+        </Button>
+        <Button size="sm" onClick={() => { setCreateForm(defaultCreateForm); setShowCreate(true); }}>
+          <Plus className="h-4 w-4 mr-1" />Tạo nội dung
+        </Button>
+      </div>
       {/* List */}
       <Card>
         {isLoading ? (
@@ -1661,24 +2045,46 @@ export function ContentTab() {
           <div className="p-8 text-center text-sm text-muted-foreground">Chưa có nội dung nào.</div>
         ) : (
           <div className="divide-y">
-            {list.map((s: any) => (
-              <ScriptRow
-                key={s.id}
-                s={s}
-                isExpanded={expandedId === s.id}
-                isSeen={seenSet.has(s.id)}
-                customTag={customTags[s.id] || ''}
-                onToggle={handleToggle}
-                onMarkSeen={markSeen}
-                onSaveCustomTag={saveCustomTag}
-                approveMut={approveMut}
-                onReject={handleReject}
-                deleteMut={deleteMut}
-                complianceMut={complianceMut}
-                pushToast={pushToast}
-                navigate={navigate}
-                inv={inv}
+            <div className="bg-muted/30 px-4 py-2 flex items-center gap-3 border-b text-sm font-medium text-muted-foreground">
+              <input 
+                type="checkbox" 
+                onChange={handleSelectAll} 
+                checked={list.length > 0 && selectedIds.size === list.length}
+                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
               />
+              <span>Tất cả</span>
+            </div>
+            {Object.entries(groupedList).map(([groupName, items]) => (
+              <div key={groupName}>
+                {groupBy && groupBy !== 'none' && <div className="bg-muted/50 px-4 py-1.5 text-xs font-semibold text-muted-foreground uppercase border-b">{groupName}</div>}
+                {(items as any[]).map((s: any, idx: number) => {
+                  const globalIdx = list.findIndex((x:any) => x.id === s.id);
+                  return (
+                    <ScriptRow
+                      key={s.id}
+                      s={s}
+                      isExpanded={expandedId === s.id}
+                      isSeen={seenSet.has(s.id)}
+                      customTag={customTags[s.id] || ''}
+                      visibleBadges={visibleBadges}
+                      isSelected={selectedIds.has(s.id)}
+                      isFocused={focusedIndex === globalIdx}
+                      onToggle={handleToggle}
+                      onMarkSeen={markSeen}
+                      onSaveCustomTag={saveCustomTag}
+                      onSelect={handleSelect}
+                      onContextMenu={handleContextMenu}
+                      approveMut={approveMut}
+                      onReject={handleReject}
+                      deleteMut={deleteMut}
+                      complianceMut={complianceMut}
+                      pushToast={pushToast}
+                      navigate={navigate}
+                      inv={inv}
+                    />
+                  );
+                })}
+              </div>
             ))}
           </div>
         )}

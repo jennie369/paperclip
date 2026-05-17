@@ -68,6 +68,8 @@ import { useJobSubscription } from '@gem/hooks/useJobSubscription';
 import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
 import DripStepHtmlEditor from './components/DripStepHtmlEditor';
+import { PromptImageCards } from './components/PromptImageCards';
+import EmailResultPanel from './components/EmailResultPanel';
 
 // ============================================================================
 // Constants — Loại nội dung
@@ -5762,74 +5764,6 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         </div>
       )}
 
-      {/* Email Toolbox — fixed position in left margin, outside content flow */}
-      {output && isHtmlPreview && showEmailToolbox && (
-        <div
-          className="rounded-card border border-border bg-glass-bg overflow-hidden z-50"
-          style={{ position: 'fixed', right: '16px', top: '80px', width: '190px', maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}
-        >
-            {/* Toolbox Header */}
-            <div className="px-3 py-2 border-b border-border bg-gold/10 flex items-center justify-between sticky top-0 z-10">
-              <div className="flex items-center gap-2">
-                <Plus size={14} className="text-gold" />
-                <span className="text-xs font-semibold text-gold">Toolbox</span>
-              </div>
-              <button onClick={() => setShowEmailToolbox(false)} className="text-txt-3 hover:text-txt transition-colors">
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="p-2">
-              {EMAIL_TOOLBOX_CATEGORIES.map((category) => (
-                <div key={category.id} className="mb-2">
-                  <button
-                    onClick={() => setEmailToolboxCategories(prev => ({ ...prev, [category.id]: !prev[category.id] }))}
-                    className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left rounded bg-glass-bg hover:bg-bg-3 transition-colors"
-                  >
-                    {emailToolboxCategories[category.id] ? <ChevronDown size={12} className="text-txt-3" /> : <ChevronRight size={12} className="text-txt-3" />}
-                    <category.icon size={12} className="text-gold" />
-                    <span className="text-xxs font-semibold text-txt-2">{category.label}</span>
-                    <span className="text-xxs text-txt-3 ml-auto">({category.items.length})</span>
-                  </button>
-
-                  {emailToolboxCategories[category.id] && (
-                    <div className="flex flex-col gap-1 mt-1 pl-1">
-                      {category.items.map((item) => (
-                        <div
-                          key={item.id}
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = 'copy';
-                            e.dataTransfer.setData('application/x-email-toolbox', JSON.stringify(item));
-                            e.dataTransfer.setData('text/html', item.html);
-                            e.dataTransfer.setData('text/plain', item.label);
-                            // Store the HTML for the iframe postMessage handler
-                            window.__emailPendingDropHtml = item.html;
-                          }}
-                          onClick={() => handleEmailToolboxInsert(item)}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded border border-transparent bg-white/[0.03] hover:bg-gold/10 hover:border-gold/20 cursor-grab transition-all group"
-                          title={`${item.description} — Kéo vào email preview hoặc click để thêm`}
-                        >
-                          <GripVertical size={10} className="text-txt-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                          <item.icon size={12} className="text-gold flex-shrink-0" />
-                          <span className="text-xxs text-txt-2 leading-tight">{item.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {/* Hint */}
-              <div className="mt-2 p-2 rounded bg-purple/5 border border-purple/10 text-center">
-                <p className="text-xxs text-txt-3 leading-relaxed">
-                  Kéo thả trực tiếp vào email preview hoặc click để chèn
-                </p>
-              </div>
-            </div>
-          </div>
-      )}
-
       {/* -- Kết quả -- 2026-05-13: always render so user can paste content directly even on fresh page. */}
       <div ref={resultSectionRef}>
         <Card variant="glass" padding="md">
@@ -5969,149 +5903,26 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
           {/* Content: Email HTML Preview or standard markdown */}
           {isHtmlPreview ? (
-            <div className="mb-4 space-y-3">
-              {/* Email toolbar */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => { setShowEmailPreview(true); setShowEmailSource(false); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailPreview && !showEmailSource ? 'bg-gold/20 text-gold border border-gold/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-gold/20'}`}
-                >
-                  <Eye size={14} />
-                  Preview
-                </button>
-                <button
-                  onClick={() => { setShowEmailSource(true); setShowEmailPreview(false); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailSource && !showEmailPreview ? 'bg-purple/20 text-purple border border-purple/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-purple/20'}`}
-                >
-                  <Code size={14} />
-                  HTML Source
-                </button>
-                <button
-                  onClick={() => { setShowEmailPreview(true); setShowEmailSource(true); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailPreview && showEmailSource ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-cyan/20'}`}
-                >
-                  <Smartphone size={14} />
-                  Split View
-                </button>
-
-                <div className="w-px h-5 bg-border mx-1" />
-
-                {/* Toolbox toggle */}
-                <button
-                  onClick={() => setShowEmailToolbox(!showEmailToolbox)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailToolbox ? 'bg-gold/20 text-gold border border-gold/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-gold/20'}`}
-                >
-                  <Layers size={14} />
-                  Toolbox
-                </button>
-
-                {/* Image Management */}
-                <input
-                  ref={emailFileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleEmailImageUpload}
-                />
-                <button
-                  onClick={() => { setEmailReplacingIdx(null); emailFileInputRef.current?.click(); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium bg-glass-bg text-txt-3 border border-border hover:border-emerald/30 hover:text-emerald transition-all"
-                >
-                  <Upload size={14} />
-                  Thêm Hình Ảnh
-                </button>
-                {emailPlaceholders.length > 0 && (
-                  <span className="text-xxs text-txt-3">
-                    {emailPlaceholders.length} placeholder •
-                  </span>
-                )}
-                {emailPlaceholders.map((ph, i) => (
-                  <button
-                    key={i}
-                    onClick={() => { setEmailReplacingIdx(i); emailFileInputRef.current?.click(); }}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-xxs bg-amber/10 text-amber border border-amber/20 hover:bg-amber/20 transition-all"
-                    title={ph.url}
-                  >
-                    <ImageIcon size={10} />
-                    Thay #{i + 1}
-                  </button>
-                ))}
-              </div>
-
-              {/* Preview / Source area — full width since toolbox is outside Card */}
-              <div
-                className={`${showEmailPreview && showEmailSource ? 'grid grid-cols-2 gap-3' : ''}`}
-                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  // Handle image drops on the outer container
-                  handleEmailDrop(e);
-                }}
-              >
-                {/* HTML Source Editor */}
-                {showEmailSource && (
-                  <div className="rounded-card bg-glass-bg border border-border overflow-hidden">
-                    <div className="px-3 py-2 border-b border-border flex items-center gap-2">
-                      <Code size={14} className="text-purple" />
-                      <span className="text-xxs font-semibold text-txt-2 uppercase tracking-wider">HTML Source</span>
-                    </div>
-                    <textarea
-                      value={output}
-                      onChange={(e) => setOutput(e.target.value)}
-                      className="w-full bg-transparent text-xs text-txt-2 leading-relaxed focus:outline-none resize-y p-3 font-mono"
-                      style={{ minHeight: 'calc(100vh - 260px)' }}
-                      spellCheck={false}
-                    />
-                  </div>
-                )}
-
-                {/* HTML Preview */}
-                {showEmailPreview && (
-                  <div className="rounded-card border border-border overflow-hidden bg-white">
-                    <div className="px-3 py-2 border-b border-border bg-glass-bg flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Mail size={14} className="text-gold" />
-                        <span className="text-xxs font-semibold text-txt-2 uppercase tracking-wider">Email Preview</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          disabled={!canUndo}
-                          onClick={() => emailIframeRef.current?.contentWindow?.postMessage({ type: 'email-undo' }, '*')}
-                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-4 hover:text-txt transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
-                          title="Hoàn tác (Ctrl+Z)"
-                        >
-                          <RefreshCw size={12} className="scale-x-[-1]" />
-                          Undo
-                        </button>
-                        <button
-                          disabled={!canRedo}
-                          onClick={() => emailIframeRef.current?.contentWindow?.postMessage({ type: 'email-redo' }, '*')}
-                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-4 hover:text-txt transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
-                          title="Làm lại (Ctrl+Y)"
-                        >
-                          <RefreshCw size={12} />
-                          Redo
-                        </button>
-                        <span className="text-xxs text-txt-3">600px max-width</span>
-                      </div>
-                    </div>
-                    <div className="flex justify-center bg-[#e8e8ec] p-4">
-                      <iframe
-                        ref={emailIframeRef}
-                        key="email-preview-stable"
-                        title="Email Preview"
-                        srcDoc={emailPreviewSrcDoc}
-                        className="border-0 w-full max-w-[620px] bg-white shadow-lg rounded"
-                        style={{ minHeight: '800px' }}
-                        sandbox="allow-same-origin allow-scripts"
-                        onLoad={handleEmailIframeLoad}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+            <EmailResultPanel
+              output={output}
+              onOutputChange={setOutput}
+              emailPreviewSrcDoc={emailPreviewSrcDoc}
+              emailIframeRef={emailIframeRef}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              emailPlaceholders={emailPlaceholders}
+              emailFileInputRef={emailFileInputRef}
+              onIframeLoad={handleEmailIframeLoad}
+              onImageUpload={handleEmailImageUpload}
+              onSetReplacingIdx={setEmailReplacingIdx}
+              onDrop={handleEmailDrop}
+              toolboxCategories={EMAIL_TOOLBOX_CATEGORIES}
+              showEmailToolbox={showEmailToolbox}
+              onToggleToolbox={() => setShowEmailToolbox(t => !t)}
+              toolboxOpenState={emailToolboxCategories}
+              onToggleCategory={(id) => setEmailToolboxCategories(s => ({...s, [id]: !s[id]}))}
+              onToolboxInsert={handleEmailToolboxInsert}
+            />
           ) : (
             <div className="p-4 rounded-card bg-card border border-border mb-4">
               {isEditing ? (
@@ -6166,101 +5977,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
           )}
 
           {/* ═══ 7 Prompt Cards — LUÔN HIỂN DÙ thu gọn ═══ */}
-          {output && output.toLowerCase().includes('prompt cho ') && (() => {
-            const firstIdx = output.toLowerCase().indexOf('prompt cho ');
-            const workingText = firstIdx >= 0 ? output.slice(firstIdx) : output;
-            const parts = workingText.split(/(?=PROMPT CHO )/i).map(s => s.trim()).filter(Boolean).slice(0, 7);
-            const cards = parts.length > 1 ? parts : (() => {
-              const lines = output.split('\n');
-              const result = [];
-              let current = '';
-              const isHead = (l) =>
-                /^(?:#{1,3}\s*)?(?:Ảnh|Anh|ANH)\s*[1-7](?:\s*[-:—]|$)/i.test(l.trim())
-                || /^PROMPT CHO /i.test(l.trim());
-              for (const line of lines) {
-                if (isHead(line)) { if (current.trim()) result.push(current.trim()); current = line + '\n'; }
-                else { current += line + '\n'; }
-              }
-              if (current.trim()) result.push(current.trim());
-              return result.length > 1 ? result.slice(0, 7) : [output];
-            })();
-            const handleCopyCard = async (text, idx) => {
-              try {
-                await navigator.clipboard.writeText(text);
-                setCopiedPromptIdx(idx); setTimeout(() => setCopiedPromptIdx(null), 2000);
-              } catch { /* ignore */ }
-            };
-
-            const handleCopyAllCards = async () => {
-              try {
-                const fullText = cards.map(c => '=========================================\n' + c).join('\n\n');
-                await navigator.clipboard.writeText(fullText);
-                addToast({ type: 'success', message: 'Đã sao chép TẤT CẢ prompt.' });
-              } catch {
-                addToast({ type: 'error', message: 'Lỗi copy.' });
-              }
-            };
-
-            return (
-              <div className="mt-4 pt-4 border-t border-border">
-                {/* Header section với toggle toàn bộ */}
-                <div className="flex items-center justify-between mb-3">
-                  <div
-                    className="flex items-center gap-2 cursor-pointer select-none"
-                    onClick={() => setPromptSectionCollapsed(c => !c)}
-                  >
-                    <ImageIcon size={14} className="text-purple" />
-                    <h4 className="text-xs font-semibold text-purple uppercase tracking-wider">
-                      🎨 Prompt Hình Ảnh ({cards.length}/7)
-                    </h4>
-                    <span className="text-txt-3 text-xs">{promptSectionCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
-                  </div>
-                  <Button variant="outline" size="sm" icon={Copy} onClick={handleCopyAllCards}>Sao Chép Tất Cả</Button>
-                </div>
-
-                {/* 7 Cards — ẩn toàn bộ nếu section collapsed */}
-                {!promptSectionCollapsed && (
-                <div className="grid gap-2">
-                  {cards.map((card, idx) => {
-                    const isCardCollapsed = !!collapsedCards[idx];
-                    const toggleCard = () => setCollapsedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
-                    return (
-                    <div key={idx} className="rounded-card border border-purple/20 bg-purple/5">
-                      {/* Card header với toggle từng card */}
-                      <div
-                        className="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-purple/10 transition-colors rounded-card"
-                        onClick={toggleCard}
-                      >
-                        <span className="text-xs font-semibold text-purple">
-                          {isCardCollapsed ? '▶' : '▼'} Ảnh {idx + 1}
-                        </span>
-                        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                          <button
-                            onClick={() => handleCopyCard(card, idx)}
-                            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-purple/30 bg-purple/10 text-purple hover:bg-purple/20 transition-all"
-                          >
-                            {copiedPromptIdx === idx ? <><Check size={11}/><span>Đã copy!</span></> : <><Copy size={11}/><span>Copy</span></>}
-                          </button>
-                        </div>
-                      </div>
-                      {/* Card content — ẩn nếu card collapsed */}
-                      {!isCardCollapsed && (
-                        <div className="px-3 pb-3">
-                          <pre className="text-xs text-txt-2 leading-relaxed whitespace-pre-wrap font-sans">{card}</pre>
-                        </div>
-                      )}
-                    </div>
-                    );
-                  })}
-                </div>
-                )}
-                <div className="mt-2 p-2 rounded-card bg-glass-bg border border-gold/20">
-                  <p className="text-xxs font-semibold text-gold mb-0.5">Design System (tự ghép khi copy từng ảnh)</p>
-                  <p className="text-xxs text-txt-3 font-mono">Navy #112250 · Gold #FFBD59 · Purple #6A5BFF · 3:4 · gemral.com</p>
-                </div>
-              </div>
-            );
-          })()}
+          <PromptImageCards output={output} addToast={addToast} />
 
           {/* Thống kê */}
           {generationDone && !isHtmlPreview && (
