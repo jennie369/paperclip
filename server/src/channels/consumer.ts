@@ -231,9 +231,13 @@ async function processMessage(
       console.log(`${logPrefix} CRM: Khách mới tạo → ${customerId}`);
     }
 
-    // Auto-save to inbox_contacts for permanent contact persistence
+    // Auto-save to inbox_contacts for permanent contact persistence.
+    // Route senderId to the correct platform-specific column based on channelType
+    // so FB PSIDs don't pollute zalo_id and CRM resolves by the right key.
     if (saveContact && merged.senderId && merged.peerKind !== 'group') {
-      supabase.from('inbox_contacts').select('id').eq('zalo_id', merged.senderId).single().then(async ({ data }) => {
+      const isFacebook = merged.channelType === 'facebook' || merged.channelType === 'facebook_web';
+      const platformColumn = isFacebook ? 'facebook_id' : 'zalo_id';
+      supabase.from('inbox_contacts').select('id').eq(platformColumn, merged.senderId).single().then(async ({ data }) => {
         if (data?.id) {
           await supabase.from('inbox_contacts').update({
             name: merged.senderName || merged.senderId,
@@ -241,12 +245,13 @@ async function processMessage(
             last_message_at: new Date().toISOString(),
           }).eq('id', data.id);
         } else {
-          await supabase.from('inbox_contacts').insert({
+          const insertPayload: Record<string, any> = {
             name: merged.senderName || merged.senderId,
-            zalo_id: merged.senderId,
             channel: merged.channel,
             last_message_at: new Date().toISOString(),
-          });
+          };
+          insertPayload[platformColumn] = merged.senderId;
+          await supabase.from('inbox_contacts').insert(insertPayload);
         }
       });
     }

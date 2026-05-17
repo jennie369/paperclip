@@ -322,4 +322,39 @@ export const channelsApi = {
     const q = qs.toString();
     return api.get<ActivityLogEntry[]>(`/channels/activity${q ? `?${q}` : ""}`);
   },
+
+  // --- Facebook Web (Reverse Protocol) ---
+  listFacebookWeb: () =>
+    api.get<ChannelInstance[]>("/channels/facebook-web"),
+
+  setupFacebookWeb: (payload: {
+    channel_name: string;
+    display_name?: string;
+    page_id: string;
+    page_name?: string;
+    cookies: Array<{ name: string; value: string; domain: string; path?: string; httpOnly?: boolean; secure?: boolean; sameSite?: string; expirationDate?: number }>;
+    user_agent?: string;
+  }) =>
+    api.post<{ success: boolean; status?: string; error?: string }>("/channels/facebook-web/setup", payload),
+
+  restartFacebookWeb: (name: string) =>
+    api.post<{ success: boolean }>(`/channels/facebook-web/${encodeURIComponent(name)}/restart`, {}),
+
+  verifyFacebookWeb: (name: string) =>
+    api.get<{ name: string; running: boolean }>(`/channels/facebook-web/${encodeURIComponent(name)}/verify`),
+
+  sendFacebookWebMessage: (name: string, threadId: string, message: string) =>
+    api.post<{ success: boolean; message_id?: string; error?: string }>(
+      `/channels/facebook-web/${encodeURIComponent(name)}/send`,
+      { thread_id: threadId, message },
+    ),
+
+  replyFacebookWebComment: (name: string, commentId: string, message: string) =>
+    api.post<{ success: boolean; message_id?: string; error?: string }>(
+      `/channels/facebook-web/${encodeURIComponent(name)}/comment-reply`,
+      { comment_id: commentId, message },
+    ),
+
+  deleteFacebookWeb: (name: string) =>
+    api.delete<{ success: boolean }>(`/channels/facebook-web/${encodeURIComponent(name)}`),
 };

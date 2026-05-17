@@ -50,6 +50,7 @@ import { CompanySettings } from "./pages/CompanySettings";
 import { DesignGuide } from "./pages/DesignGuide";
 import { ZaloPersonalPage } from "./pages/channels/ZaloPersonalPage";
 import { ZaloPersonalChat } from "./pages/channels/ZaloPersonalChat";
+import { FacebookWebPage } from "./pages/channels/FacebookWebPage";
 import { ChannelsOverview } from "./pages/channels/ChannelsOverview";
 import { ConversationsPage } from "./pages/channels/ConversationsPage";
 import { ConversationChat } from "./pages/channels/ConversationChat";
@@ -268,6 +269,7 @@ function boardRoutes() {
       <Route path="channels/zalo-personal" element={<ZaloPersonalPage />} />
       <Route path="channels/zalo-personal/:channelName" element={<Navigate to="../channels/inbox" replace />} />
       <Route path="channels/zalo-personal/:channelName/:threadId" element={<Navigate to="../../channels/inbox" replace />} />
+      <Route path="channels/facebook-web" element={<FacebookWebPage />} />
       <Route path="channels/conversations" element={<ConversationsPage />} />
       <Route path="channels/conversations/:sessionKey" element={<ConversationChat />} />
       <Route path="channels/settings" element={<ChannelSettingsPage />} />

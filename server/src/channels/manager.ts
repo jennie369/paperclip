@@ -111,6 +111,8 @@ class ChannelManager {
     if (!channel) {
       // Facebook channels have their own outbound handler in webhook.ts — skip silently
       if (msg.channel.startsWith('fb-')) return;
+      // Facebook Web (Reverse Protocol) channels self-handle via FacebookWebChannel.installBusOutboundHandler
+      if (msg.channel.startsWith('fbweb-')) return;
       console.warn(`[Manager] Channel not found for dispatch: ${msg.channel}`);
       await this.logSentMessage(msg, 'failed', 'Channel not found');
       return;

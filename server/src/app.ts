@@ -37,6 +37,7 @@ import channelRoutes from "./channels/routes.js";
 import agentConfigRoutes from "./channels/agent-config-routes.js";
 import qaRoutes from "./channels/qa-routes.js";
 import facebookWebhook from "./channels/facebook/webhook.js";
+import facebookWebRoutes, { resumeAllFacebookWebChannels } from "./channels/facebook-web/routes.js";
 import youtubeRoutes from "./channels/youtube/routes.js";
 import crmRoutes from "./channels/crm/crm-routes.js";
 import ticketRoutes from "./channels/crm/ticket-routes.js";
@@ -251,6 +252,7 @@ export async function createApp(
     }),
   );
   api.use("/channels/facebook", facebookWebhook);
+  api.use("/channels/facebook-web", facebookWebRoutes);
   api.use("/channels/youtube", youtubeRoutes);
   api.use("/channels/zalo-personal", zaloPersonalRoutes);
   api.use("/channels/agent-configs", agentConfigRoutes);
@@ -457,7 +459,11 @@ export async function createApp(
     }
   });
 
-  // Restore Zalo channels + start consumer on startup
+  // Restore Zalo + Facebook Web channels + start consumer on startup
+  resumeAllFacebookWebChannels().then(() => {
+    console.log("[FbWeb] Channel restore complete");
+  }).catch((err) => console.error("[FbWeb] Restore error:", err));
+
   restoreChannels().then(async () => {
     console.log("[ZaloPersonal] Channel restore complete");
     // Start the inbound consumer (agent auto-reply pipeline)
