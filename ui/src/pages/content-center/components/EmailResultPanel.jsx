@@ -22,7 +22,7 @@
  *   onToggleCategory    — (catId: string) => void
  *   onToolboxInsert     — (item) => void
  */
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   Eye, Code, Smartphone, Layers, Upload, ImageIcon,
   Plus, ChevronDown, ChevronRight, GripVertical,
@@ -138,13 +138,11 @@ export function EmailResultPanel({
   const localFileInputRef = useRef(null);
   const fileRef = emailFileInputRef || localFileInputRef;
 
-  // View mode state is LOCAL to this component
-  const [showPreview, setShowPreview] = window._emailPanelPreview ??
-    (() => {
-      // Simple local state via closures won't persist — caller should pass these if needed
-      // For simplicity we default to preview mode
-      return [true, () => {}];
-    })();
+  // View mode state — real useState (previous fake `[true, () => {}]` made
+  // Preview/Source/Split toolbar buttons no-op). Default both true = Split
+  // View, which matches the historical hardcoded render.
+  const [viewPreview, setViewPreview] = useState(true);
+  const [viewSource, setViewSource] = useState(true);
 
   return (
     <>
@@ -174,6 +172,10 @@ export function EmailResultPanel({
         onDrop={onDrop}
         showEmailToolbox={showEmailToolbox}
         onToggleToolbox={onToggleToolbox}
+        viewPreview={viewPreview}
+        viewSource={viewSource}
+        onSetPreview={setViewPreview}
+        onSetSource={setViewSource}
       />
 
       {/* Hidden file input */}
@@ -208,22 +210,19 @@ function EmailResultPanelInner({
   onDrop,
   showEmailToolbox,
   onToggleToolbox,
+  viewPreview,
+  viewSource,
+  onSetPreview,
+  onSetSource,
 }) {
-  const [showEmailPreview, setShowEmailPreview] = window.__emailPanelState
-    ? [window.__emailPanelState.preview, window.__emailPanelState.setPreview]
-    : (() => {
-        // Local refs to avoid React state — quick workaround
-        const [v, setV] = [true, () => {}]; // default preview on
-        return [v, setV];
-      })();
-  const [showEmailSource, setShowEmailSource] = [false, () => {}];
-
   return (
     <div className="mb-4 space-y-3">
       {/* Email view toolbar */}
       <EmailViewToolbar
-        showPreview={true}
-        showSource={false}
+        showPreview={viewPreview}
+        showSource={viewSource}
+        onSetPreview={onSetPreview}
+        onSetSource={onSetSource}
         showEmailToolbox={showEmailToolbox}
         emailPlaceholders={emailPlaceholders}
         canUndo={canUndo}
@@ -240,22 +239,25 @@ function EmailResultPanelInner({
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
         onDrop={onDrop}
       >
-        {/* HTML Source Editor */}
-        <div className="rounded-card bg-glass-bg border border-border overflow-hidden">
-          <div className="px-3 py-2 border-b border-border flex items-center gap-2">
-            <Code size={14} className="text-purple" />
-            <span className="text-xxs font-semibold text-txt-2 uppercase tracking-wider">HTML Source</span>
+        {/* HTML Source Editor — hide khi user chỉ chọn Preview */}
+        {viewSource && (
+          <div className="rounded-card bg-glass-bg border border-border overflow-hidden">
+            <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+              <Code size={14} className="text-purple" />
+              <span className="text-xxs font-semibold text-txt-2 uppercase tracking-wider">HTML Source</span>
+            </div>
+            <textarea
+              value={output}
+              onChange={(e) => onOutputChange(e.target.value)}
+              className="w-full bg-transparent text-xs text-txt-2 leading-relaxed focus:outline-none resize-y p-3 font-mono"
+              style={{ minHeight: 'calc(100vh - 260px)' }}
+              spellCheck={false}
+            />
           </div>
-          <textarea
-            value={output}
-            onChange={(e) => onOutputChange(e.target.value)}
-            className="w-full bg-transparent text-xs text-txt-2 leading-relaxed focus:outline-none resize-y p-3 font-mono"
-            style={{ minHeight: 'calc(100vh - 260px)' }}
-            spellCheck={false}
-          />
-        </div>
+        )}
 
-        {/* HTML Preview iframe */}
+        {/* HTML Preview iframe — hide khi user chỉ chọn Source */}
+        {viewPreview && (
         <div className="rounded-card border border-border overflow-hidden bg-white mt-3">
           <div className="px-3 py-2 border-b border-border bg-glass-bg flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -297,6 +299,7 @@ function EmailResultPanelInner({
             />
           </div>
         </div>
+        )}
       </div>
     </div>
   );
