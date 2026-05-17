@@ -173,6 +173,17 @@ const DOC_SOP_OPTIONS = [
   { value: 'DOC-ONB-006', label: 'Onboarding Tư Duy Triệu Phú (7 emails)', group: 'Onboarding Email', emailCount: 7 },
   { value: 'DOC-ONB-007', label: 'Onboarding 7 Ngày Tần Số Gốc (7 emails)', group: 'Onboarding Email', emailCount: 7 },
   { value: 'DOC-ONB-008', label: 'Onboarding CTV/KOL (5 emails)', group: 'Onboarding Email', emailCount: 5 },
+  // Lead Magnet → High-Ticket Close Funnel V1 (2026-05-18) — 10 individual emails of sequence `lm_close_v1`
+  { value: 'DOC-SAL-LM-001', label: 'LM Stage 1 Day 0 — Delivery + Wow Moment',           group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-002', label: 'LM Stage 2 Day 2 — Origin Story',                    group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-003', label: 'LM Stage 3 Day 3 — 3 Sai Lầm + Authority',          group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-004', label: 'LM Stage 3 Day 4 — Quick Win Tool (Reciprocity)',   group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-005', label: 'LM Stage 3 Day 5 — Soft Pitch + Yes/No VSL Intent', group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-006', label: 'LM Stage 4 Day 6 — VSL Reveal + Strategy Call CTA', group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-007', label: 'LM Stage 5 Day 7 — Case Study Social Proof',        group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-008', label: 'LM Stage 5 Day 8 — FAQ + Risk Reversal',            group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-009', label: 'LM Stage 5 Day 9 — Urgency 48h',                    group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-010', label: 'LM Stage 5 Day 10 — Last Call (Personal Tone)',     group: 'Lead Magnet Funnel', emailCount: 1 },
   // Customer Support / User guides (2026-04-19)
   { value: 'DOC-CS-005', label: 'Hướng Dẫn Sử Dụng App Gemral', group: 'Hướng Dẫn App' },
   { value: 'DOC-CS-006', label: 'Hướng Dẫn Ritual & Vision Board', group: 'Hướng Dẫn App' },
