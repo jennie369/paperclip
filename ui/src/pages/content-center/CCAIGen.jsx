@@ -5931,7 +5931,13 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             </div>
           )}
 
-          {/* Content: Global ContentResultPanel — all features available cho mọi content type.
+          {/* ═══ Đóng collapsible guard (IterateChatPanel + GenerateProgress only) ═══ */}
+          </>
+          )}
+
+          {/* Content: Global ContentResultPanel — mount OUTSIDE collapsible wrapper.
+              `collapsed` prop chỉ ẩn toolbar+content preview, prompts/resend/stats
+              vẫn visible bên dưới collapse boundary.
               Spec: memory/reports/2026-05-17-content-result-panel-global-design.md */}
           <ContentResultPanel
             output={output}
@@ -5949,6 +5955,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             onDrop={handleEmailDrop}
             toolboxCategories={EMAIL_TOOLBOX_CATEGORIES}
             onToolboxInsert={handleEmailToolboxInsert}
+            collapsed={resultCollapsed}
             resend={{
               sender: emailSender,
               subject: emailSubject,
@@ -5976,10 +5983,6 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             }}
             addToast={addToast}
           />
-
-          {/* ═══ Đóng collapsible guard ═══ */}
-          </>
-          )}
 
           {/* PromptImageCards + simple stats row đã mounted inside ContentResultPanel above.
               Brand Voice + GEM Tools Analysis Cards (extended deep analysis) giữ riêng:

@@ -80,6 +80,8 @@ export function ContentResultPanel({
   resend = null,
   // Stats (grouped object — null to disable)
   stats = null,
+  // Collapse toolbar+content area only (prompts/resend/stats vẫn visible)
+  collapsed = false,
   // Utilities
   addToast,
 }) {
@@ -114,6 +116,10 @@ export function ContentResultPanel({
       />
 
       <div className="mb-4 space-y-3">
+        {/* Toolbar + content area — gate bằng `collapsed` để parent có thể ẩn
+            chỉ content preview, prompts/resend/stats vẫn render bên dưới. */}
+        {!collapsed && (
+        <>
         {/* Toolbar */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* View mode buttons */}
@@ -250,6 +256,9 @@ export function ContentResultPanel({
             </div>
           )}
         </div>
+        </>
+        )}
+        {/* End collapsible (toolbar + content area) — stats/prompts/resend below always visible */}
 
         {/* Hidden file input (fallback if parent didn't provide) */}
         {!fileInputRef && (
