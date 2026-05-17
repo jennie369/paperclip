@@ -49,6 +49,7 @@ import {
   Layers,
   Mic,
   Play,
+  ArrowUp,
 } from 'lucide-react';
 import emailRegistry from '@/config/email_template_registry.json';
 import { Card } from '@gem/ui';
@@ -3600,11 +3601,28 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     return () => window.removeEventListener('message', handler);
   }, [addToast]);
 
-  // -- Email preview srcDoc with base tag + interactive editing script --
-  const emailPreviewSrcDoc = React.useMemo(() => {
+  // -- Content preview srcDoc với base tag + interactive editing script --
+  // Generic — handles HTML output (email/doc) + plain markdown/text (social/forum)
+  // wrap markdown trong <pre> với preserve whitespace (Phase A KISS, no markdown parser).
+  // Spec: memory/reports/2026-05-17-content-result-panel-global-design.md §5.3
+  const previewSrcDoc = React.useMemo(() => {
     // When iframe syncs its DOM back to parent, don't regenerate srcDoc (iframe already has correct state)
     if (emailSyncingRef.current && emailSrcDocRef.current) return emailSrcDocRef.current;
     if (!output) return '';
+
+    // Markdown/plain-text fallback: nếu output không có HTML tag, wrap trong <pre> để
+    // render giữ line break + spacing. Phase A keep simple, không cài markdown parser.
+    const escapeHtml = (s) => (s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+    const hasHtml = /<(html|body|table|div|p|h\d|section|article|header|main|figure|img|ul|ol|li|blockquote)\b/i.test(output);
+    const workingOutput = hasHtml
+      ? output
+      : `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body><pre style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Inter', system-ui, sans-serif; padding: 16px; color: #1f1f1f; line-height: 1.6; font-size: 14px; margin: 0;">${escapeHtml(output)}</pre></body></html>`;
+
     const baseTag = `<base href="${window.location.origin}/">`;
 
     // Comprehensive script: drag-drop, inline editing, delete, image replace
@@ -3893,9 +3911,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 })();
 </script>`;
 
-    // Inject base tag + script
-    const bodyEndIdx = output.lastIndexOf('</body>');
-    let result = output;
+    // Inject base tag + script (operate on workingOutput — already wrapped if markdown)
+    const bodyEndIdx = workingOutput.lastIndexOf('</body>');
+    let result = workingOutput;
     if (bodyEndIdx !== -1) {
       result = result.slice(0, bodyEndIdx) + interactiveScript + result.slice(bodyEndIdx);
     } else {
@@ -3913,6 +3931,10 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     emailSrcDocRef.current = finalSrcDoc;
     return finalSrcDoc;
   }, [output, isEditing]);
+
+  // Backward-compat alias — EmailResultPanel mount cũ vẫn đọc emailPreviewSrcDoc.
+  // Xóa alias này ở Task 6 (sau khi migrate sang ContentResultPanel).
+  const emailPreviewSrcDoc = previewSrcDoc;
 
   // -- Default design system --
   const DEFAULT_DESIGN_SYSTEM = `\n\nQUY TẮC BẮT BUỘC:\n- Use my attached photo for character face.\n- Tất cả text bằng tiếng Việt có dấu\n- Người Việt thật 27-35 tuổi (KHÔNG cartoon, KHÔNG illustration)\n- Style: Luxurious, premium, high-end editorial photography — KHÔNG minimalist/tối giản\n- Lighting: cinematic golden hour, dramatic rim lighting, soft bokeh with warm tones\n- TUYỆT ĐỐI KHÔNG cho nhân vật mặc blazer, vest, suit jacket — thay bằng elegant casual: áo lụa, áo trễ vai, áo cổ V thanh lịch, hoặc outfit phù hợp ngữ cảnh\n- Background: rich textures (marble, velvet, warm wood, golden accents), NOT plain/empty\n- Tỷ lệ mặc định: 3:4 (dọc)\n\nDESIGN SYSTEM:\nNavy đậm #112250\nGold #FFBD59\nAccent: Purple #6A5BFF\nBurgundy #9C0612\nPink #FF6B9D\nText: White #FFFFFF\nFooter: "gemral.com" centered`;
@@ -5766,6 +5788,16 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
       {/* -- Kết quả -- 2026-05-13: always render so user can paste content directly even on fresh page. */}
       <div ref={resultSectionRef}>
+        {/* Fast Scroll to Top Button */}
+        {output && !resultCollapsed && (
+          <button
+            onClick={() => resultSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            className="fixed bottom-6 right-6 z-[100] p-3 rounded-full bg-glass-bg border border-gold/30 text-gold shadow-[0_0_15px_rgba(255,189,89,0.2)] hover:bg-gold hover:text-black hover:scale-110 transition-all cursor-pointer"
+            title="Cuộn lên đầu kết quả"
+          >
+            <ArrowUp size={20} />
+          </button>
+        )}
         <Card variant="glass" padding="md">
           {/* Toolbar */}
           <div className="flex items-center justify-between mb-3">
@@ -7030,7 +7062,6 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                 placeholder={`Paste output (markdown / HTML / image prompts) vào đây...\n\nVí dụ:\n# Tiêu đề\n\nNội dung bài viết...\n\n===IMAGE_PROMPT===\nPROMPT CHO ẢNH 1\n=========================================\n[prompt content]\n\nPROMPT CHO ẢNH 2\n=========================================\n[prompt content]`}
                 className="w-full min-h-[280px] p-3 rounded-card bg-glass-bg border border-border text-sm text-txt font-mono leading-relaxed resize-y focus:outline-none focus:border-gold/40 focus:ring-1 focus:ring-gold/20 placeholder:text-txt-3"
                 spellCheck={false}
-                autoFocus
               />
               <p className="text-xxs text-txt-3">
                 💡 Sau khi paste, prompt cards sẽ tự hiển thị nếu nội dung có "PROMPT CHO ẢNH N".
