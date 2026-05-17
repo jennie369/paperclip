@@ -1,9 +1,21 @@
 /**
- * EmailResultPanel — Shared component
- * Hiển thị email HTML preview + toolbox + source editor.
- * Dùng chung: CCAIGen (email type), CCScriptDetail (khi có email output).
+ * EmailResultPanel — ⚠️ DEPRECATED 2026-05-17 ⚠️
  *
- * Props:
+ * Replaced by ContentResultPanel.jsx — global result panel cho mọi content type.
+ * Reason: chỉ render khi `isHtmlPreview = isEmail || isDocTaiLieu`, không
+ * available cho social/blog/forum. User yêu cầu 2026-05-17: "Tất cả tính năng
+ * available luôn, không phân biệt điều kiện."
+ *
+ * Migration done in CCAIGen.jsx Task 6 cutover (paperclip commit b199a816).
+ * No remaining call sites trong paperclip-ui.
+ *
+ * KEPT IN REPO cho rollback window. Delete file này sau khi production stable
+ * 1-2 weeks post-migration, không có rollback called.
+ *
+ * Spec: memory/reports/2026-05-17-content-result-panel-global-design.md
+ * Plan: memory/reports/2026-05-17-content-result-panel-implementation-plan.md
+ *
+ * Original props (cho lịch sử):
  *   output              — string: HTML email content
  *   onOutputChange      — (newHtml: string) => void
  *   emailPreviewSrcDoc  — string: injected srcDoc với script editor
