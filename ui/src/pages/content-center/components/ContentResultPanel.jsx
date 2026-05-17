@@ -286,6 +286,7 @@ export function ContentResultPanel({
             onBccChange={resend.onBccChange}
             onManualHtmlChange={resend.onManualHtmlChange}
             onSend={resend.onSend}
+            onScheduleClick={resend.onScheduleClick}
             addToast={addToast}
             defaultOpen={contentType === 'email'}
           />

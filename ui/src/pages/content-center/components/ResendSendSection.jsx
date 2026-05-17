@@ -24,13 +24,13 @@
  *   defaultOpen      — boolean: initial expanded state (default false)
  */
 import { useState } from 'react';
-import { Mail, Send, Loader2, Copy, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Mail, Send, Loader2, Copy, CheckCircle2, ChevronDown, ChevronRight, CalendarPlus } from 'lucide-react';
 
 export function ResendSendSection({
   sender, subject, recipients, bcc, manualHtml,
   sent, sending, output,
   onSenderChange, onSubjectChange, onRecipientsChange, onBccChange, onManualHtmlChange,
-  onSend, addToast,
+  onSend, onScheduleClick, addToast,
   defaultOpen = false,
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -162,6 +162,15 @@ export function ResendSendSection({
               <Copy size={12} />
               Sao Chép HTML
             </button>
+            {onScheduleClick && (
+              <button
+                onClick={onScheduleClick}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-emerald/30 bg-emerald/5 text-emerald hover:bg-emerald/10 text-xs font-medium transition-all"
+              >
+                <CalendarPlus size={12} />
+                Lên Lịch Gửi
+              </button>
+            )}
           </div>
         </div>
       )}

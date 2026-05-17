@@ -69,8 +69,7 @@ import { useJobSubscription } from '@gem/hooks/useJobSubscription';
 import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
 import DripStepHtmlEditor from './components/DripStepHtmlEditor';
-import { PromptImageCards } from './components/PromptImageCards';
-import EmailResultPanel from './components/EmailResultPanel';
+import { ContentResultPanel } from './components';
 
 // ============================================================================
 // Constants — Loại nội dung
@@ -3932,9 +3931,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     return finalSrcDoc;
   }, [output, isEditing]);
 
-  // Backward-compat alias — EmailResultPanel mount cũ vẫn đọc emailPreviewSrcDoc.
-  // Xóa alias này ở Task 6 (sau khi migrate sang ContentResultPanel).
-  const emailPreviewSrcDoc = previewSrcDoc;
+  // (T6 cutover 2026-05-17: alias `emailPreviewSrcDoc = previewSrcDoc` removed
+  //  vì ContentResultPanel consume previewSrcDoc directly.)
 
   // -- Default design system --
   const DEFAULT_DESIGN_SYSTEM = `\n\nQUY TẮC BẮT BUỘC:\n- Use my attached photo for character face.\n- Tất cả text bằng tiếng Việt có dấu\n- Người Việt thật 27-35 tuổi (KHÔNG cartoon, KHÔNG illustration)\n- Style: Luxurious, premium, high-end editorial photography — KHÔNG minimalist/tối giản\n- Lighting: cinematic golden hour, dramatic rim lighting, soft bokeh with warm tones\n- TUYỆT ĐỐI KHÔNG cho nhân vật mặc blazer, vest, suit jacket — thay bằng elegant casual: áo lụa, áo trễ vai, áo cổ V thanh lịch, hoặc outfit phù hợp ngữ cảnh\n- Background: rich textures (marble, velvet, warm wood, golden accents), NOT plain/empty\n- Tỷ lệ mặc định: 3:4 (dọc)\n\nDESIGN SYSTEM:\nNavy đậm #112250\nGold #FFBD59\nAccent: Purple #6A5BFF\nBurgundy #9C0612\nPink #FF6B9D\nText: White #FFFFFF\nFooter: "gemral.com" centered`;
@@ -5933,119 +5931,62 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             </div>
           )}
 
-          {/* Content: Email HTML Preview or standard markdown */}
-          {isHtmlPreview ? (
-            <EmailResultPanel
-              output={output}
-              onOutputChange={setOutput}
-              emailPreviewSrcDoc={emailPreviewSrcDoc}
-              emailIframeRef={emailIframeRef}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              emailPlaceholders={emailPlaceholders}
-              emailFileInputRef={emailFileInputRef}
-              onIframeLoad={handleEmailIframeLoad}
-              onImageUpload={handleEmailImageUpload}
-              onSetReplacingIdx={setEmailReplacingIdx}
-              onDrop={handleEmailDrop}
-              toolboxCategories={EMAIL_TOOLBOX_CATEGORIES}
-              showEmailToolbox={showEmailToolbox}
-              onToggleToolbox={() => setShowEmailToolbox(t => !t)}
-              toolboxOpenState={emailToolboxCategories}
-              onToggleCategory={(id) => setEmailToolboxCategories(s => ({...s, [id]: !s[id]}))}
-              onToolboxInsert={handleEmailToolboxInsert}
-            />
-          ) : (
-            <div className="p-4 rounded-card bg-card border border-border mb-4">
-              {isEditing ? (
-                <textarea
-                  value={output}
-                  onChange={(e) => setOutput(e.target.value)}
-                  className="w-full bg-transparent text-sm text-foreground leading-relaxed focus:outline-none resize-none min-h-[300px] font-sans"
-                  style={{ minHeight: `${Math.max(300, output.split('\n').length * 22)}px` }}
-                />
-              ) : (
-                <div className="prose dark:prose-invert prose-sm max-w-none text-foreground">
-                  {output.split('\n').map((line, i) => {
-                    if (line.startsWith('## ')) {
-                      return (
-                        <h2 key={i} className="font-heading text-lg text-amber-700 dark:text-gold font-semibold mt-4 mb-2">
-                          {line.replace(/^##\s+/, '')}
-                        </h2>
-                      );
-                    }
-                    if (line.startsWith('### ')) {
-                      return (
-                        <h3 key={i} className="font-heading text-md text-foreground font-semibold mt-3 mb-1">
-                          {line.replace(/^###\s+/, '')}
-                        </h3>
-                      );
-                    }
-                    if (line.trim() === '') {
-                      return <div key={i} className="h-2" />;
-                    }
-                    const renderBold = (text) => {
-                      const parts = text.split(/(\*\*.*?\*\*)/g);
-                      return parts.map((part, index) => {
-                        if (part.startsWith('**') && part.endsWith('**')) {
-                          return <strong key={index} className="text-foreground font-bold">{part.slice(2, -2)}</strong>;
-                        }
-                        return <span key={index}>{part}</span>;
-                      });
-                    };
-                    return (
-                      <p key={i} className="text-sm text-foreground leading-relaxed mb-3">
-                        {renderBold(line)}
-                      </p>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Content: Global ContentResultPanel — all features available cho mọi content type.
+              Spec: memory/reports/2026-05-17-content-result-panel-global-design.md */}
+          <ContentResultPanel
+            output={output}
+            onOutputChange={setOutput}
+            contentType={contentType}
+            previewSrcDoc={previewSrcDoc}
+            iframeRef={emailIframeRef}
+            onIframeLoad={handleEmailIframeLoad}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            placeholders={emailPlaceholders}
+            fileInputRef={emailFileInputRef}
+            onImageUpload={handleEmailImageUpload}
+            onSetReplacingIdx={setEmailReplacingIdx}
+            onDrop={handleEmailDrop}
+            toolboxCategories={EMAIL_TOOLBOX_CATEGORIES}
+            onToolboxInsert={handleEmailToolboxInsert}
+            resend={{
+              sender: emailSender,
+              subject: emailSubject,
+              recipients: emailRecipients,
+              bcc: emailBcc,
+              manualHtml: manualEmailHtml,
+              sent: emailSent,
+              sending: emailSending,
+              onSenderChange: setEmailSender,
+              onSubjectChange: setEmailSubject,
+              onRecipientsChange: setEmailRecipients,
+              onBccChange: setEmailBcc,
+              onManualHtmlChange: setManualEmailHtml,
+              onSend: handleSendEmail,
+              onScheduleClick: () => {
+                setCalendarScheduleDate(new Date().toISOString().split('T')[0] ?? '');
+                setCalendarPlatform('email');
+                setShowScheduleModal(true);
+              },
+            }}
+            stats={{
+              wordCount: outputWordCount,
+              duration: outputDuration,
+              brandResult,
+            }}
+            addToast={addToast}
+          />
 
           {/* ═══ Đóng collapsible guard ═══ */}
           </>
           )}
 
-          {/* ═══ 7 Prompt Cards — LUÔN HIỂN DÙ thu gọn ═══ */}
-          <PromptImageCards output={output} addToast={addToast} />
-
-          {/* Thống kê */}
-          {generationDone && !isHtmlPreview && (
-            <div className="flex items-center gap-6 flex-wrap mb-4">
-              {brandResult && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-txt-3">Giọng thương hiệu:</span>
-                  <span className={`text-lg font-heading font-bold ${brandResult.score >= 80 ? 'text-success' : brandResult.score >= 60 ? 'text-amber' : 'text-danger'}`}>
-                    {brandResult.score}/100
-                  </span>
-                  {brandResult.passed ? (
-                    <Badge text="ĐẠT" variant="new" size="sm" />
-                  ) : (
-                    <Badge text="KHÔNG ĐẠT" variant="danger" size="sm" />
-                  )}
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <FileText size={16} className="text-txt-3" />
-                <span className="text-xs text-txt-3">Số từ:</span>
-                <span className="text-sm font-semibold text-txt">
-                  {outputWordCount.toLocaleString('vi-VN')}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Clock size={16} className="text-txt-3" />
-                <span className="text-xs text-txt-3">Thời lượng:</span>
-                <span className="text-sm font-semibold text-txt">
-                  {outputDuration}
-                </span>
-              </div>
-            </div>
-          )}
+          {/* PromptImageCards + simple stats row đã mounted inside ContentResultPanel above.
+              Brand Voice + GEM Tools Analysis Cards (extended deep analysis) giữ riêng:
+              gate đổi từ !isHtmlPreview → !isEmail && !isDocTaiLieu để preserve behavior cũ. */}
 
           {/* Brand Voice + GEM Tools Analysis Cards */}
-          {generationDone && !isHtmlPreview && (
+          {generationDone && !isEmail && !isDocTaiLieu && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               {/* Card 1: Giọng Thương Hiệu */}
               <Card variant="glass" padding="md">
@@ -6916,134 +6857,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             </div>
           )}
 
-          {/* ── Email: Gửi qua Resend — luôn hiển thị khi chọn email type ── */}
-          {isEmail && (
-            <div className="p-4 rounded-card border border-gold/20 bg-gold/5 space-y-4">
-              <h4 className="text-xs font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
-                <Mail size={14} />
-                Gửi Email qua Resend
-              </h4>
-              {/* Sender & Subject & Recipients */}
-              <div className="space-y-2">
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">Gửi từ (Sender) *</label>
-                  <select
-                    value={emailSender}
-                    onChange={(e) => setEmailSender(e.target.value)}
-                    className="fi text-sm w-full"
-                  >
-                    <option value="Gemral <hello@gemral.com>">Gemral &lt;hello@gemral.com&gt;</option>
-                    <option value="Jennie Uyen Chu <jennieuyenchu@gemral.com>">Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;</option>
-                    <option value="Gemral <no_reply@gemral.com>">Gemral &lt;no_reply@gemral.com&gt;</option>
-                    <option value="Gemral <info@gemral.com>">Gemral &lt;info@gemral.com&gt;</option>
-                    <option value="Gemral <support@gemral.com>">Gemral &lt;support@gemral.com&gt;</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">Tiêu đề email *</label>
-                  <input
-                    type="text"
-                    value={emailSubject}
-                    onChange={(e) => setEmailSubject(e.target.value)}
-                    placeholder="Nhập tiêu đề email..."
-                    className="fi text-sm w-full"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">Người nhận * (dấu phẩy phân cách)</label>
-                  <input
-                    type="text"
-                    value={emailRecipients}
-                    onChange={(e) => setEmailRecipients(e.target.value)}
-                    placeholder="email1@gmail.com, email2@gmail.com"
-                    className="fi text-sm w-full"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">BCC <span className="text-txt-3 font-normal">(tùy chọn, dấu phẩy phân cách)</span></label>
-                  <input
-                    type="text"
-                    value={emailBcc}
-                    onChange={(e) => setEmailBcc(e.target.value)}
-                    placeholder="bcc1@gmail.com, bcc2@gmail.com"
-                    className="fi text-sm w-full"
-                  />
-                </div>
-                {/* Manual HTML — chỉ hiển thị khi chưa có output từ AI */}
-                {!output && (
-                  <div>
-                    <label className="block text-xxs font-medium text-txt-2 mb-1">
-                      HTML Email * <span className="text-txt-3 font-normal">(dán code HTML vào đây nếu không dùng AI tạo nội dung)</span>
-                    </label>
-                    <textarea
-                      value={manualEmailHtml}
-                      onChange={(e) => setManualEmailHtml(e.target.value)}
-                      placeholder="<!DOCTYPE html><html>...</html>"
-                      rows={10}
-                      className="fi text-xs w-full font-mono resize-y"
-                    />
-                    {manualEmailHtml && (
-                      <div className="mt-1 text-xxs text-txt-3">{manualEmailHtml.length.toLocaleString()} ký tự</div>
-                    )}
-                  </div>
-                )}
-                {output && (
-                  <div className="p-2 rounded bg-success/10 border border-success/20 text-xxs text-success flex items-center gap-1.5">
-                    <CheckCircle2 size={11} />
-                    Sẽ gửi nội dung AI đã tạo ({output.length.toLocaleString()} ký tự)
-                  </div>
-                )}
-              </div>
-
-              {/* Send result */}
-              {emailSent && (
-                <div className="flex items-center gap-2 p-3 rounded-card bg-success/10 border border-success/20">
-                  <CheckCircle2 size={14} className="text-success shrink-0" />
-                  <div className="flex-1">
-                    <p className="text-xs text-success font-medium">Email đã gửi thành công!</p>
-                    <p className="text-xxs text-success/70">ID: {emailSent.id} • {emailSent.recipients.length} người nhận</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Send button */}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  disabled={emailSending || !emailSubject.trim() || !emailRecipients.trim()}
-                  onClick={handleSendEmail}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-gold/30 bg-gold/10 text-gold hover:bg-gold/20 text-xs font-medium transition-all disabled:opacity-50"
-                >
-                  {emailSending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                  {emailSending ? 'Đang gửi...' : emailSent ? 'Gửi Lại' : 'Gửi Email'}
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(output);
-                      addToast({ type: 'success', message: 'Đã sao chép HTML email.' });
-                    } catch {
-                      addToast({ type: 'error', message: 'Không thể sao chép.' });
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-border bg-glass-bg text-txt-3 hover:bg-purple/10 hover:border-purple/30 hover:text-purple text-xs font-medium transition-all"
-                >
-                  <Copy size={12} />
-                  Sao Chép HTML
-                </button>
-                <button
-                  onClick={() => {
-                    setCalendarScheduleDate(new Date().toISOString().split('T')[0] ?? '');
-                    setCalendarPlatform('email');
-                    setShowScheduleModal(true);
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-emerald/30 bg-emerald/5 text-emerald hover:bg-emerald/10 text-xs font-medium transition-all"
-                >
-                  <CalendarPlus size={12} />
-                  Lên Lịch Gửi
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Resend section moved into ContentResultPanel (always available, collapsible).
+              See <ContentResultPanel resend={...}/> above. */}
 
           {/* Empty-state paste textarea — visible when output is empty. 2026-05-13.
               User can paste any content (markdown/HTML/image prompts) and the UI auto-detects
