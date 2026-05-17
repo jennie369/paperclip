@@ -50,8 +50,11 @@ export function PromptImageCards({ output, addToast }) {
   const [collapsedCards, setCollapsedCards] = useState({});
 
   const cards = parsePromptCards(output);
-  if (!cards.length) return null;
 
+  // Hooks must run UNCONDITIONALLY before any early return (Rules of Hooks).
+  // Previously hooks were declared after `if (!cards.length) return null` which
+  // caused React error #310 when `output` toggled between empty and non-empty
+  // — different hook counts across renders.
   const handleCopyCard = useCallback(async (text, idx) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -71,6 +74,8 @@ export function PromptImageCards({ output, addToast }) {
       addToast?.({ type: 'error', message: 'Lỗi copy.' });
     }
   }, [cards, addToast]);
+
+  if (!cards.length) return null;
 
   const toggleCard = (idx) => setCollapsedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
 
