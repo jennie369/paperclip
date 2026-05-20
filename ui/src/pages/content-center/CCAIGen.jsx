@@ -778,7 +778,7 @@ const SOCIAL_TOPIC_OPTIONS = [
   { value: 'app_features', label: '📱 Tính năng App GEMRAL' },
   { value: 'trading_mindset', label: '🧠 Trading Mindset — Tâm lý & Kỷ luật' },
   { value: 'market_daily', label: '📊 Thị Trường Daily Brief — Tình hình nổi bật trong ngày' },
-  { value: 'spiritual', label: '🔮 Tâm Linh & Huyền Học' },
+  { value: 'spiritual', label: '🔮 Nghiên Cứu & Huyền Học' },
   { value: 'self_development', label: '🚀 Phát Triển Bản Thân & Productivity' },
   { value: 'success_stories', label: '🏆 Success Stories & Testimonials' },
   { value: 'faq_tips', label: '❓ FAQ & Tips Nhanh' },
@@ -878,7 +878,7 @@ const SOCIAL_SUCCESS_STORY_OPTIONS = [
 const SOCIAL_FAQ_TIPS_OPTIONS = [
   { value: 'getting_started', label: '🆕 Bắt Đầu — Hướng dẫn user mới sử dụng app' },
   { value: 'scanner_tips', label: '📊 Tips Scanner — Cách đọc tín hiệu, chọn pattern, timeframe' },
-  { value: 'spiritual_tips', label: '🔮 Tips Tâm Linh — Cách bói Tarot, xem quẻ, thiền đúng cách' },
+  { value: 'spiritual_tips', label: '🔮 Tips Nghiên Cứu — Cách bói Tarot, xem quẻ, thiền đúng cách' },
   { value: 'trading_tips', label: '💹 Tips Trading — Entry/exit, quản lý vốn, trailing stop' },
   { value: 'app_tricks', label: '📱 Mẹo Sử Dụng App — Tính năng ẩn, shortcut, tối ưu trải nghiệm' },
   { value: 'common_mistakes', label: '⚠️ Sai Lầm Phổ Biến — Những lỗi trader/user mới hay mắc' },
@@ -929,7 +929,7 @@ const CHATBOT_SCRIPT_TOPIC_OPTIONS = [
   { value: 'onboarding', label: '🆕 Onboarding — Hướng dẫn user mới làm quen app' },
   { value: 'scanner_guide', label: '📊 Hướng Dẫn Scanner — Cách dùng GEM Scanner' },
   { value: 'trading_qa', label: '💹 Q&A Trading — Trả lời câu hỏi trading phổ biến' },
-  { value: 'spiritual_qa', label: '🔮 Q&A Tâm Linh — Giải đáp Tarot, Kinh Dịch, thiền' },
+  { value: 'spiritual_qa', label: '🔮 Q&A Nghiên Cứu — Giải đáp Tarot, Kinh Dịch, thiền' },
   { value: 'course_recommend', label: '🎓 Gợi Ý Khóa Học — Tư vấn chọn khóa phù hợp' },
   { value: 'tier_explain', label: '💎 Giải Thích Tier — So sánh Free/Tier 1/2/3' },
   { value: 'troubleshoot', label: '🔧 Xử Lý Lỗi — FAQ về lỗi app, thanh toán, tài khoản' },
@@ -980,7 +980,7 @@ const BANNER_LAYOUT_OPTIONS = [
 const PUSH_TOPIC_OPTIONS = [
   { value: 'trading_signal', label: '📊 Tín Hiệu Trading — Pattern mới, cơ hội giao dịch' },
   { value: 'daily_motivation', label: '🌅 Daily Motivation — Câu trích dẫn, lời khích lệ buổi sáng' },
-  { value: 'spiritual_daily', label: '🔮 Tâm Linh Hàng Ngày — Lá bài Tarot, quẻ Kinh Dịch, năng lượng ngày' },
+  { value: 'spiritual_daily', label: '🔮 Nghiên Cứu Hàng Ngày — Lá bài Tarot, quẻ Kinh Dịch, năng lượng ngày' },
   { value: 'course_reminder', label: '🎓 Nhắc Học — Nhắc nhở tiến trình học, bài mới' },
   { value: 'market_update', label: '📈 Thị Trường — Cập nhật BTC, ETH, tin crypto nổi bật' },
   { value: 'new_feature', label: '✨ Tính Năng Mới — Thông báo cập nhật app' },
@@ -1025,7 +1025,7 @@ const PLANNER_TOPIC_OPTIONS = [
   { value: 'app_features', label: 'Tính năng App GEMRAL' },
   { value: 'trading_mindset', label: 'Trading Mindset & Kỷ luật' },
   { value: 'market_daily', label: 'Thị Trường & Crypto Daily' },
-  { value: 'spiritual', label: 'Tâm Linh & Huyền Học' },
+  { value: 'spiritual', label: 'Nghiên Cứu & Huyền Học' },
   { value: 'self_development', label: 'Phát Triển Bản Thân' },
   { value: 'courses', label: 'Khóa Học GEM Academy' },
   { value: 'success_stories', label: 'Success Stories & Testimonials' },
@@ -2343,7 +2343,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
             trading: 'wealth',
             wealth: 'wealth',
             spiritual: 'spiritual',
-            'tam-linh': 'spiritual',
+            'nghien-cuu': 'spiritual',
             wellness: 'wellness',
             health: 'wellness',
             lifestyle: 'integration',
@@ -4276,7 +4276,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
               {socialTopic === 'spiritual' && (
                 <CheckboxGroup
-                  label="Chủ đề Tâm Linh & Huyền Học (chọn nhiều)"
+                  label="Chủ đề Nghiên Cứu & Huyền Học (chọn nhiều)"
                   options={SOCIAL_SPIRITUAL_OPTIONS}
                   selected={socialTopicDetails}
                   onChange={setSocialTopicDetails}
@@ -4688,7 +4688,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
           {/* ── Doc-Tài Liệu Nội Dung: checkbox group cho 25 SOPs ── */}
           {isDocTaiLieu && (
-            <div className="space-y-3 p-4 rounded-card border border-border bg-glass-bg">
+            <div className="space-y-3 p-4 rounded-card border border-border bg-glass-bg" style={{ overflowAnchor: 'none' }}>
               <h4 className="text-xs font-semibold text-txt-2 uppercase tracking-wider">
                 CHỌN TÀI LIỆU SOP CẦN TẠO
               </h4>
@@ -4796,9 +4796,10 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                 </div>
               </div>
               {/* ── EMAIL META BLOCK: shown khi tick DOC-ONB-* / DOC-AFF-* / DOC-CS-011 ──
-                  Reusable cùng email job type. SSOT từ email_template_registry.json */}
-              {selectedDocIds.length > 0 && (
-                <div className="space-y-3 pt-3 border-t border-border/40 mt-3" style={{ userSelect: 'text' }}>
+                  Reusable cùng email job type. SSOT từ email_template_registry.json
+                  2026-05-20: render ALWAYS với display:none thay vì conditional mount
+                  → tránh push checkbox list xuống/lên (scroll jump fix) */}
+              <div className="space-y-3 pt-3 border-t border-border/40 mt-3" style={{ userSelect: 'text', display: selectedDocIds.length === 0 ? 'none' : undefined }}>
                   <h4 className="text-xs font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
                     <Mail size={14} />
                     Email Schema (auto-fill theo SOP, tùy chỉnh nếu muốn)
@@ -5066,20 +5067,21 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                     )}
                   </div>
                 </div>
-              )}
               {Array.from(new Set(DOC_SOP_OPTIONS.map((o) => o.group))).map((group) => (
                 <div key={group} className="space-y-1.5">
                   <div className="text-[11px] font-semibold text-txt-3 uppercase tracking-wider">{group}</div>
                   <div className="grid grid-cols-1 gap-1.5">
                     {DOC_SOP_OPTIONS.filter((o) => o.group === group).map((opt) => {
                       const checked = selectedDocIds.includes(opt.value);
-                      const isOnb = typeof opt.emailCount === 'number';
+                      // Chỉ render day-picker dropdown khi SOP có >1 email (DOC-ONB-* nhiều ngày)
+                      // DOC-SAL-LM-* mỗi cái 1 email → KHÔNG cần dropdown (chỉ có 1 option vô nghĩa)
+                      const isOnb = typeof opt.emailCount === 'number' && opt.emailCount > 1;
                       return (
-                        <div key={opt.value} className="flex items-center gap-2">
-                          <label className="flex items-center gap-2 cursor-pointer flex-1">
+                        <div key={opt.value} className="flex items-center gap-3 min-h-[28px]">
+                          <label className="flex items-center gap-2 cursor-pointer">
                             <input
                               type="checkbox"
-                              className="accent-[var(--gold)] w-4 h-4"
+                              className="accent-[var(--gold)] w-4 h-4 shrink-0"
                               checked={checked}
                               disabled={generating}
                               onChange={() => {
@@ -5090,15 +5092,15 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                                 );
                               }}
                             />
-                            <span className="text-[12px] text-txt">
+                            <span className="text-[12px] text-txt whitespace-nowrap">
                               <span className="font-mono text-[10px] text-txt-3 mr-1">{opt.value}</span>
                               {opt.label}
                             </span>
                           </label>
-                          {isOnb && checked && (
+                          {isOnb && (
                             <select
-                              className="text-[11px] px-2 py-1 rounded-md border border-border bg-bg-4 text-txt"
-                              disabled={generating}
+                              className={`text-[11px] px-2 py-1 rounded-md border border-border bg-bg-4 text-txt w-[130px] shrink-0 ${checked ? '' : 'invisible'}`}
+                              disabled={generating || !checked}
                               value={selectedDocEmailDays[opt.value] ?? 'all'}
                               onChange={(e) => setSelectedDocEmailDays((prev) => ({ ...prev, [opt.value]: e.target.value }))}
                             >
