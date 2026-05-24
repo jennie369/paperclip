@@ -1879,6 +1879,87 @@ router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
   }
 });
 
+// POST /content-pipeline/scripts/:id/dispatch — 1 nút "Đăng ngay / Lên lịch":
+// branch theo publish_mode. immediate → đăng NOW (--single). scheduled → đặt lịch
+// Meta BS theo scheduled_at (--single-schedule), validate buffer ≥20 phút.
+router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: script, error: sErr } = await supabase
+      .from('cc_scripts')
+      .select('id, posted_account, publish_mode, scheduled_at, status')
+      .eq('id', id)
+      .single();
+    if (sErr) throw sErr;
+    const mode = (script.publish_mode || 'immediate') as string;
+    const account = script.posted_account as string | null;
+
+    // Resend newsletter broadcast = kênh riêng (không qua Playwright). Wire ở flow broadcast.
+    if (account === 'resend') {
+      return res.status(501).json({
+        error: 'Kênh Resend newsletter chưa wire vào dispatch — dùng flow broadcast riêng.',
+        code: 'RESEND_NOT_WIRED',
+      });
+    }
+
+    const enqueue = async (source: string) => {
+      const { data: claimed } = await supabase
+        .from('cc_publish_queue')
+        .update({ status: 'processing', picked_at: new Date().toISOString() })
+        .eq('script_id', id)
+        .eq('status', 'pending')
+        .select('id');
+      if (!(claimed?.length)) {
+        await supabase.from('cc_publish_queue').insert({
+          script_id: id,
+          trigger_type: 'manual',
+          channel_target: account,
+          status: 'processing',
+          picked_at: new Date().toISOString(),
+          metadata: { source, user: req.headers['x-user'] || 'unknown' },
+        });
+      }
+    };
+    const finalizeQueue = (label: string) => (r: { code: number; stderr: string }) => {
+      supabase.from('cc_publish_queue')
+        .update({
+          status: r.code === 0 ? 'done' : 'failed',
+          published_at: r.code === 0 ? new Date().toISOString() : null,
+          error_message: r.code !== 0 ? r.stderr.slice(0, 2000) : null,
+        })
+        .eq('script_id', id).eq('status', 'processing')
+        .then(() => {});
+      if (r.code === 0) {
+        void (async () => {
+          const quick = await updatePageStatus(id, 'published');
+          if (!quick.ok && quick.note === 'no-page') await pushScript(id);
+        })().catch((e) => console.warn(`[notion-push] ${label} fail`, e));
+      }
+    };
+
+    if (mode === 'scheduled' || mode === 'schedule2week') {
+      if (!script.scheduled_at) {
+        return res.status(422).json({ error: 'Chưa có lịch đăng (scheduled_at). Chọn ngày giờ trước khi lên lịch.', code: 'NO_SCHEDULE' });
+      }
+      const whenMs = new Date(script.scheduled_at).getTime();
+      if (isNaN(whenMs) || whenMs < Date.now() + 20 * 60 * 1000) {
+        return res.status(422).json({ error: 'Lịch quá gần — Meta BS cần ≥20 phút. Chọn giờ xa hơn.', code: 'SCHEDULE_TOO_SOON' });
+      }
+      await enqueue('api_dispatch_schedule');
+      spawnPublisher(['--single-schedule', id], `sched-${id.slice(0, 8)}`).then(finalizeQueue('dispatch-schedule'));
+      return res.json({ message: 'Đang lên lịch Meta BS — check cc_publish_queue để track', script_id: id, mode: 'scheduled' });
+    }
+
+    // immediate / threshold_5 → đăng NOW (--single luôn publish ngay, bỏ qua publish_mode)
+    await supabase.from('cc_scripts').update({ publish_ready_at: new Date().toISOString() }).eq('id', id);
+    await enqueue('api_dispatch_now');
+    spawnPublisher(['--single', id], `single-${id.slice(0, 8)}`).then(finalizeQueue('dispatch-now'));
+    return res.json({ message: 'Đang đăng ngay — check cc_publish_queue để track', script_id: id, mode: 'immediate' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi dispatch' });
+  }
+});
+
 // POST /content-pipeline/publish-batch — đăng tất cả approved với publish_mode=threshold_5 hoặc manual batch
 router.post('/content-pipeline/publish-batch', async (req, res) => {
   try {

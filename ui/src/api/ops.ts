@@ -24,6 +24,7 @@ export const opsApi = {
   },
   updateScript: (id: string, data: any) => fetchJSON<any>(`${BASE}/content-pipeline/scripts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   approveScript: (id: string) => fetchJSON<any>(`${BASE}/content-pipeline/scripts/${id}/approve`, { method: 'POST' }),
+  dispatchScript: (id: string) => fetchJSON<any>(`${BASE}/content-pipeline/scripts/${id}/dispatch`, { method: 'POST' }),
   rejectScript: (id: string, reason: string) => fetchJSON<any>(`${BASE}/content-pipeline/scripts/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
   deleteScript: (id: string) => fetchJSON<any>(`${BASE}/content-pipeline/scripts/${id}`, { method: 'DELETE' }),
   runCron: (name: string) => fetchJSON<any>(`${BASE}/content-pipeline/cron/${name}/run`, { method: 'POST' }),

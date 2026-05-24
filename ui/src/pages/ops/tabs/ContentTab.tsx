@@ -475,9 +475,27 @@ function getEmailSubject(script: any): string {
 // MetadataEditor — editable grid of all cc_scripts fields with DB column tooltips
 // ---------------------------------------------------------------------------
 
-const BLOG_CATEGORY_OPTIONS = ['Tâm Linh', 'Tài Chính', 'Sức Khỏe', 'Trading', 'Lifestyle', 'Giáo Dục', 'Âm Nhạc'];
-const PUBLISH_MODE_OPTIONS = ['immediate', 'scheduled', 'schedule2week', 'manual'];
-const ACCOUNT_OPTIONS = ['forum', 'jennie', 'profile_jennie', 'fanpage_gemral', 'ig_jennie', 'tiktok_jennie', 'youtube_gemral'];
+const BLOG_CATEGORY_OPTIONS = ['Nghiên Cứu', 'Tài Chính', 'Sức Khỏe', 'Trading', 'Lifestyle', 'Giáo Dục', 'Âm Nhạc'];
+// Must match cc_scripts.publish_mode CHECK constraint (scheduled/immediate/threshold_5/schedule2week).
+const PUBLISH_MODE_OPTIONS = ['immediate', 'scheduled', 'threshold_5', 'schedule2week'];
+// Must match poster FACEBOOK_ACCOUNTS keys + forum/push/email routes (scripts/PIPELINE_ACCOUNTS_CONFIG.py).
+const ACCOUNT_OPTIONS = ['page_jennie', 'page_gemral', 'profile_jennie', 'page_yinyang', 'forum', 'push', 'email'];
+
+// scheduled_at is stored as timestamptz. The datetime-local picker shows/accepts
+// HCM (UTC+7) wall-clock time per project timezone rule — convert on both ends so
+// the picked time is the actual publish time, not a 7h-shifted UTC value.
+function isoToHcmLocal(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const hcm = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+  return hcm.toISOString().slice(0, 16);
+}
+function hcmLocalToISO(local: string): string {
+  if (!local) return '';
+  const withSec = local.length === 16 ? `${local}:00` : local;
+  return `${withSec}+07:00`;
+}
 
 function MetaField({
   label, dbCol, children, className,
@@ -728,7 +746,7 @@ function MetadataEditor({
 
           {/* Row 6 */}
           <MetaField label="Scheduled At" dbCol="scheduled_at">
-            <MetaInput value={script.scheduled_at ? new Date(script.scheduled_at).toISOString().slice(0, 16) : ''} onCommit={save('scheduled_at')} type="datetime-local" />
+            <MetaInput value={isoToHcmLocal(script.scheduled_at)} onCommit={(v: string) => save('scheduled_at')(hcmLocalToISO(v))} type="datetime-local" />
           </MetaField>
 
           {/* Row 7 — Read-only stats */}
@@ -913,6 +931,30 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
     e.target.value = '';
   };
 
+  // Order of image_urls IS the post order (poster uploads array order 1→N).
+  const persistImages = async (next: string[]) => {
+    try {
+      await opsApi.updateScript(script.id, { image_urls: next });
+      inv();
+    } catch {
+      pushToast({ title: 'Lỗi lưu thứ tự ảnh', tone: 'error' });
+    }
+  };
+  const handleImageDelete = (idx: number) => {
+    const cur: string[] = script.image_urls || [];
+    persistImages(cur.filter((_, i) => i !== idx));
+  };
+  const dragIndexRef = useRef<number | null>(null);
+  const handleImageDrop = (toIdx: number) => {
+    const from = dragIndexRef.current;
+    dragIndexRef.current = null;
+    if (from === null || from === toIdx) return;
+    const cur: string[] = [...(script.image_urls || [])];
+    const [moved] = cur.splice(from, 1);
+    cur.splice(toIdx, 0, moved);
+    persistImages(cur);
+  };
+
   const meta = script.metadata || {};
   const wordCount = script.word_count || meta.word_count || body.split(/\s+/).filter(Boolean).length;
   const readTime = Math.max(1, Math.round(wordCount / 200));
@@ -1065,15 +1107,36 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
       {/* Hình ảnh đính kèm */}
       <div className="space-y-2">
         <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Hình ảnh đính kèm</p>
+        {images.length > 1 && (
+          <p className="text-[10px] text-muted-foreground">Kéo để đổi thứ tự — đăng theo số 1→{images.length}.</p>
+        )}
         <div className="flex gap-2 flex-wrap items-center">
           {images.map((img, i) => (
-            <img
-              key={i}
-              src={img}
-              alt=""
-              className="w-20 h-20 object-cover rounded-lg border cursor-pointer border-zinc-100"
-              onClick={() => window.open(img, '_blank')}
-            />
+            <div
+              key={`${img}-${i}`}
+              draggable
+              onDragStart={() => { dragIndexRef.current = i; }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => handleImageDrop(i)}
+              className="relative w-20 h-20 rounded-lg border border-zinc-100 group"
+              title="Kéo để đổi thứ tự"
+            >
+              <img
+                src={img}
+                alt=""
+                className="w-full h-full object-cover rounded-lg cursor-move"
+                onClick={() => window.open(img, '_blank')}
+              />
+              <span className="absolute top-0.5 left-0.5 bg-black/70 text-white text-[9px] font-bold rounded px-1 leading-tight">{i + 1}</span>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handleImageDelete(i); }}
+                className="absolute -top-1.5 -right-1.5 bg-destructive text-white rounded-full w-4 h-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                title="Xóa ảnh"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </div>
           ))}
           <label className="w-20 h-20 rounded-lg border-2 border-dashed flex flex-col items-center justify-center text-muted-foreground hover:bg-muted/50 cursor-pointer">
             <Plus className="w-4 h-4 mb-1" />
@@ -1200,7 +1263,7 @@ const MemoizedMarkdownPreview = memo(function MemoizedMarkdownPreview({ body, vi
 const ScriptRow = memo(function ScriptRow({
   s, isExpanded, isSeen, customTag, visibleBadges, isSelected, isFocused,
   onToggle, onMarkSeen, onSaveCustomTag, onSelect, onContextMenu,
-  approveMut, onReject, deleteMut, complianceMut,
+  approveMut, dispatchMut, onReject, deleteMut, complianceMut,
   pushToast, navigate, inv,
 }: {
   s: any; isExpanded: boolean; isSeen: boolean; customTag: string; visibleBadges: string[]; isSelected?: boolean; isFocused?: boolean;
@@ -1209,7 +1272,7 @@ const ScriptRow = memo(function ScriptRow({
   onSaveCustomTag: (id: string, tag: string) => void;
   onSelect?: (id: string, checked: boolean) => void;
   onContextMenu?: (e: React.MouseEvent, id: string) => void;
-  approveMut: any; onReject: (id: string) => void; deleteMut: any; complianceMut: any;
+  approveMut: any; dispatchMut: any; onReject: (id: string) => void; deleteMut: any; complianceMut: any;
   pushToast: any; navigate: any; inv: () => void;
 }) {
   // Lazy mount: chỉ mount ScriptExpandedPanel lần đầu khi expand, giữ trong DOM bằng CSS display:none.
@@ -1349,6 +1412,17 @@ const ScriptRow = memo(function ScriptRow({
                 <X className="h-3 w-3 mr-1" />Từ chối
               </Button>
             </>
+          )}
+          {s.status === 'approved' && (
+            <Button
+              size="sm"
+              disabled={dispatchMut.isPending}
+              onClick={() => dispatchMut.mutate(s.id)}
+              title={s.posted_account === 'resend' ? 'Gửi newsletter (Resend)' : (s.publish_mode === 'scheduled' || s.publish_mode === 'schedule2week') ? `Lên lịch Meta BS theo scheduled_at (${s.posted_account || '?'})` : `Đăng ngay (${s.posted_account || '?'})`}
+            >
+              <Send className="h-3 w-3 mr-1" />
+              {(s.publish_mode === 'scheduled' || s.publish_mode === 'schedule2week') ? 'Lên lịch' : s.publish_mode === 'threshold_5' ? 'Đăng batch' : 'Đăng ngay'}
+            </Button>
           )}
           <Button size="sm" variant="ghost" onClick={(e) => {
             e.stopPropagation();
@@ -1620,6 +1694,11 @@ export function ContentTab() {
   const approveMut = useMutation({
     mutationFn: (id: string) => opsApi.approveScript(id),
     onSuccess: () => { inv(); pushToast({ title: 'Đã duyệt', tone: 'success' }); },
+  });
+  const dispatchMut = useMutation({
+    mutationFn: (id: string) => opsApi.dispatchScript(id),
+    onSuccess: (r: any) => { inv(); pushToast({ title: r?.mode === 'scheduled' ? 'Đang lên lịch Meta BS' : 'Đang đăng ngay', tone: 'success' }); },
+    onError: (e: any) => pushToast({ title: e?.message || 'Lỗi đăng/lên lịch', tone: 'error' }),
   });
   const rejectMut = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => opsApi.rejectScript(id, reason),
@@ -2075,6 +2154,7 @@ export function ContentTab() {
                       onSelect={handleSelect}
                       onContextMenu={handleContextMenu}
                       approveMut={approveMut}
+                      dispatchMut={dispatchMut}
                       onReject={handleReject}
                       deleteMut={deleteMut}
                       complianceMut={complianceMut}
