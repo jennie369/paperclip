@@ -482,7 +482,7 @@ const PUBLISH_MODE_OPTIONS = ['immediate', 'scheduled', 'threshold_5', 'schedule
 // Must match poster FACEBOOK_ACCOUNTS keys + forum/push/email/resend routes (scripts/PIPELINE_ACCOUNTS_CONFIG.py).
 const ACCOUNT_OPTIONS = ['page_jennie', 'page_gemral', 'profile_jennie', 'page_yinyang', 'forum', 'push', 'email', 'resend'];
 // Resend segment names (verify via mcp__resend__list-segments). Server maps name → audience UUID.
-const RESEND_SEGMENT_NAMES = ['active_customer', 'partner_ctv', 'vip_high_spender', 'dormant', 'new_signup'];
+const RESEND_SEGMENT_NAMES = ['active_customer', 'partner_ctv', 'vip_high_spender', 'dormant', 'new_signup', 'Waitlist Leads', 'Test'];
 const RESEND_DEFAULT_SEGMENTS = ['active_customer', 'partner_ctv'];
 const RESEND_FROM_OPTIONS = ['hello@gemral.com', 'jennie@gemral.com', 'partnership@gemral.com'];
 

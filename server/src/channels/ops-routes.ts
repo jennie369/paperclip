@@ -1923,6 +1923,8 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
         vip_high_spender: '0e7a2ec3-245d-4cc9-9ad1-c411732adb91',
         dormant: '068dd425-50b4-4520-a040-ac53bada2c1b',
         new_signup: '701a0b97-d02e-4682-a104-ec1b9918fb2e',
+        'Waitlist Leads': '4e94549c-653b-4f7b-98b7-926777939eec',
+        Test: 'a3b2b965-2a6f-477f-84ad-e02af7b2d2ac',
       };
       const rHeaders = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
       const broadcasts: Array<Record<string, unknown>> = [];
