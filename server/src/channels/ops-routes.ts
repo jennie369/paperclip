@@ -1933,13 +1933,18 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
         try {
           const cResp = await fetch('https://api.resend.com/broadcasts', {
             method: 'POST', headers: rHeaders,
-            body: JSON.stringify({
-              audience_id: audienceId,
-              from: `${fromName} <${fromEmail}>`,
-              subject, html, name: `${subject} — ${seg}`,
-              reply_to: replyTo,
-              ...(previewText ? { preview_text: previewText } : {}),
-            }),
+            // Resend broadcast `name` max 70 chars — keep the segment tag visible, truncate subject.
+            body: JSON.stringify((() => {
+              const segTag = ` — ${seg}`;
+              const bname = `${subject.slice(0, Math.max(0, 70 - segTag.length))}${segTag}`.slice(0, 70);
+              return {
+                audience_id: audienceId,
+                from: `${fromName} <${fromEmail}>`,
+                subject, html, name: bname,
+                reply_to: replyTo,
+                ...(previewText ? { preview_text: previewText } : {}),
+              };
+            })()),
           });
           const cBody: any = await cResp.json().catch(() => ({}));
           if (!cResp.ok) { broadcasts.push({ segment: seg, error: `create ${cResp.status}: ${JSON.stringify(cBody).slice(0, 200)}` }); continue; }
