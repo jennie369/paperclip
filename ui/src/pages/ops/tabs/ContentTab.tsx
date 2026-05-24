@@ -943,45 +943,64 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
       .catch(() => {});
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      // Try Supabase storage first (bucket 'cc-content' or 'content')
-      const path = `cc-images/${script.id}/${Date.now()}-${file.name}`;
-      let imageUrl: string | null = null;
+  // Optimistic previews while uploading (objectURL) → thumbnail hiện ngay.
+  const [uploadingPreviews, setUploadingPreviews] = useState<{ id: string; url: string }[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
 
-      for (const bucket of ['cc-content', 'content', 'public']) {
-        const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
-        if (!error) {
-          imageUrl = supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
-          break;
-        }
-      }
-
-      if (!imageUrl) {
-        // Fallback: convert to data URL and save inline (max ~1MB)
-        if (file.size > 1_000_000) {
-          pushToast({ title: 'Ảnh quá lớn (>1MB), bucket storage chưa được tạo trên Supabase', tone: 'error' });
-          e.target.value = '';
-          return;
-        }
-        imageUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-      }
-
-      const newUrls = [...(script.image_urls || []), imageUrl];
-      await opsApi.updateScript(script.id, { image_urls: newUrls });
-      inv();
-      pushToast({ title: 'Đã thêm hình ảnh', tone: 'success' });
-    } catch {
-      pushToast({ title: 'Lỗi upload hình ảnh', tone: 'error' });
+  const uploadOne = async (file: File): Promise<string | null> => {
+    const path = `cc-images/${script.id}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${file.name}`;
+    for (const bucket of ['cc-content', 'content', 'public']) {
+      const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
+      if (!error) return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
     }
+    if (file.size <= 1_000_000) {
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+    return null;
+  };
+
+  const handleFiles = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList).filter((f) => f.type.startsWith('image/'));
+    if (!files.length) return;
+    // Show thumbnails ngay lập tức (local objectURL) — chị biết đã pick thành công.
+    const previews = files.map((f) => ({ id: `${Date.now()}-${Math.random()}`, url: URL.createObjectURL(f) }));
+    setUploadingPreviews((prev) => [...prev, ...previews]);
+    const uploaded: string[] = [];
+    let tooBig = 0;
+    for (const f of files) {
+      const url = await uploadOne(f);
+      if (url) uploaded.push(url); else tooBig++;
+    }
+    if (uploaded.length) {
+      const newUrls = [...(script.image_urls || []), ...uploaded];
+      try {
+        await opsApi.updateScript(script.id, { image_urls: newUrls });
+        inv();
+      } catch {
+        pushToast({ title: 'Lỗi lưu ảnh', tone: 'error' });
+      }
+    }
+    setUploadingPreviews((prev) => prev.filter((p) => !previews.some((x) => x.id === p.id)));
+    previews.forEach((p) => URL.revokeObjectURL(p.url));
+    if (uploaded.length) pushToast({ title: `Đã thêm ${uploaded.length} ảnh`, tone: 'success' });
+    if (tooBig) pushToast({ title: `${tooBig} ảnh fail (quá 1MB + bucket lỗi)`, tone: 'error' });
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) await handleFiles(e.target.files);
     e.target.value = '';
+  };
+
+  const saveFirstComment = async (val: string) => {
+    try {
+      await opsApi.updateScript(script.id, { metadata: { ...(script.metadata || {}), first_comment: val || null } });
+      inv();
+    } catch { pushToast({ title: 'Lỗi lưu comment', tone: 'error' }); }
   };
 
   // Order of image_urls IS the post order (poster uploads array order 1→N).
@@ -1157,20 +1176,29 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
         </div>
       </div>
 
-      {/* Hình ảnh đính kèm */}
+      {/* Hình ảnh đính kèm — drag-drop nhiều ảnh, thumbnail hiện ngay */}
       <div className="space-y-2">
         <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Hình ảnh đính kèm</p>
         {images.length > 1 && (
-          <p className="text-[10px] text-muted-foreground">Kéo để đổi thứ tự — đăng theo số 1→{images.length}.</p>
+          <p className="text-[10px] text-muted-foreground">Kéo thả nhiều ảnh cùng lúc vào ô bên dưới. Kéo thumbnail để đổi thứ tự — đăng theo số 1→{images.length}.</p>
         )}
-        <div className="flex gap-2 flex-wrap items-center">
+        <div
+          onDragOver={(e) => { e.preventDefault(); if (!isDragOver) setIsDragOver(true); }}
+          onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files);
+          }}
+          className={`flex gap-2 flex-wrap items-center rounded-lg p-2 transition border-2 border-dashed ${isDragOver ? 'border-primary bg-primary/5' : 'border-transparent'}`}
+        >
           {images.map((img, i) => (
             <div
               key={`${img}-${i}`}
               draggable
               onDragStart={() => { dragIndexRef.current = i; }}
               onDragOver={(e) => e.preventDefault()}
-              onDrop={() => handleImageDrop(i)}
+              onDrop={(e) => { e.stopPropagation(); handleImageDrop(i); }}
               className="relative w-20 h-20 rounded-lg border border-zinc-100 group"
               title="Kéo để đổi thứ tự"
             >
@@ -1191,12 +1219,33 @@ function ScriptExpandedPanel({ script, customTag = '' }: { script: any; customTa
               </button>
             </div>
           ))}
-          <label className="w-20 h-20 rounded-lg border-2 border-dashed flex flex-col items-center justify-center text-muted-foreground hover:bg-muted/50 cursor-pointer">
+          {/* Optimistic previews — đang upload (mờ + spinner) */}
+          {uploadingPreviews.map((p) => (
+            <div key={p.id} className="relative w-20 h-20 rounded-lg border border-zinc-100 overflow-hidden">
+              <img src={p.url} alt="" className="w-full h-full object-cover opacity-50" />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                <Loader2 className="w-5 h-5 text-white animate-spin" />
+              </div>
+            </div>
+          ))}
+          <label className="w-20 h-20 rounded-lg border-2 border-dashed flex flex-col items-center justify-center text-muted-foreground hover:bg-muted/50 cursor-pointer text-center">
             <Plus className="w-4 h-4 mb-1" />
-            <span className="text-[10px]">Thêm</span>
-            <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+            <span className="text-[9px] leading-tight px-1">Kéo thả / click chọn nhiều ảnh</span>
+            <input type="file" className="hidden" accept="image/*" multiple onChange={handleImageUpload} />
           </label>
         </div>
+      </div>
+
+      {/* Comment đầu — Playwright post ngay sau khi đăng bài (FB) */}
+      <div className="space-y-1">
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Comment đầu (tự động đăng sau bài viết)</p>
+        <textarea
+          defaultValue={meta.first_comment || ''}
+          onBlur={(e) => { if ((e.target.value || '') !== (meta.first_comment || '')) saveFirstComment(e.target.value); }}
+          placeholder="Vd: Link sản phẩm / hashtag / CTA... — sẽ được đăng làm comment đầu tiên ngay sau khi bài lên (FB)."
+          rows={2}
+          className="w-full text-[12px] px-2 py-1.5 border rounded bg-white focus:outline-none focus:ring-1 focus:ring-primary/30 resize-y"
+        />
       </div>
     </div>
   );
