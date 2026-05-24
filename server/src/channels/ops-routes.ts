@@ -1961,9 +1961,13 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
         published_at: okCount > 0 ? new Date().toISOString() : null,
         metadata: { ...meta, resend_broadcasts: broadcasts, dispatched_at: new Date().toISOString() },
       }).eq('id', id);
-      if (okCount === 0) return res.status(502).json({ error: 'Tất cả broadcast fail', code: 'RESEND_ALL_FAILED', broadcasts });
+      if (okCount === 0) {
+        const firstErr = (broadcasts.find((b) => b.error)?.error as string) || 'unknown';
+        return res.status(502).json({ error: `Broadcast fail — ${firstErr}`, code: 'RESEND_ALL_FAILED', broadcasts });
+      }
+      const partialErr = broadcasts.find((b) => b.error)?.error as string | undefined;
       return res.json({
-        message: `Newsletter: ${okCount}/${broadcasts.length} broadcast ${scheduledAt ? 'đã lên lịch' : 'đã gửi'}`,
+        message: `Newsletter: ${okCount}/${broadcasts.length} broadcast ${scheduledAt ? 'đã lên lịch' : 'đã gửi'}${partialErr ? ` (1 lỗi: ${partialErr})` : ''}`,
         mode: isScheduledMode ? 'scheduled' : 'immediate', broadcasts,
       });
     }
