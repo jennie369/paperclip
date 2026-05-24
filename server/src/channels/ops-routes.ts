@@ -1985,6 +1985,24 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
       void updatePageStatus(id, 'approved').catch(() => {});
     }
 
+    // FB Page/Profile cần Chrome GUI → phải đăng từ phiên user (Task Scheduler),
+    // KHÔNG spawn từ server (pm2 không launch được Chrome). forum/push/resend OK trên server.
+    const needsChrome = !!account && (account.startsWith('page_') || account.startsWith('profile_'));
+    const enqueuePending = async (source: string) => {
+      const { data: existing } = await supabase
+        .from('cc_publish_queue')
+        .select('id').eq('script_id', id).eq('status', 'pending');
+      if (!(existing?.length)) {
+        await supabase.from('cc_publish_queue').insert({
+          script_id: id,
+          trigger_type: 'manual',
+          channel_target: account,
+          status: 'pending',
+          metadata: { source, user: req.headers['x-user'] || 'unknown' },
+        });
+      }
+    };
+
     const enqueue = async (source: string) => {
       const { data: claimed } = await supabase
         .from('cc_publish_queue')
@@ -2028,13 +2046,23 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
       if (isNaN(whenMs) || whenMs < Date.now() + 20 * 60 * 1000) {
         return res.status(422).json({ error: 'Lịch quá gần — Meta BS cần ≥20 phút. Chọn giờ xa hơn.', code: 'SCHEDULE_TOO_SOON' });
       }
+      if (needsChrome) {
+        await enqueuePending('api_dispatch_schedule_local');
+        return res.json({ message: 'Đã vào hàng đợi — Task Scheduler (phiên user) sẽ lên lịch Meta BS trong ~2 phút', script_id: id, mode: 'scheduled', via: 'local_queue' });
+      }
       await enqueue('api_dispatch_schedule');
       spawnPublisher(['--single-schedule', id], `sched-${id.slice(0, 8)}`).then(finalizeQueue('dispatch-schedule'));
       return res.json({ message: 'Đang lên lịch Meta BS — check cc_publish_queue để track', script_id: id, mode: 'scheduled' });
     }
 
-    // immediate / threshold_5 → đăng NOW (--single luôn publish ngay, bỏ qua publish_mode)
+    // immediate / threshold_5 → đăng NOW
     await supabase.from('cc_scripts').update({ publish_ready_at: new Date().toISOString() }).eq('id', id);
+    if (needsChrome) {
+      // FB (page_/profile_) cần Chrome GUI — server (pm2) KHÔNG launch được Chrome.
+      // Enqueue pending → Task Scheduler chạy poll_publish_queue.py --local (phiên user) đăng.
+      await enqueuePending('api_dispatch_now_local');
+      return res.json({ message: 'Đã vào hàng đợi — Task Scheduler (phiên user) sẽ đăng FB trong ~2 phút', script_id: id, mode: 'immediate', via: 'local_queue' });
+    }
     await enqueue('api_dispatch_now');
     spawnPublisher(['--single', id], `single-${id.slice(0, 8)}`).then(finalizeQueue('dispatch-now'));
     return res.json({ message: 'Đang đăng ngay — check cc_publish_queue để track', script_id: id, mode: 'immediate' });
