@@ -1902,6 +1902,14 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
       });
     }
 
+    // Nút dispatch hiện cả ở draft → auto-approve trước khi đăng/lên lịch (approve+đăng 1 phát).
+    if (script.status === 'draft') {
+      await supabase.from('cc_scripts')
+        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .eq('id', id);
+      void updatePageStatus(id, 'approved').catch(() => {});
+    }
+
     const enqueue = async (source: string) => {
       const { data: claimed } = await supabase
         .from('cc_publish_queue')

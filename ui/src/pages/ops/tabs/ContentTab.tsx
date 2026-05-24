@@ -1413,7 +1413,7 @@ const ScriptRow = memo(function ScriptRow({
               </Button>
             </>
           )}
-          {s.status === 'approved' && (
+          {(s.status === 'draft' || s.status === 'approved') && (
             <Button
               size="sm"
               disabled={dispatchMut.isPending}
