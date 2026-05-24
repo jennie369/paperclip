@@ -479,8 +479,12 @@ function getEmailSubject(script: any): string {
 const BLOG_CATEGORY_OPTIONS = ['Nghiên Cứu', 'Tài Chính', 'Sức Khỏe', 'Trading', 'Lifestyle', 'Giáo Dục', 'Âm Nhạc'];
 // Must match cc_scripts.publish_mode CHECK constraint (scheduled/immediate/threshold_5/schedule2week).
 const PUBLISH_MODE_OPTIONS = ['immediate', 'scheduled', 'threshold_5', 'schedule2week'];
-// Must match poster FACEBOOK_ACCOUNTS keys + forum/push/email routes (scripts/PIPELINE_ACCOUNTS_CONFIG.py).
-const ACCOUNT_OPTIONS = ['page_jennie', 'page_gemral', 'profile_jennie', 'page_yinyang', 'forum', 'push', 'email'];
+// Must match poster FACEBOOK_ACCOUNTS keys + forum/push/email/resend routes (scripts/PIPELINE_ACCOUNTS_CONFIG.py).
+const ACCOUNT_OPTIONS = ['page_jennie', 'page_gemral', 'profile_jennie', 'page_yinyang', 'forum', 'push', 'email', 'resend'];
+// Resend segment names (verify via mcp__resend__list-segments). Server maps name → audience UUID.
+const RESEND_SEGMENT_NAMES = ['active_customer', 'partner_ctv', 'vip_high_spender', 'dormant', 'new_signup'];
+const RESEND_DEFAULT_SEGMENTS = ['active_customer', 'partner_ctv'];
+const RESEND_FROM_OPTIONS = ['hello@gemral.com', 'jennie@gemral.com', 'partnership@gemral.com'];
 
 // scheduled_at is stored as timestamptz. The datetime-local picker shows/accepts
 // HCM (UTC+7) wall-clock time per project timezone rule — convert on both ends so
@@ -612,6 +616,9 @@ function MetadataEditor({
 
   const saveArr = (field: string) => (val: string) =>
     onUpdate({ [field]: val ? val.split(',').map((s: string) => s.trim()).filter(Boolean) : null });
+
+  // Merge a single key into cc_scripts.metadata (jsonb) without losing other keys.
+  const saveMeta = (key: string, val: any) => onUpdate({ metadata: { ...(script.metadata || {}), [key]: val } });
 
   return (
     <div className="rounded-lg border bg-white overflow-hidden">
@@ -754,6 +761,51 @@ function MetadataEditor({
           <MetaField label="Số từ" dbCol="word_count" className="col-span-2">
             <span className="text-[11px] text-muted-foreground">{wordCount} từ · ~{readTime} phút đọc</span>
           </MetaField>
+        </div>
+      )}
+
+      {/* Newsletter (Resend) — chỉ hiện khi posted_account = resend */}
+      {open && script.posted_account === 'resend' && (
+        <div className="mt-3 rounded-lg border border-amber-300/50 bg-amber-50/50 p-3 space-y-2.5">
+          <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider">Newsletter (Resend Broadcast)</p>
+          <p className="text-[10px] text-muted-foreground leading-snug">
+            Chọn các segment muốn gửi (chọn nhiều, 1 lần). Bấm <b>Đăng ngay / Lên lịch</b> 1 lần → tự gửi tới TẤT CẢ segment đã chọn (mỗi segment = 1 broadcast Resend, tự động — không cần bấm lại).
+          </p>
+          {(() => {
+            const sel: string[] = (Array.isArray(meta.resend_segments) && meta.resend_segments.length)
+              ? meta.resend_segments : RESEND_DEFAULT_SEGMENTS;
+            return (
+              <div className="flex flex-wrap gap-1.5">
+                {RESEND_SEGMENT_NAMES.map((seg) => {
+                  const on = sel.includes(seg);
+                  return (
+                    <button
+                      key={seg}
+                      type="button"
+                      onClick={() => {
+                        const next = on ? sel.filter((s) => s !== seg) : [...sel, seg];
+                        saveMeta('resend_segments', next);
+                      }}
+                      className={`text-[11px] px-2.5 py-1 rounded-full border transition ${on ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-muted-foreground border-zinc-200 hover:border-amber-300'}`}
+                    >
+                      {on ? '✓ ' : ''}{seg}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <MetaField label="Email Subject" dbCol="metadata.email_subject">
+              <MetaInput value={meta.email_subject || ''} onCommit={(v: string) => saveMeta('email_subject', v || null)} placeholder="Trống → dùng tiêu đề bài" />
+            </MetaField>
+            <MetaField label="From Email" dbCol="metadata.from_email">
+              <MetaSelect value={meta.from_email || ''} options={RESEND_FROM_OPTIONS} onCommit={(v: string) => saveMeta('from_email', v || null)} allowCustom />
+            </MetaField>
+            <MetaField label="Preview Text" dbCol="metadata.preview_text" className="col-span-2">
+              <MetaInput value={meta.preview_text || ''} onCommit={(v: string) => saveMeta('preview_text', v || null)} placeholder="Preview text (tùy chọn)" />
+            </MetaField>
+          </div>
         </div>
       )}
     </div>
