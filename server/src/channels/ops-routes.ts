@@ -1887,18 +1887,82 @@ router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
   try {
     const { data: script, error: sErr } = await supabase
       .from('cc_scripts')
-      .select('id, posted_account, publish_mode, scheduled_at, status')
+      .select('id, title, body, posted_account, publish_mode, scheduled_at, status, metadata')
       .eq('id', id)
       .single();
     if (sErr) throw sErr;
     const mode = (script.publish_mode || 'immediate') as string;
     const account = script.posted_account as string | null;
+    const isScheduledMode = (mode === 'scheduled' || mode === 'schedule2week');
 
-    // Resend newsletter broadcast = kênh riêng (không qua Playwright). Wire ở flow broadcast.
+    // ── Resend newsletter broadcast (không qua Playwright) ──
+    // Mỗi broadcast = 1 segment. metadata.resend_segments (array) quyết định
+    // segments; default active_customer + partner_ctv. create-broadcast = draft,
+    // phải /send mới gửi (kèm scheduled_at nếu publish_mode=scheduled).
     if (account === 'resend') {
-      return res.status(501).json({
-        error: 'Kênh Resend newsletter chưa wire vào dispatch — dùng flow broadcast riêng.',
-        code: 'RESEND_NOT_WIRED',
+      const apiKey = process.env.RESEND_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: 'RESEND_API_KEY chưa cấu hình', code: 'NO_RESEND_KEY' });
+      const meta = (script.metadata || {}) as Record<string, any>;
+      const html = (script.body || '').trim();
+      if (!html) return res.status(422).json({ error: 'Body trống — newsletter cần nội dung HTML.', code: 'EMPTY_BODY' });
+      const scheduledAt = isScheduledMode ? script.scheduled_at : undefined;
+      if (isScheduledMode && !scheduledAt) {
+        return res.status(422).json({ error: 'publish_mode=scheduled nhưng chưa có scheduled_at.', code: 'NO_SCHEDULE' });
+      }
+      const segs: string[] = (Array.isArray(meta.resend_segments) && meta.resend_segments.length)
+        ? meta.resend_segments : ['active_customer', 'partner_ctv'];
+      const subject = meta.email_subject || script.title || 'Gemral Newsletter';
+      const fromName = meta.from_name || 'Gemral';
+      const fromEmail = meta.from_email || 'hello@gemral.com';
+      const replyTo = meta.reply_to || fromEmail;
+      const previewText = meta.preview_text || undefined;
+      // Segment name → Resend audience UUID (audience ≡ segment trong Resend).
+      const RESEND_SEGMENT_MAP: Record<string, string> = {
+        active_customer: '23de5912-92ae-4f4a-8af5-4aeed56b1264',
+        partner_ctv: '4e407443-ea09-4ec2-8634-d506e91d6f8a',
+        vip_high_spender: '0e7a2ec3-245d-4cc9-9ad1-c411732adb91',
+        dormant: '068dd425-50b4-4520-a040-ac53bada2c1b',
+        new_signup: '701a0b97-d02e-4682-a104-ec1b9918fb2e',
+      };
+      const rHeaders = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+      const broadcasts: Array<Record<string, unknown>> = [];
+      for (const seg of segs) {
+        const audienceId = RESEND_SEGMENT_MAP[seg] || seg; // cho phép raw UUID
+        try {
+          const cResp = await fetch('https://api.resend.com/broadcasts', {
+            method: 'POST', headers: rHeaders,
+            body: JSON.stringify({
+              audience_id: audienceId,
+              from: `${fromName} <${fromEmail}>`,
+              subject, html, name: `${subject} — ${seg}`,
+              reply_to: replyTo,
+              ...(previewText ? { preview_text: previewText } : {}),
+            }),
+          });
+          const cBody: any = await cResp.json().catch(() => ({}));
+          if (!cResp.ok) { broadcasts.push({ segment: seg, error: `create ${cResp.status}: ${JSON.stringify(cBody).slice(0, 200)}` }); continue; }
+          const bid = cBody?.id ?? cBody?.data?.id;
+          const sResp = await fetch(`https://api.resend.com/broadcasts/${bid}/send`, {
+            method: 'POST', headers: rHeaders,
+            body: JSON.stringify(scheduledAt ? { scheduled_at: scheduledAt } : {}),
+          });
+          const sBody: any = await sResp.json().catch(() => ({}));
+          if (!sResp.ok) { broadcasts.push({ segment: seg, broadcast_id: bid, error: `send ${sResp.status}: ${JSON.stringify(sBody).slice(0, 200)}` }); continue; }
+          broadcasts.push({ segment: seg, broadcast_id: bid, scheduled_at: scheduledAt || 'now', ok: true });
+        } catch (e: any) {
+          broadcasts.push({ segment: seg, error: e?.message || 'fetch failed' });
+        }
+      }
+      const okCount = broadcasts.filter((b) => b.ok).length;
+      await supabase.from('cc_scripts').update({
+        status: okCount > 0 ? 'published' : 'approved',
+        published_at: okCount > 0 ? new Date().toISOString() : null,
+        metadata: { ...meta, resend_broadcasts: broadcasts, dispatched_at: new Date().toISOString() },
+      }).eq('id', id);
+      if (okCount === 0) return res.status(502).json({ error: 'Tất cả broadcast fail', code: 'RESEND_ALL_FAILED', broadcasts });
+      return res.json({
+        message: `Newsletter: ${okCount}/${broadcasts.length} broadcast ${scheduledAt ? 'đã lên lịch' : 'đã gửi'}`,
+        mode: isScheduledMode ? 'scheduled' : 'immediate', broadcasts,
       });
     }
 

@@ -195,6 +195,7 @@ const CONTENT_TYPE_OPTIONS: { value: string; isDoc?: boolean; group?: string }[]
   { value: 'social_post',    group: 'Regular' },
   { value: 'email',          group: 'Regular' },
   { value: 'newsletter',     group: 'Regular' },
+  { value: 'newsletter_broadcast', group: 'Regular' },
   { value: 'blog',           group: 'Regular' },
   { value: 'short_video',    group: 'Regular' },
   { value: 'reel',           group: 'Regular' },
