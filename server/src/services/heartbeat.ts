@@ -4143,7 +4143,11 @@ export function heartbeatService(db: Db) {
         )
         .orderBy(desc(heartbeatRuns.createdAt));
 
-      const rows = limit ? await query.limit(limit) : await query;
+      // Egress fix 2026-05-27: cap unbounded list reads. This list selects ~30 columns
+      // (incl. large resultJson/contextSnapshot/usageJson) so fetching the full history
+      // every poll drove heavy Supabase egress. Default to 500 most-recent runs when no
+      // explicit limit is given; callers needing more still pass an explicit limit.
+      const rows = await query.limit(limit ?? 500);
       return rows.map((row) => ({
         ...row,
         resultJson: summarizeHeartbeatRunResultJson(row.resultJson),
