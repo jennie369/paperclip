@@ -46,7 +46,17 @@ export type MigrationState =
     };
 
 export function createDb(url: string) {
-  const sql = postgres(url, { max: 20 });
+  // Egress/connection fix 2026-05-27: release idle pooled connections after 30s so the
+  // server stops holding session-pooler slots while idle (helps avoid "remaining
+  // connection slots reserved for SUPERUSER" exhaustion on the shared Supabase DB), and
+  // tag connections for observability in pg_stat_activity. Session pooler (:5432) keeps
+  // prepared statements working, so no prepare:false needed.
+  const sql = postgres(url, {
+    max: 20,
+    idle_timeout: 30,
+    connection: { application_name: "paperclip-server" },
+    onnotice: () => {},
+  });
   return drizzlePg(sql, { schema });
 }
 
