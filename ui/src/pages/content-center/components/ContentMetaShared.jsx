@@ -41,7 +41,7 @@ export function generateSlug(text) {
     .replace(/^-+|-+$/g, '');
 }
 
-export function SlugUrlHandle({ slug, contentType, baseUrl }) {
+export function SlugUrlHandle({ slug, contentType, baseUrl = null }) {
   const [copied, setCopied] = useState(false);
 
   const urlHandle = generateSlug(slug || '');
@@ -103,7 +103,7 @@ export function SlugUrlHandle({ slug, contentType, baseUrl }) {
  */
 export function MetaSelect({
   value,
-  options = [],
+  /** @type {string[]} */ options = [],
   onCommit,
   allowCustom = false,
   storageKey,

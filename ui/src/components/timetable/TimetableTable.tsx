@@ -412,7 +412,7 @@ export function TimetableTableRow({
                   navigate(`/issues/${row.issueId}`);
                 } else if (row.sourceTable === "issues") {
                   navigate(`/issues/${row.sourceId}`);
-                } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_runs") && row.agent) {
+                } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_task_sessions") && row.agent) {
                   navigate(`/agents/${row.agent.id}/runs/${row.sourceId}`);
                 }
               }}
@@ -660,7 +660,7 @@ function TimetableCardRow({
                 navigate(`/issues/${row.issueId}`);
               } else if (row.sourceTable === "issues") {
                 navigate(`/issues/${row.sourceId}`);
-              } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_runs") && row.agent) {
+              } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_task_sessions") && row.agent) {
                 navigate(`/agents/${row.agent.id}/runs/${row.sourceId}`);
               }
             }}

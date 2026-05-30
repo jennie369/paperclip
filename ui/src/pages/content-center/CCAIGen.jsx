@@ -70,6 +70,11 @@ import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
 import DripStepHtmlEditor from './components/DripStepHtmlEditor';
 import { ContentResultPanel } from './components';
+import MediaDropUploader from './components/MediaDropUploader';
+import MediaGalleryGrid from './components/MediaGalleryGrid';
+import { supabase } from '../../lib/supabaseClient';
+import { marked } from 'marked';
+import { opsApi } from '@/api/ops'; // WIP CCAIGen dùng opsApi (getBatchStatus/sendEmail/...) nhưng thiếu import → crash "opsApi is not defined"
 
 // ============================================================================
 // Constants — Loại nội dung
@@ -1263,12 +1268,14 @@ export default function AiGenPage() {
   // -- Batch Processor (Play/Stop) --
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [galleryImages, setGalleryImages] = useState([]);
+  const [showMediaGallery, setShowMediaGallery] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
       try {
-        const r = await fetch('/api/ops/content-pipeline/batch/status');
+        const r = await opsApi.getBatchStatus();
         if (!cancelled && r.ok) {
           const d = await r.json();
           setBatchRunning(!!d.running);
@@ -1286,7 +1293,7 @@ export default function AiGenPage() {
       const endpoint = batchRunning
         ? '/api/ops/content-pipeline/batch/stop'
         : '/api/ops/content-pipeline/batch/start';
-      const r = await fetch(endpoint, { method: 'POST' });
+      const r = await (endpoint.includes('start') ? opsApi.startBatch() : opsApi.stopBatch());
       if (r.ok) setBatchRunning(!batchRunning);
     } catch {} finally { setBatchLoading(false); }
   }, [batchRunning]);
@@ -1342,7 +1349,7 @@ export default function AiGenPage() {
         formData.append('file', audioBlob, 'recording.webm');
         formData.append('language', 'vi');
         console.log('[Speech] Sending to /api/speech...');
-        const res = await fetch('/api/speech', { method: 'POST', body: formData });
+        const res = await opsApi.speechToText(formData);
         console.log('[Speech] Response status:', res.status);
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -1526,6 +1533,7 @@ export default function AiGenPage() {
   const [imagePrompt, setImagePrompt] = useState('');
   const [savedId, setSavedId] = useState(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [customFilename, setCustomFilename] = useState('');
   const downloadMenuRef = useRef(null);
 
   useEffect(() => {
@@ -1585,7 +1593,7 @@ export default function AiGenPage() {
   const [overrideEmailMap, setOverrideEmailMap] = useState([]);
   useEffect(() => {
     if (!dripOverrideEnabled || dripSequences.length > 0) return;
-    fetch('/api/ops/email/sequences')
+    opsApi.getEmailSequences()
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setDripSequences(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -1594,7 +1602,7 @@ export default function AiGenPage() {
   // Force refetch sequences (used after a step's HTML is overridden so the
   // step dropdown can show "· đã override" for the affected step).
   const refetchDripSequences = useCallback(() => {
-    fetch('/api/ops/email/sequences')
+    opsApi.getEmailSequences()
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setDripSequences(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -1920,8 +1928,7 @@ export default function AiGenPage() {
 
   // -- Load Facebook Pages --
   React.useEffect(() => {
-    fetch('/api/social/publish')
-      .then(r => r.json())
+    opsApi.getSocialPages()
       .then(data => {
         if (data.success && data.pages?.length) {
           setFacebookPages(data.pages);
@@ -2004,12 +2011,7 @@ export default function AiGenPage() {
           const scheduledTime = new Date(`${date}T${item.time || '00:00'}`);
           if (now >= scheduledTime) {
             const { from, to, subject, html } = item.scheduledContent.emailData;
-            fetch('/api/ops/email/send', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ from, to, subject, html }),
-            })
-              .then(r => r.json())
+            opsApi.sendEmail({ from, to, subject, html })
               .then(data => {
                 const newStatus = data.success ? 'published' : 'planned';
                 plannerService.update(item.id, { status: newStatus });
@@ -2294,7 +2296,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
 
     // 2026-05-08: Auto start batch on ANY generate click, optimistic UI update
     setBatchRunning(true);
-    fetch('/api/ops/content-pipeline/batch/start', { method: 'POST' })
+    opsApi.startBatch()
       .catch(err => {
         console.warn('[AUTO-BATCH] error starting:', err);
         setBatchRunning(false);
@@ -2395,11 +2397,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
               if (!slot?.stepId) continue;
               if (slot.saveHint && slot.extraPrompt?.trim()) {
                 try {
-                  await fetch(`/api/ops/email/steps/${slot.stepId}/hint`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ generation_hint: slot.extraPrompt.trim() }),
-                  });
+                  await opsApi.saveEmailHint(slot.stepId, { generation_hint: slot.extraPrompt.trim() });
                 } catch (e) {
                   console.warn(`[HINT-SAVE] step=${slot.stepId} failed:`, e);
                 }
@@ -2441,13 +2439,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
               full: payload,
             });
             try {
-              const r = await fetch('/api/ops/content-pipeline/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-              });
-              if (!r.ok) throw new Error(`HTTP ${r.status}`);
-              const job = await r.json();
+              const job = await opsApi.generateContent(payload);
               queuedJobIds.push(job?.id);
               queued += 1;
             } catch (err) {
@@ -2479,9 +2471,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
             for (const jid of queuedJobIds) {
               if (!jid || completed.has(jid)) continue;
               try {
-                const jr = await fetch(`/api/ops/sop-engine/batch-jobs/${jid}`);
-                if (!jr.ok) continue;
-                const job = await jr.json();
+                const job = await opsApi.getBatchJobStatus(jid);
                 if (job.status === 'completed' || job.status === 'failed') {
                   completed.add(jid);
                   if (job.status === 'completed') {
@@ -2500,18 +2490,16 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
                     }
                     if (!body && job.entity_id) {
                       try {
-                        const sr = await fetch(`/api/ops/content-pipeline/scripts?id=${job.entity_id}&limit=1`);
-                        if (sr.ok) {
-                          const rows = await sr.json();
+                        const rows = await opsApi.getScripts(`id=${job.entity_id}&limit=1`);
+                        if (rows) {
                           if (Array.isArray(rows) && rows[0]?.body) body = rows[0].body;
                         }
                       } catch (e) { console.warn('[DOC-POLL] fetch script by entity_id failed', e); }
                     }
                     if (!body) {
                       try {
-                        const sr = await fetch(`/api/ops/content-pipeline/scripts?generation_job_id=${jid}&limit=1`);
-                        if (sr.ok) {
-                          const rows = await sr.json();
+                        const rows = await opsApi.getScripts(`generation_job_id=${jid}&limit=1`);
+                        if (rows) {
                           if (Array.isArray(rows) && rows[0]?.body) body = rows[0].body;
                         }
                       } catch (e) { console.warn('[DOC-POLL] fetch script by job_id failed', e); }
@@ -2571,7 +2559,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
       } finally {
         setGenerating(false);
         // Tự động tắt batch sau khi xong
-        fetch('/api/ops/content-pipeline/batch/stop', { method: 'POST' })
+        opsApi.stopBatch()
           .then(() => setBatchRunning(false))
           .catch(e => console.error('[AUTO-BATCH] error stopping:', e));
       }
@@ -2849,7 +2837,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       abortRef.current = null;
       
       // Tự động tắt batch sau khi xong (cho flow thường)
-      fetch('/api/ops/content-pipeline/batch/stop', { method: 'POST' })
+      opsApi.stopBatch()
         .then(() => setBatchRunning(false))
         .catch(e => console.error('[AUTO-BATCH] error stopping:', e));
     }
@@ -2873,6 +2861,14 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     }
   }, [output, addToast]);
 
+  const defaultFilename = useMemo(() => {
+    if (!output) return 'Gemral-Content';
+    const lines = output.split('\n');
+    let title = lines.find(line => line.trim().length > 0)?.replace(/^#+\s*/, '').trim() || 'Gemral-Content';
+    // Lọc ký tự không hợp lệ cho Windows/Mac/Linux
+    return title.substring(0, 100).replace(/[\\/?%*:|"<>]/g, '').trim() || 'Gemral-Content';
+  }, [output]);
+
   // -- Download --
   const handleDownload = useCallback(async (mode = 'file') => {
     if (!output) return;
@@ -2881,25 +2877,14 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     const mimeType = isDocHtml ? 'text/html' : 'text/markdown';
 
     // Tìm tiêu đề
-    let title = newsMetadata?.title || brief || '';
-    if (!title) {
-      const lines = output.split('\n');
-      title = lines[0]?.replace(/^#+\s*/, '').trim() || 'Gemral-Content';
-    }
-    // Lọc ký tự đặc biệt khỏi tên file
-    title = title.substring(0, 50).replace(/[^a-zA-Z0-9 À-ỹ]/g, '').trim() || 'Gemral-Content';
+    let title = customFilename.trim() || defaultFilename;
 
     if (mode === 'folder') {
       try {
         const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
 
-        // Remove accents and uppercase for folder name
-        const removeAccents = (str) =>
-          str.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
-        const folderName =
-          removeAccents(title).replace(/[^A-Z0-9 ]/g, '').trim().replace(/\s+/g, '_') ||
-          'GEMRAL_CONTENT';
+        const folderName = title;
         const filename = `${title}.${extension}`;
 
         // Add file to folder
@@ -2933,7 +2918,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       URL.revokeObjectURL(url);
       addToast({ type: 'success', message: `Đã tải về file ${filename}` });
     }
-  }, [output, outputType, newsMetadata, brief, addToast]);
+  }, [output, outputType, newsMetadata, brief, addToast, customFilename]);
 
   // -- Auto-save: batch_processor đã tự động lưu (server-side)
   useEffect(() => {
@@ -3015,6 +3000,89 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     { label: 'Tạo Tiêu Đề', instruction: 'Tạo 4 tiêu đề cho kịch bản này theo 4 công thức khác nhau.' },
   ];
 
+  // -- Gallery Upload Handlers --
+  const handleGalleryUpload = useCallback(async (file, { positionId }) => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+
+      // Upload to server to get real URL using Supabase
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
+      const filePath = `content-center/${fileName}`;
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('course-images')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from('course-images')
+        .getPublicUrl(filePath);
+        
+      const imageUrl = publicUrlData.publicUrl;
+
+      // Ensure user profile account is captured
+      const { data: { user } } = await supabase.auth.getUser();
+
+      const imageData = {
+        lesson_id: 'content-center', // Generic identifier
+        image_url: imageUrl,
+        file_name: file.name,
+        file_path: filePath,
+        file_size: file.size,
+        mime_type: file.type,
+        position_id: positionId,
+        is_active: true,
+        created_by: user?.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: insertedData, error: dbError } = await supabase
+        .from('course_lesson_images')
+        .insert(imageData)
+        .select()
+        .single();
+
+      if (dbError) {
+        // Fallback: still show it in UI but warn about DB issue
+        console.warn('[GalleryUpload] DB insert failed:', dbError);
+      }
+      
+      const newImage = insertedData || {
+        id: Date.now().toString(),
+        image_url: imageUrl,
+        alt_text: file.name,
+        position_id: positionId,
+        file_name: file.name,
+      };
+      
+      setGalleryImages(prev => [...prev, newImage]);
+      addToast({ type: 'success', message: 'Đã thêm hình ảnh vào thư viện' });
+      return { success: true };
+    } catch (error) {
+      console.error('[GalleryUpload] Error:', error);
+      addToast({ type: 'error', message: 'Lỗi tải ảnh: ' + (error.message || 'Không xác định') });
+      return { error };
+    }
+  }, [addToast]);
+
+  const handleGalleryDelete = useCallback(async (image) => {
+    setGalleryImages(prev => prev.filter(img => img.id !== image.id));
+    if (image.image_url.startsWith('blob:')) {
+      URL.revokeObjectURL(image.image_url);
+    }
+    addToast({ type: 'success', message: 'Đã xóa hình ảnh' });
+  }, [addToast]);
+
+  const handleGalleryReorder = useCallback((newImages) => {
+    setGalleryImages(newImages);
+  }, []);
+
   // -- Image upload handlers --
   const handleImageFiles = useCallback(async (files) => {
     const newImages = Array.from(files).filter(f => f.type.startsWith('image/')).slice(0, 10 - uploadedImages.length);
@@ -3068,11 +3136,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         const formData = new FormData();
         uploadedImages.forEach(img => formData.append('files', img.file));
 
-        const uploadRes = await fetch('/api/social/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        const uploadData = await uploadRes.json();
+        const uploadData = await opsApi.uploadSocialMedia(formData);
         if (!uploadData.success) throw new Error(uploadData.error);
         imageUrls = uploadData.urls;
         setUploading(false);
@@ -3098,12 +3162,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       if (scheduleMode && scheduledDateTime && platform === 'Facebook') {
         publishBody.scheduledTime = Math.floor(new Date(scheduledDateTime).getTime() / 1000);
       }
-      const publishRes = await fetch('/api/social/publish', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(publishBody),
-      });
-      const publishData = await publishRes.json();
+      const publishData = await opsApi.publishSocialMedia(publishBody);
       if (!publishData.success) throw new Error(publishData.error);
 
       setPublishResults(prev => [...prev, { platform, url: publishData.postUrl }]);
@@ -3111,17 +3170,12 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       // Auto-comment nếu đã bật và đăng Facebook thành công (không phải scheduled)
       if (autoCommentEnabled && autoCommentText.trim() && platform === 'Facebook' && !publishData.scheduled && publishData.postId) {
         try {
-          const commentRes = await fetch('/api/social/comment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          const commentData = await opsApi.commentSocialMedia({
               postId: publishData.postId,
               pageId: selectedFbPage || undefined,
               message: autoCommentText,
               link: autoCommentLink || undefined,
-            }),
           });
-          const commentData = await commentRes.json();
           if (commentData.success) {
             addToast({ type: 'success', title: 'Auto-comment', message: 'Đã đăng comment tự động!' });
           }
@@ -3357,18 +3411,13 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
       // 1. Gửi email qua API
       const bccList = emailBcc.split(',').map(e => e.trim()).filter(Boolean);
-      const res = await fetch('/api/ops/email/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await opsApi.sendEmail({
           from: emailSender,
           to: recipients,
           ...(bccList.length > 0 && { bcc: bccList }),
           subject: emailSubject,
           html: htmlContent,
-        }),
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
       // 2. Track campaign trong cc_email_campaigns
@@ -3616,22 +3665,95 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
   // wrap markdown trong <pre> với preserve whitespace (Phase A KISS, no markdown parser).
   // Spec: memory/reports/2026-05-17-content-result-panel-global-design.md §5.3
   const previewSrcDoc = React.useMemo(() => {
-    // When iframe syncs its DOM back to parent, don't regenerate srcDoc (iframe already has correct state)
     if (emailSyncingRef.current && emailSrcDocRef.current) return emailSrcDocRef.current;
     if (!output) return '';
-
-    // Markdown/plain-text fallback: nếu output không có HTML tag, wrap trong <pre> để
-    // render giữ line break + spacing. Phase A keep simple, không cài markdown parser.
-    const escapeHtml = (s) => (s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-    const hasHtml = /<(html|body|table|div|p|h\d|section|article|header|main|figure|img|ul|ol|li|blockquote)\b/i.test(output);
-    const workingOutput = hasHtml
-      ? output
-      : `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body><pre style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Inter', system-ui, sans-serif; padding: 16px; color: #1f1f1f; line-height: 1.6; font-size: 14px; margin: 0;">${escapeHtml(output)}</pre></body></html>`;
+    let cleanOutput = output.trim();
+    // Strip markdown code block wrapper if present
+    if (cleanOutput.startsWith('```markdown')) {
+      cleanOutput = cleanOutput.replace(/^```markdown\s*/i, '').replace(/\s*```$/i, '');
+    } else if (cleanOutput.startsWith('```html')) {
+      cleanOutput = cleanOutput.replace(/^```html\s*/i, '').replace(/\s*```$/i, '');
+    } else if (cleanOutput.startsWith('```')) {
+      cleanOutput = cleanOutput.replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    }
+    
+    // Markdown/plain-text fallback
+    const isFullHtmlDocument = /^\s*(<!DOCTYPE html>|<html)/i.test(cleanOutput);
+    const hasHtml = isFullHtmlDocument;
+    
+    let workingOutput = cleanOutput;
+    if (!hasHtml && cleanOutput) {
+      const parsedHtml = marked.parse(cleanOutput);
+      workingOutput = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    color: #1f2328;
+    line-height: 1.6;
+    font-size: 15px;
+    padding: 24px 32px;
+    background: #ffffff;
+    margin: 0;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    color: #112250;
+    font-weight: 600;
+    margin-top: 24px;
+    margin-bottom: 16px;
+    line-height: 1.25;
+  }
+  h1 { font-size: 2em; border-bottom: 1px solid #eaecef; padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid #eaecef; padding-bottom: .3em; }
+  h3 { font-size: 1.25em; }
+  p { margin-top: 0; margin-bottom: 16px; }
+  a { color: #6A5BFF; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { margin-top: 0; margin-bottom: 16px; padding-left: 2em; }
+  li { margin-top: 0.25em; }
+  blockquote {
+    padding: 0 1em;
+    color: #656d76;
+    border-left: .25em solid #FFBD59;
+    margin: 0 0 16px 0;
+    background: #fdfaf6;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+  }
+  code {
+    padding: .2em .4em;
+    margin: 0;
+    font-size: 85%;
+    background-color: rgba(175, 184, 193, 0.2);
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+    color: #9C0612;
+  }
+  pre {
+    padding: 16px;
+    overflow: auto;
+    font-size: 85%;
+    line-height: 1.45;
+    background-color: #f6f8fa;
+    border-radius: 6px;
+  }
+  pre code {
+    padding: 0;
+    margin: 0;
+    background-color: transparent;
+    border: 0;
+    color: inherit;
+  }
+  hr {
+    height: .25em;
+    padding: 0;
+    margin: 24px 0;
+    background-color: #d0d7de;
+    border: 0;
+  }
+  strong { color: #112250; }
+</style>
+</head><body><div class="markdown-body">${parsedHtml}</div></body></html>`;
+    }
 
     const baseTag = `<base href="${window.location.origin}/">`;
 
@@ -3969,17 +4091,12 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     if (feedbackSent.has(key)) return;
     setFeedbackSending(key);
     try {
-      const res = await fetch('/api/knowledge/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await opsApi.submitKnowledgeFeedback({
           type,
           rule,
           suggestion,
           contentType: contentType ?? undefined,
-        }),
       });
-      const data = await res.json();
       if (data.success) {
         setFeedbackSent(prev => new Set(prev).add(key));
         addToast({ type: 'success', title: 'Đã ghi nhận', message: 'Hệ thống sẽ cải thiện từ lần tạo tiếp theo.' });
@@ -4075,6 +4192,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
           <a href="/admin/cc/calendar" className="ml-auto text-xxs text-emerald hover:underline shrink-0">Quay lại Lịch</a>
         </div>
       )}
+
+      {/* -- Media Gallery -- ĐÃ TÁCH thành section riêng (MediaGallerySection) trong
+          ContentPipelinePage → DEFAULT_AIGEN_SECTIONS 'media-gallery' (2026-05-30). -- */}
 
       {/* -- Form -- */}
       <Card variant="glass" padding="md">
@@ -5860,10 +5980,21 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                   Tải Về <ChevronDown size={14} className="ml-1 opacity-70" />
                 </Button>
                 {showDownloadMenu && (
-                  <div className="absolute top-full left-0 mt-1 w-40 bg-card border border-border rounded-md shadow-lg py-1 z-50 overflow-hidden">
+                  <div className="absolute top-full left-0 mt-1 w-56 bg-card border border-border rounded-md shadow-lg py-1 z-50 overflow-hidden">
+                    <div className="px-3 py-2 border-b border-border/50">
+                      <input 
+                        type="text" 
+                        value={customFilename} 
+                        onChange={(e) => setCustomFilename(e.target.value)} 
+                        placeholder={defaultFilename} 
+                        className="w-full h-8 px-2 text-sm bg-bg-4 border border-border rounded focus:border-gold/50 focus:outline-none text-txt"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Tên file sẽ tải về. Để trống sẽ dùng tên mặc định."
+                      />
+                    </div>
                     <button
                       onClick={() => { setShowDownloadMenu(false); handleDownload('file'); }}
-                      className="w-full text-left px-3 py-2 text-sm text-txt hover:bg-bg-3 transition-colors flex items-center gap-2"
+                      className="w-full text-left px-3 py-2 text-sm text-txt hover:bg-bg-3 transition-colors flex items-center gap-2 mt-1"
                     >
                       <FileText size={14} className="text-txt-3" />
                       Tải 1 file

@@ -654,9 +654,9 @@ function YouTubeTab() {
       <div className="flex items-center gap-3">
         <PeriodSelector value={period} onChange={setPeriod} />
         {/* R-1: Open YouTube channel */}
-        {overview?.channel_url && (
+        {overview?.channel_id && (
           <a
-            href={overview.channel_url}
+            href={`https://youtube.com/channel/${overview.channel_id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"

@@ -52,6 +52,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   EyeOff,
   Hexagon,
@@ -227,6 +228,7 @@ export function IssueDetail() {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [optimisticComments, setOptimisticComments] = useState<OptimisticIssueComment[]>([]);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
 
@@ -1096,19 +1098,50 @@ export function IssueDetail() {
           className="text-xl font-bold"
         />
 
-        <InlineEditor
-          value={issue.description ?? ""}
-          onSave={(description) => updateIssue.mutateAsync({ description })}
-          as="p"
-          className="text-[15px] leading-7 text-foreground"
-          placeholder="Add a description..."
-          multiline
-          mentions={mentionOptions}
-          imageUploadHandler={async (file) => {
-            const attachment = await uploadAttachment.mutateAsync(file);
-            return attachment.contentPath;
-          }}
-        />
+        {(() => {
+          const descText = issue.description ?? "";
+          const descLineCount = descText.split("\n").length;
+          const isLongDescription = descText.length > 300 || descLineCount > 5;
+
+          return (
+            <div onFocusCapture={() => setDescriptionExpanded(true)}>
+              <InlineEditor
+                value={descText}
+                onSave={(description) => updateIssue.mutateAsync({ description })}
+                as="p"
+                className={cn(
+                  "text-[15px] leading-7 text-foreground",
+                  !descriptionExpanded && isLongDescription ? "line-clamp-5" : ""
+                )}
+                placeholder="Add a description..."
+                multiline
+                mentions={mentionOptions}
+                imageUploadHandler={async (file) => {
+                  const attachment = await uploadAttachment.mutateAsync(file);
+                  return attachment.contentPath;
+                }}
+              />
+              {isLongDescription && (
+                <button
+                  onClick={() => setDescriptionExpanded(!descriptionExpanded)}
+                  className="flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors"
+                >
+                  {descriptionExpanded ? (
+                    <>
+                      <ChevronUp className="h-3.5 w-3.5" />
+                      Thu gọn
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-3.5 w-3.5" />
+                      Xem thêm
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       <PluginSlotOutlet

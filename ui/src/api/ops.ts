@@ -29,6 +29,33 @@ export const opsApi = {
   deleteScript: (id: string) => fetchJSON<any>(`${BASE}/content-pipeline/scripts/${id}`, { method: 'DELETE' }),
   runCron: (name: string) => fetchJSON<any>(`${BASE}/content-pipeline/cron/${name}/run`, { method: 'POST' }),
 
+  // ── New CCAIGen endpoints ──
+  getBatchStatus: () => fetchJSON<any>(`${BASE}/content-pipeline/batch/status`),
+  startBatch: () => fetchJSON<any>(`${BASE}/content-pipeline/batch/start`, { method: 'POST' }),
+  stopBatch: () => fetchJSON<any>(`${BASE}/content-pipeline/batch/stop`, { method: 'POST' }),
+  generateContent: (data: any) => fetchJSON<any>(`${BASE}/content-pipeline/generate`, { method: 'POST', body: JSON.stringify(data) }),
+  
+  getEmailSequences: () => fetchJSON<any>(`${BASE}/email/sequences`),
+  sendEmail: (data: any) => fetchJSON<any>(`${BASE}/email/send`, { method: 'POST', body: JSON.stringify(data) }),
+  saveEmailHint: (stepId: string, data: any) => fetchJSON<any>(`${BASE}/email/steps/${stepId}/hint`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  uploadSocialMedia: (formData: FormData) => {
+    // FormData requires omitting Content-Type so browser sets boundary
+    return fetch('/api/social/upload', { method: 'POST', body: formData })
+      .then(r => { if (!r.ok) throw new Error('Upload failed'); return r.json(); });
+  },
+  getSocialPages: () => fetch('/api/social/pages').then(r => r.json()),
+  publishSocialMedia: (data: any) => fetchJSON<any>(`/api/social/publish`, { method: 'POST', body: JSON.stringify(data) }),
+  commentSocialMedia: (data: any) => fetchJSON<any>(`/api/social/comment`, { method: 'POST', body: JSON.stringify(data) }),
+  
+  speechToText: (formData: FormData) => {
+    return fetch('/api/speech', { method: 'POST', body: formData })
+      .then(r => { if (!r.ok) throw new Error('Speech transcription failed'); return r.json(); });
+  },
+  
+  submitKnowledgeFeedback: (data: any) => fetchJSON<any>(`/api/knowledge/feedback`, { method: 'POST', body: JSON.stringify(data) }),
+
+
   // ── Affiliate ──
   getAffiliateStats: () => fetchJSON<any>(`${BASE}/affiliate/stats`),
   getAffiliateList: (params?: Record<string, string>) => {

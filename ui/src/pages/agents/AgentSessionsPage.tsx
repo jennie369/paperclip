@@ -254,9 +254,9 @@ export function AgentSessionsPage() {
     const slug = entry.handled_by || entry.agent_slug || "";
     if (!slug || slug === "skipped" || slug === "manual" || slug === "human") {
       pushToast({
-        variant: "info",
+        tone: "info",
         title: "Hoạt động không do agent xử lý",
-        description: `${entry.handled_by || "Manual / skipped"} — không có chat log để hiển thị.`,
+        body: `${entry.handled_by || "Manual / skipped"} — không có chat log để hiển thị.`,
       });
       return;
     }

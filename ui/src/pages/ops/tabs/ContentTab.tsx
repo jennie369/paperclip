@@ -21,7 +21,6 @@ import { supabase } from "@/lib/supabaseClient";
 import { MarkdownBody } from "@/components/MarkdownBody";
 // SSOT shared components — keep ContentTab/CCScriptDetail/CCAIGen UI consistent.
 // Local definitions of MetaSelect/SlugUrlHandle removed 2026-05-17 (refactor commit).
-// @ts-expect-error — JS module, no .d.ts but signature stable
 import { MetaSelect, SlugUrlHandle } from "../../content-center/components";
 
 // ---------------------------------------------------------------------------

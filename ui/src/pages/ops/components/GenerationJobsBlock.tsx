@@ -44,16 +44,14 @@ export function GenerationJobsBlock() {
 
   const reorderGroup = useCallback((src: string, dst: string) => {
     if (src === dst) return;
-    setGroupOrder((prev: string[]) => {
-      const next = prev.slice();
-      const si = next.indexOf(src);
-      const di = next.indexOf(dst);
-      if (si === -1 || di === -1) return prev;
-      next.splice(si, 1);
-      next.splice(di, 0, src);
-      return next; // useUIOrder tự save
-    });
-  }, [setGroupOrder]);
+    const next = groupOrder.slice();
+    const si = next.indexOf(src);
+    const di = next.indexOf(dst);
+    if (si === -1 || di === -1) return;
+    next.splice(si, 1);
+    next.splice(di, 0, src);
+    setGroupOrder(next); // useUIOrder tự save
+  }, [groupOrder, setGroupOrder]);
 
   const now = Date.now();
   const TEN_MIN = 10 * 60 * 1000;

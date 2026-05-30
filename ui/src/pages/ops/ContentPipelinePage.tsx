@@ -18,6 +18,7 @@ import { PlannerBoard } from "@/components/ops/PlannerBoard";
 import AiGenPage from "../content-center/CCAIGen";
 import BatchJobsView from "./sop-engine/BatchGeneratorTab";
 import { GenerationJobsBlock } from "./components/GenerationJobsBlock";
+import MediaGallerySection from "../content-center/components/MediaGallerySection";
 
 // 2026-04-18 — TABS is now a mutable default; the live order lives in state so
 // the user can drag tabs to reorder. aigen moved in front of pipeline per
@@ -45,7 +46,7 @@ const DEFAULT_BLOCKS = [
 type BlockId = typeof DEFAULT_BLOCKS[number];
 
 // ─── AiGen tab section ordering ──────────────────────────────────────────────
-const DEFAULT_AIGEN_SECTIONS = ["batch-gen", "ai-gen", "gen-jobs"] as const;
+const DEFAULT_AIGEN_SECTIONS = ["batch-gen", "ai-gen", "media-gallery", "gen-jobs"] as const;
 type AigenSectionId = typeof DEFAULT_AIGEN_SECTIONS[number];
 
 /** Chuyển tab object array thành key array để dùng với useUIOrder */
@@ -462,6 +463,16 @@ export function ContentPipelinePage() {
                         <div className="absolute inset-0 z-20" style={{ pointerEvents: 'all' }} />
                       )}
                       <AiGenPage />
+                    </div>
+                  );
+
+                  if (sectionId === "media-gallery") return (
+                    <div key="media-gallery" className={wrapCls} {...dropTargetProps}>
+                      {DragBar}
+                      {anyDragging && !isBeingDragged && (
+                        <div className="absolute inset-0 z-20" style={{ pointerEvents: 'all' }} />
+                      )}
+                      <MediaGallerySection />
                     </div>
                   );
 

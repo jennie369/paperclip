@@ -1911,7 +1911,7 @@ function RunListItem({ run, isSelected, agentId, allIssues, heartbeatThreadIssue
   const isHeartbeatThread = context?.heartbeatThread === true;
 
   let targetIssueId = runIssueId;
-  let linkedIssue: { id: string; identifier?: string | null; title?: string } | null = null;
+  let linkedIssue: { id: string; identifier?: string | null; title?: string; status?: string } | null = null;
 
   if (isHeartbeatThread || (runIssueId && heartbeatThreadIssue && (runIssueId === heartbeatThreadIssue.id || runIssueId === heartbeatThreadIssue.identifier))) {
     linkedIssue = heartbeatThreadIssue || null;

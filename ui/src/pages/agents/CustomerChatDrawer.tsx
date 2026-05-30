@@ -631,7 +631,7 @@ function ChatBubble({
             {fmtTime(message.timestamp)}
           </span>
           <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-            <CopyButton text={actualContent} label="Copy message" size={11} />
+            <CopyButton text={actualContent} size={11} />
           </div>
         </div>
 
