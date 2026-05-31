@@ -80,6 +80,7 @@ import { OrderListPage } from "./pages/crm/OrderListPage";
 import { ImportPage } from "./pages/crm/ImportPage";
 import { EmailCampaignsPage } from "./pages/crm/EmailCampaignsPage";
 import { KnowledgeBasePage } from "./pages/crm/KnowledgeBasePage";
+import { CrmMessagingShowcase } from "./pages/CrmMessagingShowcase";
 import { TrainingRoomPage } from "./pages/training/TrainingRoomPage";
 import { ToolAuditLogPage } from "./pages/training/ToolAuditLogPage";
 import { TrainingHistoryPage } from "./pages/training/TrainingHistoryPage";
@@ -257,6 +258,7 @@ function boardRoutes() {
       <Route path="crm/import" element={<ImportPage />} />
       <Route path="crm/campaigns" element={<EmailCampaignsPage />} />
       <Route path="crm/knowledge-base" element={<KnowledgeBasePage />} />
+      <Route path="crm-messaging" element={<CrmMessagingShowcase />} />
       <Route path="training" element={<TrainingRoomPage />} />
       <Route path="training/history" element={<TrainingHistoryPage />} />
       <Route path="training/audit-log" element={<ToolAuditLogPage />} />
@@ -485,6 +487,7 @@ export function App() {
           <Route path="war-room" element={<UnprefixedBoardRedirect />} />
           <Route path="crm" element={<UnprefixedBoardRedirect />} />
           <Route path="crm/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="crm-messaging" element={<UnprefixedBoardRedirect />} />
           <Route path="timetable" element={<UnprefixedBoardRedirect />} />
           <Route path="timetable/*" element={<UnprefixedBoardRedirect />} />
           <Route path="lich-hom-nay" element={<UnprefixedBoardRedirect />} />

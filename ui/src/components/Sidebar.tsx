@@ -165,6 +165,7 @@ export function Sidebar() {
     "/crm/orders": <SidebarNavItem to="/crm/orders" label="Đơn hàng" icon={ShoppingBag} />,
     "/crm/campaigns": <SidebarNavItem to="/crm/campaigns" label="Email Campaigns" icon={Mail} />,
     "/crm/knowledge-base": <SidebarNavItem to="/crm/knowledge-base" label="Knowledge Base" icon={BookOpen} />,
+    "/crm-messaging": <SidebarNavItem to="/crm-messaging" label="Messaging Gallery" icon={MessageCircle} />,
 
     // Work
     "/timetable": <SidebarNavItem to="/timetable" label="Lịch hôm nay" icon={Calendar} />,
