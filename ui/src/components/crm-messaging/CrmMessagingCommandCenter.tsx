@@ -1,154 +1,116 @@
 /**
  * CrmMessagingCommandCenter — Omnichannel Inbox (Command Center)
  * ──────────────────────────────────────────────────────────────
- * The flagship 4-column messaging cockpit:
- *   1. Channels rail   — workspace identity + per-account inbox counts (Zalo /
- *                        Facebook / Telegram), grouped by platform.
- *   2. Conversations   — searchable, filterable list with channel-badged
- *                        avatars, unread/VIP states.
- *   3. Chat window     — header w/ contact + context, message thread (sent /
- *                        received bubbles), AI suggestion chips + composer.
- *   4. CRM 360 panel   — spend/LTV card, contact info grid, tags, deal stage.
+ * The flagship 4-column messaging cockpit, upgraded to absorb the standalone
+ * CRM widgets:
+ *   1. Channels rail        — workspace + platform groups w/ square sub-account
+ *                             avatars + collapse + unread/notification dots.
+ *   2. Conversations        — sentiment rings (from Sentiment Matrix), target-
+ *                             account overlay + receiving pill, AI intent chips,
+ *                             SLA breach badges, live typing.
+ *   3. Chat window          — Bot/Human handoff, AI-reply markers, per-message
+ *                             hover menu, AI Capture Review, smart composer
+ *                             (ghost-typing + drag-drop dropzone + Magic Wand).
+ *   4. Customer 360 + AI Copilot — deep profile + journey timeline (from
+ *                             Customer 360) and a mode-switching copilot that
+ *                             absorbs Objection / Upsell / Urgency (brain
+ *                             activity, win rate, tone slider, draggable
+ *                             arsenal, 1-click combo).
  *
- * Ported from the Gemral CRM mockup ("COMMAND CENTER (Omnichannel Inbox)").
- * Theme-aware via gem-* tokens. Presentational; every affordance surfaces via
- * callbacks (select account/conversation, send, AI suggestion, deal-stage change).
+ * Theme-aware via gem-* tokens (light + dark). All data flows through props
+ * (shaped for real CRM data — see crm-command-center-contract.md); every action
+ * surfaces via a callback. Interactive flourishes (copilot transforms, ghost
+ * typing, drag-drop, brain activity) are client-side UX with callback seams for
+ * the backend wiring (Phase B).
  *
- * @param {CommandWorkspace} [workspace] - Top-left identity (name + online state).
- * @param {CommandChannelGroup[]} [channelGroups] - Platform-grouped account list.
- * @param {string} [allCount="24"] - Count badge for the "All Messages" row.
- * @param {CommandConversation[]} [conversations] - Conversation list items.
- * @param {string} [activeConversationId] - Focused conversation id (controlled).
- * @param {(id: string) => void} [onSelectConversation] - Conversation click handler.
- * @param {string[]} [listFilters] - Filter chips above the list.
- * @param {CommandChatHeader} [chatHeader] - Header of the active chat.
+ * @param {CommandWorkspace} [workspace] - Top-left identity.
+ * @param {CommandChannelGroup[]} [channelGroups] - Platform-grouped accounts.
+ * @param {string} [allCount="24"] - "All messages" badge.
+ * @param {CommandConversation[]} [conversations] - Conversation list.
+ * @param {string} [activeConversationId] - Focused conversation (controlled).
+ * @param {(id: string) => void} [onSelectConversation]
+ * @param {(id: string) => void} [onSelectAccount]
+ * @param {string[]} [listFilters] - Filter chips.
+ * @param {CommandChatHeader} [chatHeader] - Active chat header.
+ * @param {CommandBotMode} [botMode] - Bot/Human handoff (controlled if onBotModeChange given).
+ * @param {(mode: CommandBotMode) => void} [onBotModeChange]
  * @param {CommandMessage[]} [messages] - Active chat transcript.
- * @param {string[]} [aiSuggestions] - One-tap AI reply chips above the composer.
- * @param {(text: string, index: number) => void} [onAiSuggestion] - AI chip handler.
- * @param {(text: string) => void} [onSend] - Composer send handler.
- * @param {CommandCrmProfile} [crm] - Right CRM-360 panel data.
- * @param {string} [className] - Extra classes on the card root.
+ * @param {string[]} [aiSuggestions] - One-tap AI reply chips.
+ * @param {(text: string, i: number) => void} [onAiSuggestion]
+ * @param {(text: string) => void} [onSend]
+ * @param {(i: number) => void} [onCaptureReview]
+ * @param {(payload: { text: string; destinationIds: string[] }) => void} [onPublishReview]
+ * @param {CommandCrmProfile} [crm] - Customer 360 data.
+ * @param {(stage: string) => void} [onDealStageChange]
+ * @param {(action: CommandQuickAction, i: number) => void} [onQuickAction]
+ * @param {CommandCopilotData} [copilot] - AI Copilot data.
+ * @param {(mode) => void} [onCopilotTool]
+ * @param {string} [className]
  */
-import { useState } from "react";
-import {
-  MessageSquare,
-  Search,
-  Phone,
-  Star,
-  MoreVertical,
-  Paperclip,
-  Smile,
-  Send as SendIcon,
-  Sparkles,
-  Copy,
-  Crown,
-  CheckCheck,
-  ChevronRight,
-} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { ChannelIcon, initials, vnd } from "./_shared";
-import type { CrmChannel, CrmTag, CrmTone } from "./types";
+import { CommandSidebar } from "./command-center/CommandSidebar";
+import { CommandConversationList } from "./command-center/CommandConversationList";
+import { CommandChatWindow } from "./command-center/CommandChatWindow";
+import { CommandCustomer360 } from "./command-center/CommandCustomer360";
+import { CommandAiCopilot } from "./command-center/CommandAiCopilot";
+import { CommandReviewCaptureModal } from "./command-center/CommandReviewCaptureModal";
+import type {
+  CommandBotMode,
+  CommandCopilotData,
+  CommandCopilotMode,
+  CommandCrmProfile,
+  CommandChannelGroup,
+  CommandChatHeader,
+  CommandConversation,
+  CommandDropPayload,
+  CommandMessage,
+  CommandQuickAction,
+  CommandReviewCapture,
+  CommandWorkspace,
+} from "./command-center/types";
 
-export interface CommandWorkspace {
-  name: string;
-  online?: boolean;
-  avatarUrl?: string;
-}
+// Re-export the public type surface (keeps `index.ts` exports stable).
+export type {
+  CommandWorkspace,
+  CommandAccount,
+  CommandChannelGroup,
+  CommandConversation,
+  CommandChatHeader,
+  CommandMessage,
+  CommandCrmProfile,
+  CommandBotMode,
+  CommandCopilotData,
+  CommandQuickAction,
+  CommandJourneyPoint,
+  CommandReviewCapture,
+} from "./command-center/types";
 
-export interface CommandAccount {
-  id: string;
-  label: string;
-  channel: CrmChannel;
-  count?: number;
-  /** Render the count as an urgent (danger) badge with glow. */
-  urgent?: boolean;
-}
+/* ── Sample data (mirrors the mockup; replaced by real props) ─────────── */
 
-export interface CommandChannelGroup {
-  label: string;
-  accounts: CommandAccount[];
-}
-
-export interface CommandConversation {
-  id: string;
-  name: string;
-  channel: CrmChannel;
-  avatarUrl?: string;
-  preview: string;
-  time: string;
-  /** VIP ribbon under the name. */
-  vip?: boolean;
-  /** Unread → bolder preview + dot. */
-  unread?: boolean;
-  /** Dim the row (older / read). */
-  muted?: boolean;
-}
-
-export interface CommandChatHeader {
-  name: string;
-  channel: CrmChannel;
-  avatarUrl?: string;
-  /** "Fanpage Chính" */
-  context?: string;
-  /** "Tương tác qua Bài Quảng Cáo" */
-  contextDetail?: string;
-}
-
-export interface CommandMessage {
-  from: "them" | "me";
-  text: string;
-  time?: string;
-  /** Show read receipt (only meaningful for sent). */
-  read?: boolean;
-}
-
-export interface CommandCrmInfo {
-  label: string;
-  value: string;
-  copyable?: boolean;
-  truncate?: boolean;
-}
-
-export interface CommandCrmProfile {
-  spendLabel?: string;
-  spend: string;
-  ltvDeltaLabel?: string;
-  orderCountLabel?: string;
-  orderCount?: string;
-  tierLabel?: string;
-  tier?: string;
-  info?: CommandCrmInfo[];
-  tags?: CrmTag[];
-  dealStages?: string[];
-}
-
-const TAG_CHIP: Record<CrmTone, string> = {
-  primary: "bg-gem-primary/20 text-gem-primary border-gem-primary/30",
-  cyan: "bg-gem-cyan/20 text-gem-cyan border-gem-cyan/30",
-  gold: "bg-gem-gold/20 text-gem-gold border-gem-gold/30",
-  success: "bg-gem-success/20 text-gem-success border-gem-success/30",
-  danger: "bg-gem-danger/20 text-gem-danger border-gem-danger/30",
-  warning: "bg-gem-warning/20 text-gem-warning border-gem-warning/30",
-  neutral: "bg-gem-surface-raised text-gem-text-muted border-gem-border/20",
-};
-
-const SAMPLE_WORKSPACE: CommandWorkspace = { name: "Admin Workspace", online: true };
+const SAMPLE_WORKSPACE: CommandWorkspace = { name: "Gemral Admin", online: true };
 
 const SAMPLE_GROUPS: CommandChannelGroup[] = [
   {
-    label: "Zalo Accounts",
+    label: "Zalo (3)",
+    channel: "zalo",
     accounts: [
       { id: "zalo-oa", label: "Zalo OA Tổng", channel: "zalo", count: 12 },
-      { id: "zalo-sale1", label: "Zalo Cá Nhân (Sale 1)", channel: "zalo" },
+      { id: "zalo-sale", label: "Zalo Cá Nhân (Sale)", channel: "zalo", count: 2 },
     ],
   },
   {
-    label: "Facebook Pages",
-    accounts: [{ id: "fb-main", label: "Fanpage Chính", channel: "messenger", count: 5, urgent: true }],
+    label: "Facebook (2)",
+    channel: "messenger",
+    accounts: [
+      { id: "fb-main", label: "Fanpage Chính", channel: "messenger", count: 5, urgent: true, active: true },
+      { id: "fb-support", label: "Page Support", channel: "messenger" },
+    ],
   },
   {
-    label: "Telegram Bots",
-    accounts: [{ id: "tele-vip", label: "Support Bot VIP", channel: "telegram", count: 7 }],
+    label: "Telegram (1)",
+    channel: "telegram",
+    accounts: [{ id: "tele-vip", label: "Support Bot VIP", channel: "telegram", count: 5 }],
   },
 ];
 
@@ -158,24 +120,44 @@ const SAMPLE_CONVERSATIONS: CommandConversation[] = [
     name: "Trần Văn A",
     channel: "messenger",
     preview: "Dạ cho mình hỏi gói Ngọc Bích còn slot không shop?",
-    time: "10:42 AM",
+    time: "10:42",
     vip: true,
+    sentiment: "active",
+    targetAccount: { label: "Fanpage Chính", channel: "messenger" },
+    intentTag: { label: "Ý định mua", tone: "primary" },
+    typing: true,
   },
   {
     id: "c2",
-    name: "Lê Ngọc",
+    name: "Lê Ngọc 😠",
     channel: "zalo",
-    preview: "Mình đã chuyển khoản rồi nha.",
-    time: "09:15 AM",
+    preview: "Mình đã chuyển khoản rồi nha shop check giúp mình lẹ nha.",
+    time: "09:15",
     unread: true,
+    sentiment: "angry",
+    targetAccount: { label: "Zalo OA Tổng", channel: "zalo" },
+    intentTag: { label: "Hối thúc CK", tone: "warning" },
+    sla: { label: "⏳ QUÁ HẠN 5P", blink: true },
   },
   {
     id: "c3",
+    name: "Mai Hoa 😍",
+    channel: "zalo",
+    preview: "Tuyệt vời, cho mình xin thông tin chi tiết với ạ.",
+    time: "15:30",
+    sentiment: "happy",
+    targetAccount: { label: "Zalo Cá Nhân (Sale)", channel: "zalo" },
+    intentTag: { label: "Hài lòng", tone: "success" },
+  },
+  {
+    id: "c4",
     name: "Pham Minh",
     channel: "telegram",
     preview: "Cảm ơn shop nhiều ạ.",
-    time: "Hôm qua",
+    time: "T3",
     muted: true,
+    sentiment: "neutral",
+    targetAccount: { label: "Support Bot VIP", channel: "telegram" },
   },
 ];
 
@@ -187,40 +169,99 @@ const SAMPLE_HEADER: CommandChatHeader = {
 };
 
 const SAMPLE_MESSAGES: CommandMessage[] = [
-  { from: "them", text: "Chào shop, mình quan tâm đến khóa học phong thủy bên mình.", time: "10:40 AM" },
+  { from: "them", text: "Chào shop, mình quan tâm đến khóa học phong thủy bên mình.", time: "10:40" },
   {
     from: "me",
     text: "Chào bạn Trần Văn A! Cảm ơn bạn đã quan tâm. Bạn đang muốn tìm hiểu về khóa học cơ bản hay chuyên sâu ạ?",
+    aiReply: true,
   },
+  { from: "me", text: "Hiện tại bên mình đang có chương trình giảm 20% cho người mới đăng ký trong tháng này.", time: "10:41", read: true, aiReply: true },
+  { from: "them", text: "Dạ cho mình hỏi gói Ngọc Bích còn slot không shop?", time: "10:42" },
   {
-    from: "me",
-    text: "Hiện tại bên mình đang có chương trình giảm 20% cho người mới đăng ký trong tháng này.",
-    time: "10:41 AM",
-    read: true,
+    from: "them",
+    text: "Mình vừa chốt đơn xong nhé. Dịch vụ bên shop tư vấn nhiệt tình quá, app dùng mượt mà thật sự, rất ưng ý! Cảm ơn shop nha. ❤️",
+    time: "10:55",
+    sentiment: "positive",
+    sentimentLabel: "Positive Sentiment",
   },
-  { from: "them", text: "Dạ cho mình hỏi gói Ngọc Bích còn slot không shop?", time: "10:42 AM" },
 ];
 
 const SAMPLE_AI = ["Dạ còn 3 slot cuối cùng ạ", "Gửi link thanh toán Ngọc Bích"];
 
 const SAMPLE_CRM: CommandCrmProfile = {
-  spendLabel: "Tổng Chi Tiêu",
-  spend: vnd(45000000),
-  ltvDeltaLabel: "+15% LTV",
-  orderCountLabel: "SỐ ĐƠN",
-  orderCount: "4 Đơn Hàng",
-  tierLabel: "PHÂN HẠNG",
-  tier: "VVIP",
-  info: [
-    { label: "Số Điện Thoại", value: "0901 234 567", copyable: true },
-    { label: "Email", value: "tranvana.vip@gmail.com", truncate: true },
-  ],
-  tags: [
-    { label: "Quan Tâm Phong Thủy", tone: "danger" },
-    { label: "Khách Cũ", tone: "primary" },
-  ],
+  company: "TechNova JSC",
+  phone: "0987.654.321",
+  email: "tranvana.vip@gmail.com",
+  ltv: "125.000.000₫",
+  ltvDeltaLabel: "+15% YoY",
   dealStages: ["Đang Tư Vấn (In Progress)", "Chốt Đơn (Won)", "Từ Chối (Lost)"],
+  tags: [
+    { label: "VIP_Tier1", tone: "gold" },
+    { label: "Tech_Industry", tone: "neutral" },
+    { label: "High_Churn_Risk", tone: "danger" },
+  ],
+  quickActions: [
+    { label: "Báo Giá", icon: "file-text", tone: "primary" },
+    { label: "Lịch Hẹn", icon: "calendar", tone: "primary" },
+    { label: "Gọi Ngay", icon: "phone", tone: "success" },
+    { label: "Thêm", icon: "more-horizontal", tone: "neutral" },
+  ],
+  journey: [
+    { when: "Hôm nay, 10:45 AM via", channelLabel: "Zalo", channelColor: "#0068ff", title: "Yêu cầu gia hạn hợp đồng", latest: true },
+    { when: "3 ngày trước via", channelLabel: "Email", channelColor: "rgb(var(--gem-gold-rgb))", title: "Mở email Newsletter Tháng 6" },
+    { when: "Tháng trước via", channelLabel: "Facebook", channelColor: "#0866FF", title: "Đăng ký tham gia Webinar" },
+  ],
 };
+
+const SAMPLE_COPILOT: CommandCopilotData = {
+  brainStages: [
+    "Trích xuất Entity & Sentiment...",
+    "Quét DB: Khách hàng VIP hạng Gold",
+    "Phân tích ngữ cảnh hội thoại",
+    "Tính toán xác suất chốt: 85%",
+  ],
+  winRatePct: 85,
+  winRateLabel: "85% Cao",
+  nextBestActionText: "Khách có nhu cầu cấp bách. Tặng Voucher Freeship 50K sẽ lập tức chốt deal.",
+  nextBestActionCta: "⚡ Gửi Voucher 50K (1-CLICK)",
+  tools: [
+    { mode: "objection", label: "Objection Handling", hint: "Xử lý từ chối giá", icon: "shield-alert", tone: "danger" },
+    { mode: "upsell", label: "Upsell Matrix", hint: "Gợi ý Combo VIP", icon: "trending-up", tone: "gold" },
+    { mode: "urgency", label: "Flash Deal", hint: "Cứu đơn đang do dự", icon: "timer", tone: "warning" },
+  ],
+  objection: {
+    objection: "Em ơi giá bộ Ngọc này cao quá, bên kia bán loại tương tự rẻ hơn 300k.",
+    winRateLabel: "Tỉ lệ chốt: 85%",
+    toneVariants: [
+      "Dạ Ngọc em xin lỗi vì làm chị lăn tăn về giá ạ. Đá bên em là hàng kiểm định thật 100%, đeo rất vượng khí chị nha. Chị cân nhắc thêm giúp em nhé!",
+      "Dạ chị Ngọc, Ngọc bên em là hàng kiểm định AAA+ có giấy phép và năng lượng đã qua thanh tẩy. Hàng rẻ hơn thường là đá bột ép, đeo không có lộc chị ạ.",
+      "Chị ơi tiền nào của nấy ạ. Đá rẻ hơn trên thị trường 100% là đá nhân tạo không có năng lượng phong thủy. Chị mua đồ phong thủy quan trọng nhất là hàng chuẩn ạ.",
+    ],
+  },
+  upsell: {
+    trigger: "Bộ cơ bản này cũng đẹp, nhưng chị muốn loại nào sang trọng hơn để đi tiệc cơ.",
+    productName: "Set Hoàng Gia VIP",
+    price: "1.450.000₫",
+    ghostDraft: "Dạ Ngọc có set Hoàng Gia VIP cực kỳ sang trọng cho các buổi tiệc đây ạ...",
+  },
+  urgency: {
+    code: "GIAM5",
+    countdownLabel: "15:00",
+    ghostDraft: "Dạ chị Ngọc ơi, Shop đang có mã Flash Deal 15 phút, chị dùng mã này nhé...",
+  },
+};
+
+const SAMPLE_REVIEW: CommandReviewCapture = {
+  text: "Mình vừa chốt đơn xong nhé. Dịch vụ bên shop tư vấn nhiệt tình quá, app dùng mượt mà thật sự, rất ưng ý! Cảm ơn shop nha. ❤️",
+  customerName: "Trần Thị Ngọc",
+  customerMeta: "Customer • VIP_Tier1",
+  destinations: [
+    { id: "landing", label: "Landing Page", sublabel: "Testimonial Widget", icon: "layout-template", active: true },
+    { id: "shopify", label: "Shopify Store", sublabel: "Product Reviews", color: "#96bf48", icon: "shopping-bag", active: true },
+  ],
+};
+
+const STAGE_MS = 350;
 
 export function CrmMessagingCommandCenter({
   workspace = SAMPLE_WORKSPACE,
@@ -229,13 +270,23 @@ export function CrmMessagingCommandCenter({
   conversations = SAMPLE_CONVERSATIONS,
   activeConversationId = "c1",
   onSelectConversation,
-  listFilters = ["Chưa đọc", "Cần Follow-up", "VIP"],
+  onSelectAccount,
+  listFilters = ["Chưa đọc (24)", "Đang xử lý", "VIP"],
   chatHeader = SAMPLE_HEADER,
+  botMode: botModeProp,
+  onBotModeChange,
   messages = SAMPLE_MESSAGES,
   aiSuggestions = SAMPLE_AI,
   onAiSuggestion,
   onSend,
+  onCaptureReview,
+  onPublishReview,
   crm = SAMPLE_CRM,
+  onDealStageChange,
+  onQuickAction,
+  copilot = SAMPLE_COPILOT,
+  onCopilotTool,
+  reviewCapture = SAMPLE_REVIEW,
   className,
 }: {
   workspace?: CommandWorkspace;
@@ -244,392 +295,258 @@ export function CrmMessagingCommandCenter({
   conversations?: CommandConversation[];
   activeConversationId?: string;
   onSelectConversation?: (id: string) => void;
+  onSelectAccount?: (id: string) => void;
   listFilters?: string[];
   chatHeader?: CommandChatHeader;
+  botMode?: CommandBotMode;
+  onBotModeChange?: (mode: CommandBotMode) => void;
   messages?: CommandMessage[];
   aiSuggestions?: string[];
-  onAiSuggestion?: (text: string, index: number) => void;
+  onAiSuggestion?: (text: string, i: number) => void;
   onSend?: (text: string) => void;
+  onCaptureReview?: (i: number) => void;
+  onPublishReview?: (payload: { text: string; destinationIds: string[] }) => void;
   crm?: CommandCrmProfile;
+  onDealStageChange?: (stage: string) => void;
+  onQuickAction?: (action: CommandQuickAction, i: number) => void;
+  copilot?: CommandCopilotData;
+  onCopilotTool?: (mode: Exclude<CommandCopilotMode, "default">) => void;
+  reviewCapture?: CommandReviewCapture;
   className?: string;
 }) {
   const [draft, setDraft] = useState("");
+  const [botMode, setBotMode] = useState<CommandBotMode>(botModeProp ?? "bot");
+  const [copilotMode, setCopilotMode] = useState<CommandCopilotMode>("default");
+  const [loading, setLoading] = useState(false);
+  const [brainStageText, setBrainStageText] = useState("");
+  const [brainProgress, setBrainProgress] = useState(0);
+  const [ghost, setGhost] = useState("");
+  const [tone, setTone] = useState(2);
+  const [appended, setAppended] = useState<CommandMessage[]>([]);
+  const [magicSpinning, setMagicSpinning] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [runId, setRunId] = useState(0);
+  const [ghostRun, setGhostRun] = useState(0);
 
-  function send() {
+  const ghostTargetRef = useRef("");
+
+  useEffect(() => {
+    if (botModeProp) setBotMode(botModeProp);
+  }, [botModeProp]);
+
+  function ghostTargetFor(mode: CommandCopilotMode, t: number): string {
+    if (mode === "objection") return copilot.objection.toneVariants[t - 1] ?? copilot.objection.toneVariants[0] ?? "";
+    if (mode === "upsell") return copilot.upsell.ghostDraft;
+    if (mode === "urgency") return copilot.urgency.ghostDraft;
+    return "";
+  }
+
+  // Mode-run sequence: brain-activity stages → reveal mode → kick ghost typing.
+  useEffect(() => {
+    if (runId === 0 || copilotMode === "default") return;
+    let cancelled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const stages = copilot.brainStages ?? [];
+    setLoading(true);
+    setBrainProgress(0);
+    setGhost("");
+    stages.forEach((s, i) => {
+      timers.push(
+        setTimeout(() => {
+          if (cancelled) return;
+          setBrainStageText(s);
+          setBrainProgress(((i + 1) / stages.length) * 100);
+        }, STAGE_MS * (i + 1)),
+      );
+    });
+    timers.push(
+      setTimeout(
+        () => {
+          if (cancelled) return;
+          setLoading(false);
+          ghostTargetRef.current = ghostTargetFor(copilotMode, tone);
+          setGhostRun((r) => r + 1);
+        },
+        STAGE_MS * (stages.length + 1) + 200,
+      ),
+    );
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId]);
+
+  // Ghost-typing typewriter (drives the composer overlay).
+  useEffect(() => {
+    if (ghostRun === 0) return;
+    let cancelled = false;
+    const target = ghostTargetRef.current;
+    let i = 0;
+    setGhost("");
+    const iv = setInterval(() => {
+      if (cancelled) return;
+      i++;
+      setGhost(target.slice(0, i));
+      if (i >= target.length) clearInterval(iv);
+    }, 22);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [ghostRun]);
+
+  function selectTool(mode: Exclude<CommandCopilotMode, "default">) {
+    setCopilotMode(mode);
+    setRunId((r) => r + 1);
+    onCopilotTool?.(mode);
+  }
+
+  function closeCopilot() {
+    setCopilotMode("default");
+    setLoading(false);
+    setGhost("");
+    ghostTargetRef.current = "";
+  }
+
+  function changeTone(t: number) {
+    setTone(t);
+    if (copilotMode === "objection" && !loading) {
+      ghostTargetRef.current = ghostTargetFor("objection", t);
+      setGhostRun((r) => r + 1);
+    }
+  }
+
+  function appendMe(text: string) {
+    setAppended((a) => [...a, { from: "me", text }]);
+  }
+
+  function doSend() {
     const text = draft.trim();
     if (!text) return;
+    appendMe(text);
     onSend?.(text);
     setDraft("");
+    setGhost("");
   }
+
+  function acceptGhost() {
+    const text = ghostTargetRef.current;
+    if (!text) return;
+    appendMe(text);
+    onSend?.(text);
+    setGhost("");
+    setDraft("");
+  }
+
+  function magicRewrite() {
+    if (!draft.trim()) return;
+    setMagicSpinning(true);
+    setTimeout(() => {
+      setMagicSpinning(false);
+      setDraft(
+        "Dạ Ngọc cảm ơn chị đã quan tâm. Em tư vấn thêm cho chị dòng sản phẩm này để phù hợp nhất với nhu cầu nhé ạ.",
+      );
+    }, 600);
+  }
+
+  function handleDrop(payload: CommandDropPayload) {
+    if (payload.kind === "text") appendMe(payload.text);
+    else if (payload.kind === "product") appendMe(`🎁 ${payload.name} — ${payload.price}`);
+    else appendMe(`🎟️ Mã ${payload.code} (hiệu lực ${payload.countdownLabel})`);
+    setGhost("");
+  }
+
+  function executeCombo() {
+    appendMe("Dạ chị Ngọc ơi, Shop đang có mã Flash Deal 15 phút, chị chốt để em lên đơn hỏa tốc luôn nhé?");
+    appendMe(`🎟️ Mã ${copilot.urgency.code} (hiệu lực ${copilot.urgency.countdownLabel})`);
+    closeCopilot();
+  }
+
+  function handleBotMode(mode: CommandBotMode) {
+    setBotMode(mode);
+    onBotModeChange?.(mode);
+  }
+
+  function handleCapture(i: number) {
+    setCaptureOpen(true);
+    onCaptureReview?.(i);
+  }
+
+  const allMessages = appended.length ? [...messages, ...appended] : messages;
 
   return (
     <div className={cn("crm-scope", className)}>
       <div className="pcard h-[800px] w-full p-0">
-        <div
-          className="aura"
-          style={{ background: "rgb(var(--gem-primary-rgb))", width: 400, height: 400, top: -100, left: -100, opacity: "var(--gem-aura-strength)" }}
-        />
-        <div
-          className="aura"
-          style={{ background: "rgb(var(--gem-cyan-rgb))", width: 300, height: 300, bottom: -50, right: "20%", opacity: "calc(var(--gem-aura-strength) * 0.7)" }}
-        />
+        <div className="aura" style={{ background: "rgb(var(--gem-primary-rgb))", width: 400, height: 400, top: -100, left: -100, opacity: "var(--gem-aura-strength)" }} />
+        <div className="aura" style={{ background: "rgb(var(--gem-cyan-rgb))", width: 300, height: 300, bottom: -50, right: "20%", opacity: "calc(var(--gem-aura-strength) * 0.7)" }} />
 
         <div className="flex h-full relative z-10 min-h-0">
-          {/* ── 1. Channels rail ──────────────────────────── */}
-          <div className="hidden lg:flex w-64 border-r border-gem-border/10 bg-gem-surface-overlay/40 p-4 flex-col gap-6 shrink-0">
-            <div className="flex items-center gap-3 p-2 pcard-inner border-transparent">
-              {workspace.avatarUrl ? (
-                <img src={workspace.avatarUrl} alt={workspace.name} className="w-10 h-10 rounded-full border-2 border-gem-primary object-cover" />
-              ) : (
-                <div className="w-10 h-10 rounded-full border-2 border-gem-primary bg-gem-primary/15 flex items-center justify-center text-gem-primary font-bold text-sm">
-                  {initials(workspace.name)}
-                </div>
-              )}
-              <div>
-                <div className="text-sm font-bold text-gem-text">{workspace.name}</div>
-                {workspace.online && (
-                  <div className="text-xs text-gem-success flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-gem-success shadow-[0_0_8px_rgb(var(--gem-success-rgb))]" /> Online
-                  </div>
-                )}
-              </div>
-            </div>
+          <CommandSidebar
+            workspace={workspace}
+            allCount={allCount}
+            channelGroups={channelGroups}
+            onSelectAccount={onSelectAccount}
+          />
 
-            <div className="flex flex-col gap-2 flex-1 overflow-y-auto custom-scrollbar">
-              <div className="text-xs font-bold text-gem-text-muted uppercase tracking-wider mb-2">Omnichannel Inbox</div>
+          <CommandConversationList
+            conversations={conversations}
+            activeConversationId={activeConversationId}
+            onSelectConversation={onSelectConversation}
+            listFilters={listFilters}
+          />
 
-              <button
-                type="button"
-                className="flex items-center justify-between p-2 rounded-lg bg-gem-primary/10 border border-gem-primary/30 shadow-[0_0_15px_rgb(var(--gem-primary-rgb)/0.15)] text-gem-primary"
-              >
-                <div className="flex items-center gap-2 font-semibold">
-                  <MessageSquare className="w-4 h-4" /> All Messages
-                </div>
-                <span className="bg-gem-primary text-white text-[10px] px-2 py-0.5 rounded-full font-bold">{allCount}</span>
-              </button>
+          <CommandChatWindow
+            chatHeader={chatHeader}
+            botMode={botMode}
+            onBotModeChange={handleBotMode}
+            messages={allMessages}
+            onCaptureReview={handleCapture}
+            aiSuggestions={aiSuggestions}
+            onAiSuggestion={(t, i) => {
+              setDraft(t);
+              onAiSuggestion?.(t, i);
+            }}
+            draft={draft}
+            onDraftChange={setDraft}
+            ghostText={ghost}
+            onAcceptGhost={acceptGhost}
+            onSend={doSend}
+            magicSpinning={magicSpinning}
+            onMagicRewrite={magicRewrite}
+            onDropPayload={handleDrop}
+          />
 
-              {channelGroups.map((group) => (
-                <div key={group.label}>
-                  <div className="mt-4 mb-1 text-[10px] font-bold text-gem-text-faint uppercase">{group.label}</div>
-                  {group.accounts.map((acc) => (
-                    <button
-                      key={acc.id}
-                      type="button"
-                      className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-gem-surface-raised transition-colors text-sm group"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <ChannelIcon channel={acc.channel} iconClassName="w-3 h-3" />
-                        <span className="text-gem-text-muted group-hover:text-gem-text truncate">{acc.label}</span>
-                      </div>
-                      {acc.count != null &&
-                        (acc.urgent ? (
-                          <span className="bg-gem-danger text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold shadow-[0_0_8px_rgb(var(--gem-danger-rgb))]">
-                            {acc.count}
-                          </span>
-                        ) : (
-                          <span className="text-xs font-bold text-gem-text-muted">{acc.count}</span>
-                        ))}
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ── 2. Conversation list ──────────────────────── */}
-          <div className="w-72 xl:w-80 border-r border-gem-border/10 bg-gem-surface/30 flex flex-col shrink-0 min-h-0">
-            <div className="p-4 border-b border-gem-border/10 backdrop-blur-md">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-gem-text-muted" />
-                <input
-                  type="text"
-                  placeholder="Tìm tên, số điện thoại..."
-                  className="w-full bg-gem-surface-overlay border border-gem-border/20 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-gem-primary transition-colors shadow-inner text-gem-text"
-                />
-              </div>
-              <div className="flex gap-2 mt-3 overflow-x-auto custom-scrollbar pb-1">
-                {listFilters.map((f, i) => (
-                  <button
-                    key={f}
-                    type="button"
-                    className={cn(
-                      "px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap border",
-                      i === 0
-                        ? "bg-gem-primary/20 text-gem-primary border-gem-primary/30"
-                        : "bg-gem-surface-raised text-gem-text-muted border-gem-border/10 hover:bg-gem-surface-overlay",
-                    )}
-                  >
-                    {f}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-1">
-              {conversations.map((c) => {
-                const active = c.id === activeConversationId;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => onSelectConversation?.(c.id)}
-                    className={cn(
-                      "text-left p-3 rounded-xl cursor-pointer relative transition-colors border",
-                      active
-                        ? "bg-gem-primary/10 border-gem-primary/30 shadow-[inset_4px_0_0_rgb(var(--gem-primary-rgb))]"
-                        : c.muted
-                          ? "border-transparent opacity-70 hover:opacity-100 hover:bg-gem-surface-raised hover:border-gem-border/10"
-                          : "border-transparent hover:bg-gem-surface-raised hover:border-gem-border/10",
-                    )}
-                  >
-                    <div className="flex justify-between items-start mb-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="relative shrink-0">
-                          {c.avatarUrl ? (
-                            <img src={c.avatarUrl} alt={c.name} className="w-8 h-8 rounded-full object-cover" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-gem-gold/20 flex items-center justify-center text-gem-gold font-bold text-[11px]">
-                              {initials(c.name)}
-                            </div>
-                          )}
-                          <ChannelIcon channel={c.channel} className="absolute -bottom-1 -right-1 w-4 h-4" iconClassName="w-2.5 h-2.5" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-sm font-bold text-gem-text flex items-center gap-1 truncate">
-                            {c.name}
-                            {c.unread && <span className="w-2 h-2 rounded-full bg-gem-primary shrink-0" />}
-                          </div>
-                          {c.vip && (
-                            <div className="text-[10px] text-gem-gold border border-gem-gold/30 px-1.5 rounded bg-gem-gold/10 inline-block">
-                              VIP Customer
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <span className="text-[10px] text-gem-text-muted shrink-0">{c.time}</span>
-                    </div>
-                    <p className={cn("text-xs line-clamp-1 mt-1", c.unread ? "text-gem-text font-semibold" : "text-gem-text-muted")}>
-                      {c.preview}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ── 3. Chat window ────────────────────────────── */}
-          <div className="flex-1 flex flex-col bg-gem-surface-overlay/20 min-w-0 min-h-0">
-            <div className="h-16 border-b border-gem-border/10 flex items-center justify-between px-6 backdrop-blur-md bg-gem-surface/30 shrink-0">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="relative shrink-0">
-                  {chatHeader.avatarUrl ? (
-                    <img src={chatHeader.avatarUrl} alt={chatHeader.name} className="w-10 h-10 rounded-full shadow-lg object-cover" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full shadow-lg bg-gem-gold/20 flex items-center justify-center text-gem-gold font-bold text-sm">
-                      {initials(chatHeader.name)}
-                    </div>
-                  )}
-                  <ChannelIcon channel={chatHeader.channel} className="absolute bottom-0 right-0 w-4 h-4 border border-gem-surface" iconClassName="w-2.5 h-2.5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-base font-bold text-gem-text truncate">{chatHeader.name}</div>
-                  {(chatHeader.context || chatHeader.contextDetail) && (
-                    <div className="text-xs text-gem-text-muted flex items-center gap-1 truncate">
-                      {chatHeader.context}
-                      {chatHeader.contextDetail && (
-                        <>
-                          <ChevronRight className="w-3 h-3 shrink-0" /> {chatHeader.contextDetail}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <button type="button" className="glass-btn p-2 rounded-lg text-gem-text hover:text-gem-primary">
-                  <Phone className="w-4 h-4" />
-                </button>
-                <button type="button" className="glass-btn p-2 rounded-lg text-gem-text hover:text-gem-primary">
-                  <Star className="w-4 h-4" />
-                </button>
-                <button type="button" className="glass-btn p-2 rounded-lg text-gem-text hover:text-gem-primary">
-                  <MoreVertical className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col gap-4">
-              {messages.map((m, i) =>
-                m.from === "me" ? (
-                  <div key={i} className="flex flex-col gap-1 max-w-[70%] ml-auto items-end">
-                    <div className="chat-bubble-sent p-3 text-sm">{m.text}</div>
-                    {m.time && (
-                      <span className="text-[10px] text-gem-text-muted mr-1 flex items-center gap-1">
-                        {m.time}
-                        {m.read && <CheckCheck className="w-3 h-3 text-gem-cyan" />}
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div key={i} className="flex flex-col gap-1 max-w-[70%]">
-                    <div className="chat-bubble-received p-3 text-sm shadow-md">{m.text}</div>
-                    {m.time && <span className="text-[10px] text-gem-text-muted ml-1">{m.time}</span>}
-                  </div>
-                ),
-              )}
-            </div>
-
-            <div className="p-4 bg-gem-surface/50 backdrop-blur-xl border-t border-gem-border/10 shrink-0">
-              {aiSuggestions.length > 0 && (
-                <div className="flex gap-2 mb-3 overflow-x-auto custom-scrollbar pb-1">
-                  {aiSuggestions.map((s, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => onAiSuggestion?.(s, i)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 whitespace-nowrap transition-colors border",
-                        i === 0
-                          ? "bg-gem-primary/20 text-gem-primary border-gem-primary/30 hover:bg-gem-primary hover:text-white"
-                          : "bg-gem-surface-raised border-gem-border/20 text-gem-text hover:bg-gem-border/40",
-                      )}
-                    >
-                      {i === 0 && <Sparkles className="w-3 h-3" />} {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex items-end gap-2 pcard-inner p-2 border border-gem-border/20 focus-within:border-gem-primary/50 focus-within:shadow-[0_0_15px_rgb(var(--gem-primary-rgb)/0.2)] transition-all">
-                <button type="button" className="p-2 text-gem-text-muted hover:text-gem-primary transition-colors">
-                  <Paperclip className="w-5 h-5" />
-                </button>
-                <textarea
-                  rows={1}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  className="flex-1 bg-transparent border-none focus:outline-none resize-none text-sm text-gem-text py-2 max-h-32 custom-scrollbar"
-                  placeholder="Nhập tin nhắn... (Dùng '/' để gọi mẫu câu)"
-                />
-                <div className="flex items-center gap-1">
-                  <button type="button" className="p-2 text-gem-text-muted hover:text-gem-primary transition-colors">
-                    <Smile className="w-5 h-5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={send}
-                    className="p-2 bg-gem-primary text-white rounded-lg hover:shadow-[0_0_15px_rgb(var(--gem-primary-rgb))] transition-all transform hover:scale-105"
-                  >
-                    <SendIcon className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ── 4. CRM 360 panel ──────────────────────────── */}
+          {/* Column 4 — Customer 360 + AI Copilot (one scroll container) */}
           <div className="hidden xl:flex w-80 border-l border-gem-border/10 bg-gem-surface-overlay/40 p-5 overflow-y-auto custom-scrollbar shrink-0 flex-col">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-sm text-gem-text uppercase tracking-wider">Thông Tin Khách Hàng</h3>
-              <button type="button" className="text-gem-primary text-xs font-bold hover:underline">
-                Sửa
-              </button>
-            </div>
-
-            {/* Spend card */}
-            <div className="pcard p-4 mb-6" style={{ borderRadius: 16 }}>
-              <div className="flex justify-between mb-4">
-                <div className="text-xs text-gem-text-muted">{crm.spendLabel ?? "Tổng Chi Tiêu"}</div>
-                {crm.ltvDeltaLabel && (
-                  <div className="text-gem-success text-xs font-bold bg-gem-success/10 px-2 py-0.5 rounded border border-gem-success/20">
-                    {crm.ltvDeltaLabel}
-                  </div>
-                )}
-              </div>
-              <div className="text-2xl font-black text-gem-text">{crm.spend}</div>
-              <div className="mt-4 pt-4 border-t border-gem-border/10 grid grid-cols-2 gap-4">
-                <div>
-                  <div className="text-[10px] text-gem-text-muted">{crm.orderCountLabel ?? "SỐ ĐƠN"}</div>
-                  <div className="font-bold text-sm text-gem-text">{crm.orderCount}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] text-gem-text-muted">{crm.tierLabel ?? "PHÂN HẠNG"}</div>
-                  <div className="font-bold text-sm text-gem-gold flex items-center gap-1">
-                    <Crown className="w-3 h-3" /> {crm.tier}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Info grid */}
-            {crm.info && crm.info.length > 0 && (
-              <div className="space-y-4 mb-6">
-                {crm.info.map((it, i) => (
-                  <div key={i}>
-                    <div className="text-[10px] font-bold text-gem-text-muted uppercase mb-1">{it.label}</div>
-                    <div
-                      className={cn(
-                        "text-sm font-semibold bg-gem-surface-raised p-2 rounded-lg border border-gem-border/5 text-gem-text",
-                        it.copyable && "flex justify-between items-center",
-                        it.truncate && "truncate",
-                      )}
-                    >
-                      {it.value}
-                      {it.copyable && (
-                        <button type="button" className="text-gem-primary shrink-0">
-                          <Copy className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {crm.tags && crm.tags.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-gem-text-muted uppercase mb-1">Tags (Nhãn)</div>
-                    <div className="flex flex-wrap gap-1">
-                      {crm.tags.map((t, i) => (
-                        <span key={i} className={cn("text-[10px] px-2 py-1 rounded-md font-bold border", TAG_CHIP[t.tone ?? "neutral"])}>
-                          {t.label}
-                        </span>
-                      ))}
-                      <span className="bg-gem-surface-raised text-gem-text-muted text-[10px] px-2 py-1 rounded-md border border-gem-border/10 cursor-pointer hover:bg-gem-surface-overlay">
-                        + Add Tag
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Deal status */}
-            {crm.dealStages && crm.dealStages.length > 0 && (
-              <div className="mb-6">
-                <div className="text-[10px] font-bold text-gem-text-muted uppercase mb-2">Quy Trình Chốt Sale</div>
-                <div className="pcard-inner p-3">
-                  {/* Native select — Radix Select crashes in Paperclip (see CLAUDE.md). */}
-                  <select className="w-full bg-gem-surface border border-gem-border/20 rounded-md p-2 text-sm font-semibold text-gem-warning outline-none mb-3">
-                    {crm.dealStages.map((s) => (
-                      <option key={s}>{s}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="w-full py-2 bg-gem-primary/20 text-gem-primary font-bold text-xs rounded-md border border-gem-primary/30 hover:bg-gem-primary hover:text-white transition-colors"
-                  >
-                    + Tạo Báo Giá / Đơn Hàng
-                  </button>
-                </div>
-              </div>
-            )}
+            <CommandCustomer360
+              crm={crm}
+              onDealStageChange={onDealStageChange}
+              onQuickAction={onQuickAction}
+            />
+            <CommandAiCopilot
+              mode={copilotMode}
+              loading={loading}
+              brainStageText={brainStageText}
+              brainProgress={brainProgress}
+              data={copilot}
+              tone={tone}
+              onToneChange={changeTone}
+              onSelectTool={selectTool}
+              onClose={closeCopilot}
+              onNextBestAction={() => appendMe(`🎟️ Mã ${copilot.urgency.code} (Freeship 50K)`)}
+              onExecuteCombo={executeCombo}
+            />
           </div>
         </div>
       </div>
+
+      <CommandReviewCaptureModal
+        open={captureOpen}
+        capture={reviewCapture}
+        onClose={() => setCaptureOpen(false)}
+        onPublish={(payload) => onPublishReview?.(payload)}
+      />
     </div>
   );
 }

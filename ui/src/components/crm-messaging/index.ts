@@ -14,8 +14,12 @@ export type {
   CommandConversation,
   CommandChatHeader,
   CommandMessage,
-  CommandCrmInfo,
   CommandCrmProfile,
+  CommandBotMode,
+  CommandCopilotData,
+  CommandQuickAction,
+  CommandJourneyPoint,
+  CommandReviewCapture,
 } from "./CrmMessagingCommandCenter";
 
 export { CrmMessagingObjectionCopilot } from "./CrmMessagingObjectionCopilot";
