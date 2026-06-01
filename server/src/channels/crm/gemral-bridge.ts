@@ -30,6 +30,12 @@ export interface GemralData {
 /**
  * Match CRM customer → Gemral profile by phone or email.
  * Phone normalization: +84xxx → 0xxx and vice versa.
+ *
+ * UNIQUENESS GUARD: only auto-links when EXACTLY ONE profile matches. If a
+ * phone/email matches 2+ profiles we return null instead of silently picking
+ * one — picking the wrong profile would expose another customer's data (the
+ * #1 risk in the identity-centralization plan). Ambiguous matches fall through
+ * to the next key, then to manual review.
  */
 export async function matchGemralUser(
   phone?: string | null,
@@ -37,18 +43,22 @@ export async function matchGemralUser(
 ): Promise<string | null> {
   if (phone) {
     const normalized = normalizePhone(phone);
-    const altPhone = normalized.startsWith('0')
-      ? '+84' + normalized.slice(1)
-      : '0' + normalized.slice(3);
+    if (normalized) {
+      const altPhone = normalized.startsWith('0')
+        ? '+84' + normalized.slice(1)
+        : '0' + normalized.slice(3);
 
-    const { data } = await supabase
-      .from('profiles')
-      .select('id')
-      .or(`phone.eq.${normalized},phone.eq.${altPhone}`)
-      .limit(1)
-      .maybeSingle();
+      const { data } = await supabase
+        .from('profiles')
+        .select('id')
+        .or(`phone.eq.${normalized},phone.eq.${altPhone}`)
+        .limit(2);
 
-    if (data) return data.id;
+      if (data && data.length === 1) return data[0].id;
+      if (data && data.length > 1) {
+        console.warn(`[GemralBridge] Phone khớp ${data.length} profiles — bỏ qua auto-link (chống lộ data nhầm)`);
+      }
+    }
   }
 
   if (email) {
@@ -56,10 +66,12 @@ export async function matchGemralUser(
       .from('profiles')
       .select('id')
       .eq('email', email.toLowerCase())
-      .limit(1)
-      .maybeSingle();
+      .limit(2);
 
-    if (data) return data.id;
+    if (data && data.length === 1) return data[0].id;
+    if (data && data.length > 1) {
+      console.warn(`[GemralBridge] Email khớp ${data.length} profiles — bỏ qua auto-link (chống lộ data nhầm)`);
+    }
   }
 
   return null;

@@ -9,6 +9,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createClient } from '@supabase/supabase-js';
+import { matchGemralUser, enrichWithGemralData } from './gemral-bridge.js';
 
 // Initialize Supabase — same config as channels/zalo-personal/supabase.ts
 const supabaseUrl = process.env.GEMRAL_SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
@@ -361,7 +362,7 @@ export async function handleCreateTicket(args: any): Promise<string> {
       sender_name: 'CRM Bot',
       content: `🚨 Ticket KHẨN CẤP: ${data.ticket_number} — ${args.title} (${args.priority})`,
       metadata: { ticket_id: data.id },
-    }).catch(() => { /* War Room optional */ });
+    }).then(undefined, () => { /* War Room optional */ });
   }
 
   return JSON.stringify({
@@ -481,7 +482,7 @@ export async function handleSendEmail(args: any): Promise<string> {
     if (args.customer_id) {
       await supabase.from('crm_customers')
         .update({
-          emails_sent: supabase.rpc ? undefined : 0, // Will use increment later
+          // emails_sent will use increment later
           last_email_at: new Date().toISOString(),
         })
         .eq('id', args.customer_id);
@@ -589,84 +590,131 @@ export async function handleLinkGemral(args: any): Promise<string> {
     return JSON.stringify({ success: false, error: 'Cần email hoặc SĐT để liên kết' });
   }
 
-  // Find Gemral user by email or phone
-  let query = supabase.from('profiles').select('id, email, phone, role, chatbot_tier, scanner_tier, course_tier');
+  // Persist the contact info first — enrichWithGemralData reads crm_customers.email
+  // to also pull Shopify orders for this customer.
+  const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+  if (email) patch.email = String(email).toLowerCase();
+  if (phone) patch.phone = phone;
+  await supabase.from('crm_customers').update(patch).eq('id', customer_id);
 
-  if (email) {
-    query = query.eq('email', email);
-  } else if (phone) {
-    // Normalize phone: 0xxx → +84xxx
-    const normalizedPhone = phone.startsWith('0') ? '+84' + phone.substring(1) : phone;
-    query = query.or(`phone.eq.${phone},phone.eq.${normalizedPhone}`);
-  }
-
-  const { data: profile } = await query.maybeSingle();
-
-  if (!profile) {
+  // Single source of truth for matching + enrichment (uniqueness-guarded match,
+  // full gemral_data: tiers + courses + affiliate + KOL + Shopify totals).
+  const gemralId = await matchGemralUser(phone, email);
+  if (!gemralId) {
     return JSON.stringify({
       success: false,
-      error: 'Không tìm thấy tài khoản Gemral với thông tin này',
+      error: 'Không tìm thấy tài khoản Gemral khớp duy nhất (hoặc khớp nhiều tài khoản — cần kiểm tra thủ công).',
     });
   }
 
-  // Link the accounts
-  const { error } = await supabase
-    .from('crm_customers')
-    .update({
-      gemral_user_id: profile.id,
-      email: email || undefined,
-      phone: phone || undefined,
-      gemral_data: {
-        is_app_user: true,
-        chatbot_tier: profile.chatbot_tier,
-        scanner_tier: profile.scanner_tier,
-        course_tier: profile.course_tier,
-        role: profile.role,
-        linked_at: new Date().toISOString(),
-      },
-    })
-    .eq('id', customer_id);
-
-  if (error) {
-    return JSON.stringify({ success: false, error: `Lỗi liên kết: ${error.message}` });
-  }
+  const gemralData = await enrichWithGemralData(customer_id, gemralId);
 
   return JSON.stringify({
     success: true,
-    gemral_user_id: profile.id,
+    gemral_user_id: gemralId,
     tiers: {
-      chatbot: profile.chatbot_tier,
-      scanner: profile.scanner_tier,
-      course: profile.course_tier,
+      chatbot: gemralData.chatbot_tier,
+      scanner: gemralData.scanner_tier,
+      course: gemralData.course_tier,
     },
   });
 }
 
-export async function handleSearchKnowledge(args: any): Promise<string> {
-  // Placeholder — full implementation in Phase 5 (RAG + pgvector)
-  // For now, search Shopify products as basic knowledge source
-  const { query, limit = 3 } = args;
-
-  const { data: products } = await supabase
-    .from('shopify_product_variants')
-    .select('title, price, sku')
-    .ilike('title', `%${query}%`)
-    .limit(limit);
-
-  if ((products || []).length > 0) {
-    return JSON.stringify({
-      success: true,
-      source: 'shopify_products',
-      results: products,
-      note: 'Knowledge Base đầy đủ sẽ có ở Phase 5',
-    });
+async function getEmbedding(text: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.warn('[MCP] OPENAI_API_KEY not set — using zero vector');
+    return new Array(1536).fill(0);
   }
 
-  return JSON.stringify({
-    success: true,
-    results: [],
-    note: 'Không tìm thấy kết quả. Knowledge Base đầy đủ sẽ có ở Phase 5',
+  const res = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'text-embedding-3-small', input: [text.slice(0, 8000)] }),
   });
+
+  if (!res.ok) throw new Error(`OpenAI Embedding error: ${res.status}`);
+  const data = await res.json() as { data: Array<{ embedding: number[] }> };
+  return data.data[0].embedding;
+}
+
+export async function handleSearchKnowledge(args: any): Promise<string> {
+  const { query, limit = 3, collection } = args;
+
+  if (!query) {
+    return JSON.stringify({ success: false, error: 'Thiếu query.' });
+  }
+
+  try {
+    const embedding = await getEmbedding(query);
+
+    let collectionIds: string[] | null = null;
+    
+    let mappedType: string | null = null;
+    if (collection === 'products' || collection === 'product') mappedType = 'product';
+    else if (collection === 'courses' || collection === 'course') mappedType = 'course';
+    else if (collection === 'faq') mappedType = 'faq';
+
+    if (mappedType) {
+      const { data: cols } = await supabase
+        .from('kb_collections')
+        .select('id')
+        .eq('collection_type', mappedType);
+        
+      if (cols && cols.length > 0) {
+        collectionIds = cols.map(c => c.id);
+      }
+    }
+
+    const { data: results, error } = await supabase.rpc('search_knowledge', {
+      p_query: query,
+      p_query_embedding: embedding,
+      p_collection_ids: collectionIds,
+      p_limit: limit,
+    });
+
+    if (error) {
+      console.error('[MCP] search_knowledge error:', error);
+      return JSON.stringify({ success: false, error: `Lỗi tìm kiếm: ${error.message}` });
+    }
+
+    if ((results || []).length > 0) {
+      return JSON.stringify({
+        success: true,
+        source: 'knowledge_base',
+        results: results.map((r: any) => ({
+          title: r.document_title,
+          content: r.content,
+          type: r.source_type,
+          similarity: r.similarity,
+          score: r.combined_score,
+        })),
+      });
+    }
+
+    // Fallback: search shopify_product_variants
+    const { data: products } = await supabase
+      .from('shopify_product_variants')
+      .select('title, price, sku')
+      .ilike('title', `%${query}%`)
+      .limit(limit);
+
+    if ((products || []).length > 0) {
+      return JSON.stringify({
+        success: true,
+        source: 'shopify_products (fallback)',
+        results: products,
+      });
+    }
+
+    return JSON.stringify({
+      success: true,
+      results: [],
+      note: 'Không tìm thấy kết quả.',
+    });
+  } catch (err: any) {
+    return JSON.stringify({ success: false, error: `Lỗi RAG: ${err.message}` });
+  }
 }
 
 // ─── Delegation handlers (HTTP callback to Paperclip server) ───
