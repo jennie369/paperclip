@@ -842,30 +842,14 @@ async function runViaGemini(
   // exceeds AGENT_TIMEOUT_MS. Sandbox dir is empty → 5-15s startup.
   // Confirmed empirically 2026-05-05: cps cwd = 86s, paperclip cwd = 16s,
   // empty sandbox cwd should be even faster.
-  // Per-agent sandbox: write the agent's mcp.json into <sandbox>/.gemini/settings.json
-  // so gemini loads agent-scoped MCP servers (crm: lookup_order_shopify, create_ticket,
-  // check_course_access, ...) merged with the global ~/.gemini servers. Node writes
-  // UTF-8 WITHOUT BOM (gemini's JSON parser rejects a BOM).
-  const sandboxDir = pathJoin(PROJECT_ROOT, '.gemini', `chatbot-sandbox-${config.slug}`);
-  mkdirSync(pathJoin(sandboxDir, '.gemini'), { recursive: true });
-  try {
-    const agentMcpPath = pathResolve(
-      process.env.AGENTS_DIR || pathResolve(PROJECT_ROOT, 'agents'),
-      config.slug, 'mcp.json',
-    );
-    if (existsSync(agentMcpPath)) {
-      const agentMcp = JSON.parse(readFileSync(agentMcpPath, 'utf-8'));
-      if (agentMcp?.mcpServers) {
-        writeFileSync(
-          pathJoin(sandboxDir, '.gemini', 'settings.json'),
-          JSON.stringify({ mcpServers: agentMcp.mcpServers }, null, 2),
-          'utf-8',
-        );
-      }
-    }
-  } catch (err: any) {
-    console.warn(`[Router] Gemini MCP settings write failed for ${config.slug}: ${err.message}`);
-  }
+  // Empty shared sandbox for fast gemini startup. The agent's MCP servers (crm:
+  // lookup_order_shopify/create_ticket/check_course_access, marketing-asset-search)
+  // are installed at the USER scope in ~/.gemini/settings.json + enabled in
+  // ~/.gemini/mcp-server-enablement.json — gemini DISABLES workspace-level MCP
+  // servers, so per-agent workspace settings.json does NOT work. The
+  // --allowed-mcp-server-names whitelist (above) scopes which of those connect.
+  const sandboxDir = pathJoin(PROJECT_ROOT, '.gemini', 'chatbot-sandbox');
+  mkdirSync(sandboxDir, { recursive: true });
   const cwd = sandboxDir;
 
   const streamKey = `${config.slug}:${Date.now()}`;
