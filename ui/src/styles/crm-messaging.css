@@ -281,10 +281,41 @@
   animation: crm-rise 0.45s var(--gem-ease) both;
 }
 
+/* Shimmer sweep — Command Center brain-activity feed + win-rate bar.
+   The element should be an absolutely-positioned gradient overlay inside an
+   overflow-hidden parent; it sweeps left→right. */
+@keyframes crm-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.crm-scope .crm-shimmer {
+  animation: crm-shimmer 2s linear infinite;
+}
+
+/* Short attention bounce — Command Center "AI Capture Review" button. */
+@keyframes crm-bounce-short {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.crm-scope .crm-bounce-short {
+  animation: crm-bounce-short 1.1s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .crm-scope .aura-pulse,
   .crm-scope .flash-ring,
-  .crm-scope .crm-rise {
+  .crm-scope .crm-rise,
+  .crm-scope .crm-shimmer,
+  .crm-scope .crm-bounce-short {
     animation: none;
   }
   .crm-scope .pcard {
