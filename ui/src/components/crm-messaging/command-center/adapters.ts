@@ -8,8 +8,10 @@
  * they're left undefined here and surface via the component's showcase defaults
  * until Phase C. See paperclip-dashboard/architecture/crm-command-center-contract.md.
  */
-import type { ChannelSession, ConversationMessage } from "@/api/channels";
+import type { ChannelInstance, ChannelSession, ConversationMessage } from "@/api/channels";
 import type {
+  CommandAccount,
+  CommandChannelGroup,
   CommandChatHeader,
   CommandConversation,
   CommandCrmProfile,
@@ -17,6 +19,34 @@ import type {
 } from "@/components/crm-messaging";
 import type { CrmChannel, CrmTag, CrmTone } from "../types";
 import type { CommandSentiment } from "./types";
+
+const PLATFORM_LABEL: Record<CrmChannel, string> = { zalo: "Zalo", messenger: "Facebook", telegram: "Telegram" };
+
+/** Build the sidebar's platform-grouped account list from REAL channel instances
+ *  + per-account unread counts aggregated from the conversation list. */
+export function buildChannelGroups(
+  instances: ChannelInstance[],
+  unreadByChannel: Record<string, number>,
+  activeChannel?: string | null,
+): CommandChannelGroup[] {
+  const byPlatform: Record<CrmChannel, CommandAccount[]> = { zalo: [], messenger: [], telegram: [] };
+  for (const inst of instances) {
+    if (inst.enabled === false) continue;
+    const channel = channelOf(inst.channel_type);
+    const count = unreadByChannel[inst.name] || 0;
+    byPlatform[channel].push({
+      id: inst.name,
+      label: inst.display_name || inst.zalo_name || inst.name,
+      channel,
+      count: count || undefined,
+      urgent: count > 0,
+      active: inst.name === activeChannel,
+    });
+  }
+  return (["zalo", "messenger", "telegram"] as CrmChannel[])
+    .filter((p) => byPlatform[p].length > 0)
+    .map((p) => ({ label: `${PLATFORM_LABEL[p]} (${byPlatform[p].length})`, channel: p, accounts: byPlatform[p] }));
+}
 
 /** Best-effort map of a backend channel_name → the 3 CrmChannel glyphs. */
 export function channelOf(name: string | null | undefined): CrmChannel {

@@ -2,42 +2,63 @@
  * CrmInbox — live Command Center (Phase B read-path wire).
  *
  * Renders <CrmMessagingCommandCenter> against the real unified-inbox API
- * (channelsApi): conversation list, selected thread messages, chat header, and
- * the Customer 360 panel all come from `/api/channels/conversations*`. Sending
- * a message hits `/api/channels/send` and refetches.
+ * (channelsApi): channel rail (real instances + per-account unread), conversation
+ * list, selected thread transcript, Customer 360, working filters, and Bot/Sale
+ * handoff (metadata.bot_paused). Full-page, no card padding. Sending hits
+ * `/api/channels/send`; mark-read + bot-toggle hit their endpoints and refetch.
  *
  * Additive surface — does NOT touch the existing "Hộp thư"/Unified Inbox. The
  * AI Copilot / sentiment / SLA / review-capture remain showcase defaults until
  * their backends exist (Phase C). Route: /:companyPrefix/crm-inbox.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Inbox, AlertTriangle, RotateCw } from "lucide-react";
 import { channelsApi } from "@/api/channels";
+import type { ChannelSession } from "@/api/channels";
 import { CrmMessagingCommandCenter } from "@/components/crm-messaging";
-import { mapConversation, mapHeader, mapCrm, mapMessages, mapHistory } from "@/components/crm-messaging/command-center/adapters";
+import {
+  mapConversation,
+  mapHeader,
+  mapCrm,
+  mapMessages,
+  mapHistory,
+  buildChannelGroups,
+} from "@/components/crm-messaging/command-center/adapters";
 
 function CenterState({ children }: { children: React.ReactNode }) {
   return <div className="flex flex-col items-center justify-center gap-3 h-[60vh] text-muted-foreground">{children}</div>;
 }
 
+const FILTER_TESTS: Array<(s: ChannelSession) => boolean> = [
+  () => true,
+  (s) => (s.unread_count ?? 0) > 0,
+  (s) => s.label === "vip",
+];
+
 export function CrmInbox() {
   const qc = useQueryClient();
   const [activeKey, setActiveKey] = useState<string | undefined>();
+  const [filterIdx, setFilterIdx] = useState(0);
 
   const convQuery = useQuery({
     queryKey: ["crm-inbox", "conversations"],
-    queryFn: () => channelsApi.listConversations({ limit: 30 }),
+    queryFn: () => channelsApi.listConversations({ limit: 200 }),
     refetchInterval: 20_000,
   });
 
-  const conversations = convQuery.data?.conversations ?? [];
+  const instQuery = useQuery({
+    queryKey: ["crm-inbox", "instances"],
+    queryFn: () => channelsApi.listInstances(),
+    staleTime: 60_000,
+  });
+
+  const conversations = useMemo(() => convQuery.data?.conversations ?? [], [convQuery.data]);
   const effectiveKey = activeKey ?? conversations[0]?.session_key;
 
-  // The detail endpoint (.single() on session_key) 404s for some keys, and
-  // zalo-personal keeps its transcript in `session.history` (jsonb), not the
-  // pending/sent tables — so derive header/crm/messages from the list item and
-  // only fall back to /messages when history is empty (other channels).
+  // Transcript: zalo-personal keeps it in session.history (jsonb); others in the
+  // pending/sent tables (/messages). The detail endpoint (.single()) is skipped —
+  // it 404s on keys with ':'; the list item carries customer + history already.
   const msgQuery = useQuery({
     queryKey: ["crm-inbox", "messages", effectiveKey],
     queryFn: () => channelsApi.getConversationMessages(effectiveKey!),
@@ -79,8 +100,21 @@ export function CrmInbox() {
     );
   }
 
-  const mappedConvs = conversations.map(mapConversation);
+  // Real per-account unread aggregation + sidebar groups from real channel instances.
+  const unreadByChannel: Record<string, number> = {};
+  for (const s of conversations) {
+    if (s.channel_name) unreadByChannel[s.channel_name] = (unreadByChannel[s.channel_name] ?? 0) + (s.unread_count ?? 0);
+  }
   const detail = conversations.find((s) => s.session_key === effectiveKey);
+  const channelGroups = buildChannelGroups(instQuery.data ?? [], unreadByChannel, detail?.channel_name);
+
+  // Real filter counts + client-side filtering (filters real data).
+  const unreadTotal = conversations.filter((s) => (s.unread_count ?? 0) > 0).length;
+  const vipTotal = conversations.filter((s) => s.label === "vip").length;
+  const listFilters = ["Tất cả", `Chưa đọc (${unreadTotal})`, `VIP (${vipTotal})`];
+  const displayed = conversations.filter(FILTER_TESTS[filterIdx]);
+
+  const mappedConvs = displayed.map(mapConversation);
   const header = detail ? mapHeader(detail) : undefined;
   const crm = detail ? mapCrm(detail) : undefined;
   const messages = detail?.history?.length
@@ -88,6 +122,7 @@ export function CrmInbox() {
     : msgQuery.data
       ? mapMessages(msgQuery.data.messages)
       : [];
+  const botPaused = (detail?.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true;
 
   async function handleSend(text: string) {
     if (!detail?.channel_name || !detail?.chat_id) return;
@@ -95,30 +130,48 @@ export function CrmInbox() {
       await channelsApi.sendMessage(detail.channel_name, detail.chat_id, text, detail.is_group ? "group" : "dm");
       await qc.invalidateQueries({ queryKey: ["crm-inbox", "messages", effectiveKey] });
     } catch {
-      /* surfaced by the optimistic message already appended in the component */
+      /* the optimistic message is already shown by the component */
     }
   }
 
   async function handleSelect(id: string) {
     setActiveKey(id);
-    if (id) {
-      channelsApi.markRead(id).catch(() => {});
-      qc.invalidateQueries({ queryKey: ["crm-inbox", "conversations"] });
+    channelsApi.markRead(id).catch(() => {});
+    qc.invalidateQueries({ queryKey: ["crm-inbox", "conversations"] });
+  }
+
+  async function handleBotMode(mode: "human" | "bot") {
+    if (!effectiveKey) return;
+    try {
+      await channelsApi.setBotPaused(effectiveKey, mode === "human");
+      await qc.invalidateQueries({ queryKey: ["crm-inbox", "conversations"] });
+    } catch {
+      /* visual state already reflects the toggle */
     }
   }
 
   return (
-    <div className="p-4">
+    <div className="h-[calc(100vh-3.5rem)]">
       <CrmMessagingCommandCenter
+        heightClass="h-full"
         workspace={{ name: "Gemral Inbox", online: true }}
+        channelGroups={channelGroups}
+        allCount={String(convQuery.data?.total ?? conversations.length)}
         conversations={mappedConvs}
         activeConversationId={effectiveKey}
         onSelectConversation={handleSelect}
+        listFilters={listFilters}
+        activeFilter={listFilters[filterIdx]}
+        onSelectFilter={(f) => {
+          const i = listFilters.indexOf(f);
+          if (i >= 0) setFilterIdx(i);
+        }}
         chatHeader={header}
         messages={messages}
         aiSuggestions={[]}
         crm={crm}
-        botMode={detail?.agent_slug ? "bot" : "human"}
+        botMode={botPaused ? "human" : "bot"}
+        onBotModeChange={handleBotMode}
         onSend={handleSend}
       />
     </div>
