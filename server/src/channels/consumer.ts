@@ -368,6 +368,7 @@ async function processMessage(
           total_orders: crmCustomer.total_orders,
           channel_name: merged.channel,
           sender_id: merged.senderId || null,
+          customer_id: customerId,  // CRM UUID — required by create_ticket/get_customer_info/etc.
         };
       }
     } catch { /* non-blocking */ }

@@ -698,11 +698,18 @@ function buildIdentityHeader(ctx: any): string {
   const name = ctx.name || ctx.sender_name || 'Chưa rõ';
   const gender = ctx.gender || 'chưa rõ — tự suy luận theo cách khách xưng hô';
   const channel = ctx.channel_name || 'Zalo';
-  return [
+  const crmId = ctx.customer_id || null;
+  const lines = [
     `[NGUỒN TIN NHẮN] account_id=${id} | tên=${name} | giới_tính=${gender} | kênh=${channel}`,
-    `→ CHỈ trả lời cho người này. KHÔNG dùng thông tin/tên của khách khác trong lịch sử.`,
-    '',
-  ].join('\n');
+  ];
+  if (crmId) {
+    lines.push(
+      `crm_customer_id=${crmId}  ← BẮT BUỘC truyền id NÀY vào tham số customer_id của MỌI CRM tool `
+        + `(create_ticket, get_customer_info, check_course_access, crm_update, recall_memory...).`,
+    );
+  }
+  lines.push(`→ CHỈ trả lời cho người này. KHÔNG dùng thông tin/tên của khách khác trong lịch sử.`, '');
+  return lines.join('\n');
 }
 
 /** Resolve the CLI session for a specific customer thread (sessionKey). */
