@@ -230,6 +230,13 @@ export async function runAgent(
       (originalMsg as any)._outboundMedia = outMedia;
     }
 
+    // Bridge escalation intent (set by postProcessReply) back to the message so
+    // consumer.ts can fire handleEscalation (ticket + bot_paused + CS ping).
+    const esc = (config as any)._escalation;
+    if (esc) {
+      (originalMsg as any)._escalation = esc;
+    }
+
     return reply;
   } catch (err: any) {
     console.error(`[Router] ❌ Agent "${agentSlug}" failed:`, err.message);
@@ -803,6 +810,12 @@ async function runViaGemini(
     '-y',                                      // --yolo (auto-approve all)
   ];
 
+  // Scope MCP to ONLY the servers this agent needs (crm gated CRM tools incl
+  // lookup_order_shopify/create_ticket/check_course_access + marketing assets +
+  // DB + email). Without this whitelist gemini connects ALL ~16 global
+  // ~/.gemini servers per reply → heavy latency.
+  args.push('--allowed-mcp-server-names', 'crm', 'marketing-asset-search', 'supabase', 'resend');
+
   // Session resume
   if (sessionId) {
     args.push('-r', sessionId);
@@ -829,8 +842,30 @@ async function runViaGemini(
   // exceeds AGENT_TIMEOUT_MS. Sandbox dir is empty → 5-15s startup.
   // Confirmed empirically 2026-05-05: cps cwd = 86s, paperclip cwd = 16s,
   // empty sandbox cwd should be even faster.
-  const sandboxDir = pathJoin(PROJECT_ROOT, '.gemini', 'chatbot-sandbox');
-  mkdirSync(sandboxDir, { recursive: true });
+  // Per-agent sandbox: write the agent's mcp.json into <sandbox>/.gemini/settings.json
+  // so gemini loads agent-scoped MCP servers (crm: lookup_order_shopify, create_ticket,
+  // check_course_access, ...) merged with the global ~/.gemini servers. Node writes
+  // UTF-8 WITHOUT BOM (gemini's JSON parser rejects a BOM).
+  const sandboxDir = pathJoin(PROJECT_ROOT, '.gemini', `chatbot-sandbox-${config.slug}`);
+  mkdirSync(pathJoin(sandboxDir, '.gemini'), { recursive: true });
+  try {
+    const agentMcpPath = pathResolve(
+      process.env.AGENTS_DIR || pathResolve(PROJECT_ROOT, 'agents'),
+      config.slug, 'mcp.json',
+    );
+    if (existsSync(agentMcpPath)) {
+      const agentMcp = JSON.parse(readFileSync(agentMcpPath, 'utf-8'));
+      if (agentMcp?.mcpServers) {
+        writeFileSync(
+          pathJoin(sandboxDir, '.gemini', 'settings.json'),
+          JSON.stringify({ mcpServers: agentMcp.mcpServers }, null, 2),
+          'utf-8',
+        );
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[Router] Gemini MCP settings write failed for ${config.slug}: ${err.message}`);
+  }
   const cwd = sandboxDir;
 
   const streamKey = `${config.slug}:${Date.now()}`;
@@ -843,6 +878,13 @@ async function runViaGemini(
       cwd,
       env: {
         ...process.env,
+        // Creds for the agent-scoped MCP servers (crm → DB+Shopify, marketing-asset → DB, resend → email)
+        GEMRAL_SUPABASE_URL: process.env.GEMRAL_SUPABASE_URL || '',
+        GEMRAL_SUPABASE_SERVICE_KEY: process.env.GEMRAL_SUPABASE_SERVICE_KEY || '',
+        SUPABASE_URL: process.env.SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co',
+        SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL || '',
+        SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN || '',
+        RESEND_API_KEY: process.env.RESEND_API_KEY || '',
         // Identity gate context for any MCP server the Gemini CLI may spawn
         PAPERCLIP_AGENT_SLUG: config.slug,
         PAPERCLIP_SESSION_KEY: sessionKey,
@@ -1600,6 +1642,20 @@ async function postProcessReply(
   }
 
   let cleaned = scrubBannedPhrases(reply, config.slug);
+
+  // Parse + strip [[ESCALATE: ...]] FIRST and stash the intent on config so the
+  // consumer can fire handleEscalation (ticket + bot_paused + CS Telegram ping).
+  // Previously this marker was never parsed here → escalation never fired
+  // (crm_tickets stayed empty; agent "promised" escalation but did nothing).
+  const escParsed = parseEscalationMarker(cleaned);
+  cleaned = escParsed.cleanedText;
+  if (escParsed.escalation) {
+    (config as any)._escalation = escParsed.escalation;
+    console.log(
+      `[Router/${config.provider}] ${config.slug}: ESCALATE parsed `
+        + `(reason=${escParsed.escalation.reason}, priority=${escParsed.escalation.priority})`,
+    );
+  }
 
   const mediaParsed = await parseMediaMarkers(cleaned, mediaLib);
   cleaned = mediaParsed.cleanedText;
