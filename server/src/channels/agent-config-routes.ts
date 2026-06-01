@@ -12,7 +12,10 @@ import * as AgentRouter from './router.js';
 import type { AgentConfig } from './types.js';
 
 // Agent files directory — crypto-pattern-scanner/agents/
-const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner');
+// NOTE: fallback MUST include /agents to match buildSystemPrompt (router.ts),
+// else the "Tệp Agent" viewer reads <root>/<slug> (nonexistent) and shows
+// every file as "chưa tạo" while the runtime correctly reads <root>/agents/<slug>.
+const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/agents');
 const ALLOWED_FILES = ['AGENTS.md', 'HEARTBEAT.md', 'SOUL.md', 'TOOLS.md'];
 
 const router = Router();
