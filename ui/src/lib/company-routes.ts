@@ -21,6 +21,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "war-room",
   "crm",
   "crm-messaging",
+  "crm-inbox",
   "ops",
   "config",
   "console",
