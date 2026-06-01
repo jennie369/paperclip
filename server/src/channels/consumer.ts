@@ -367,6 +367,7 @@ async function processMessage(
           stage: crmCustomer.status || 'new',
           total_orders: crmCustomer.total_orders,
           channel_name: merged.channel,
+          sender_id: merged.senderId || null,
         };
       }
     } catch { /* non-blocking */ }
@@ -378,6 +379,7 @@ async function processMessage(
       name: merged.senderName || null,
       stage: 'new',
       channel_name: merged.channel,
+      sender_id: merged.senderId || null,
     };
   }
 

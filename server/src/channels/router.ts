@@ -181,17 +181,24 @@ export async function runAgent(
   history?: SessionMessage[],
 ): Promise<string> {
   try {
-    const config = await loadAgentConfig(agentSlug);
+    const baseConfig = await loadAgentConfig(agentSlug);
 
-    if (!config) {
+    if (!baseConfig) {
       // Fallback to old Claude CLI behavior for unknown agents
       console.warn(`[Router] ❌ No config for agent "${agentSlug}" — returning fallback reply`);
       return FALLBACK_REPLY;
     }
 
-    if (!config.enabled) {
-      return config.fallback_message || FALLBACK_REPLY;
+    if (!baseConfig.enabled) {
+      return baseConfig.fallback_message || FALLBACK_REPLY;
     }
+
+    // PER-REQUEST CLONE (provider-agnostic safety). loadAgentConfig returns a
+    // SHARED cached object; mutating it with per-message data
+    // (_customerContext/_media/_companyId) bleeds across CONCURRENT messages —
+    // customer A's reply addressed customer B by name ("Anh Tam" incident).
+    // Clone so every in-flight message owns its own property bag.
+    const config = { ...baseConfig } as AgentConfig;
 
     // Attach customer context from consumer if available
     if ((originalMsg as any)?._customerContext) {
@@ -247,25 +254,30 @@ export async function runAgentWithConfig(
   const systemPrompt = await buildSystemPrompt(config, customerContext, companyId);
   const chatHistory = history || [];
 
+  // PROVIDER-AGNOSTIC identity header: prepend WHO this message is from so the
+  // model never confuses customers in a shared context — applies to every
+  // provider below (CLI claude/gemini AND API nvidia/openrouter + future).
+  const messageForAgent = buildIdentityHeader(customerContext) + message;
+
   try {
     let reply: string;
 
     switch (config.provider) {
       case 'claude':
-        reply = await runViaClaude(config, systemPrompt, chatHistory, message, sessionKey);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
         break;
       case 'gemini':
-        reply = await runViaGemini(config, systemPrompt, chatHistory, message, sessionKey);
+        reply = await runViaGemini(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
         break;
       case 'nvidia_nim':
-        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, message);
+        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, messageForAgent);
         break;
       case 'openrouter':
-        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, message);
+        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, messageForAgent);
         break;
       default:
         console.warn(`[Router] Unknown provider: ${config.provider}, falling back to Claude`);
-        reply = await runViaClaude(config, systemPrompt, chatHistory, message);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
     }
 
     return reply.trim() || config.fallback_message || FALLBACK_REPLY;
@@ -336,7 +348,7 @@ async function runViaClaude(
   sessionKey: string = '',
 ): Promise<string> {
   // 1. Check persistent session
-  const sessionId = await getAgentSessionId(config.slug);
+  const sessionId = await getThreadSessionId(sessionKey);
 
   // 2. Build skills dir (matches execute.ts — triggers Skills/Tools)
   const skillsDir = buildSkillsDirForChat();
@@ -363,18 +375,15 @@ async function runViaClaude(
   // 4. Build user prompt (message only — context is in instructions file)
   // [Khách:] prefix is injected in BOTH new-session and resume paths so the
   // AgentLogDrawer can always extract customer name + channel from JSONL turns.
-  const ctx = (config as any)._customerContext;
-  const contextLine = ctx?.name
-    ? `[Khách: ${ctx.name} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
-    : '';
+  // `message` already carries the [NGUỒN TIN NHẮN] identity header (prepended in
+  // runAgentWithConfig) so the model always knows which customer it is replying to.
   let userPrompt: string;
   if (!sessionId) {
-    // First message — instructions file has system prompt.
-    // Inject [Khách:] inside the message so it lands in the JSONL user turn.
-    userPrompt = buildFullPrompt(history, contextLine + message);
+    // First message — instructions file has system prompt; identity header is in message.
+    userPrompt = buildFullPrompt(history, message);
   } else {
-    // Resume — only new message + brief context
-    userPrompt = `${contextLine}${message}`;
+    // Resume — only the new message (already carries identity header)
+    userPrompt = message;
   }
 
   // 5. Build args — matches execute.ts buildClaudeArgs()
@@ -494,7 +503,7 @@ async function runViaClaude(
         console.error(`[Router] Claude CLI exited ${code}: ${stderr.substring(0, 200)}`);
         if (sessionId && (stderr.includes('session') || stderr.includes('resume'))) {
           console.log(`[Router] Clearing stale session for ${config.slug}`);
-          await clearAgentSession(config.slug);
+          await clearThreadSession(sessionKey);
         }
         streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: stderr.substring(0, 200) });
         reject(new Error(stderr.substring(0, 200) || `Exit code ${code}`));
@@ -553,7 +562,7 @@ async function runViaClaude(
 
         // Save session ID
         if (newSessionId && !sessionId) {
-          await saveAgentSession(config.slug, newSessionId);
+          await saveThreadSessionId(sessionKey, newSessionId);
         }
 
         // Expose session_id via side-channel so saveHistory() can stamp it
@@ -663,6 +672,90 @@ async function clearAgentSession(slug: string): Promise<void> {
     .eq('agent_slug', slug);
 }
 
+// ─── PER-THREAD architecture (provider-agnostic: claude / gemini / future) ───
+// Two cross-customer bleed vectors are closed here:
+//  1. CLI session must be PER customer thread (sessionKey), NOT per agent slug —
+//     otherwise every customer resumes the same CLI session and the model "remembers"
+//     other customers (the "Anh Tam" incident on Claude resume).
+//  2. Each message carries an explicit identity header so the model always knows
+//     WHO it is replying to (Telegram-style source tag) — defense-in-depth for any
+//     provider, including API providers that keep no CLI session.
+
+/**
+ * Build the per-message identity header. Provider-agnostic — prepended to the
+ * user message in runAgentWithConfig so EVERY provider (CLI or API) receives it.
+ */
+function buildIdentityHeader(ctx: any): string {
+  if (!ctx) return '';
+  const id = ctx.sender_id || ctx.account_id || '?';
+  const name = ctx.name || ctx.sender_name || 'Chưa rõ';
+  const gender = ctx.gender || 'chưa rõ — tự suy luận theo cách khách xưng hô';
+  const channel = ctx.channel_name || 'Zalo';
+  return [
+    `[NGUỒN TIN NHẮN] account_id=${id} | tên=${name} | giới_tính=${gender} | kênh=${channel}`,
+    `→ CHỈ trả lời cho người này. KHÔNG dùng thông tin/tên của khách khác trong lịch sử.`,
+    '',
+  ].join('\n');
+}
+
+/** Resolve the CLI session for a specific customer thread (sessionKey). */
+async function getThreadSessionId(sessionKey: string): Promise<string | null> {
+  if (!sessionKey) return null;
+  const { data } = await supabase
+    .from('channel_sessions')
+    .select('cli_session_id')
+    .eq('session_key', sessionKey)
+    .maybeSingle();
+  const sessionId = (data as any)?.cli_session_id || null;
+  if (!sessionId) return null;
+  // Verify the session file still exists (Claude JSONL OR Gemini JSON). If the
+  // CLI cleaned it up, a --resume would fail; return null so a fresh session is
+  // created instead of breaking the customer's reply.
+  try {
+    const { homedir } = await import('node:os');
+    const short8 = String(sessionId).substring(0, 8);
+    const claudeRoot = pathResolve(homedir(), '.claude', 'projects');
+    if (existsSync(claudeRoot)) {
+      for (const dir of readdirSync(claudeRoot)) {
+        if (existsSync(pathJoin(claudeRoot, dir, `${sessionId}.jsonl`))) return sessionId;
+      }
+    }
+    const geminiRoot = pathResolve(homedir(), '.gemini', 'tmp');
+    if (existsSync(geminiRoot)) {
+      for (const proj of readdirSync(geminiRoot)) {
+        const chatsDir = pathJoin(geminiRoot, proj, 'chats');
+        if (!existsSync(chatsDir)) continue;
+        if (readdirSync(chatsDir).some((f) => f.endsWith(`-${short8}.json`))) return sessionId;
+      }
+    }
+    return null; // file gone → fresh session
+  } catch {
+    return sessionId; // check failed → optimistically resume
+  }
+}
+
+/** Persist the CLI session id for a specific customer thread. */
+async function saveThreadSessionId(sessionKey: string, sessionId: string): Promise<void> {
+  if (!sessionKey || !sessionId) return;
+  try {
+    await supabase.from('channel_sessions')
+      .update({ cli_session_id: sessionId })
+      .eq('session_key', sessionKey);
+  } catch (err: any) {
+    console.warn(`[Router] saveThreadSessionId failed for ${sessionKey}: ${err.message}`);
+  }
+}
+
+/** Clear the CLI session for a thread (e.g. on resume failure → next run is fresh). */
+async function clearThreadSession(sessionKey: string): Promise<void> {
+  if (!sessionKey) return;
+  try {
+    await supabase.from('channel_sessions')
+      .update({ cli_session_id: null })
+      .eq('session_key', sessionKey);
+  } catch { /* non-blocking */ }
+}
+
 /**
  * Run via Gemini CLI — async spawn with streaming.
  * Matches Gemini Core execute.ts pattern:
@@ -679,7 +772,7 @@ async function runViaGemini(
   const model = config.model || 'gemini-2.5-flash';
 
   // Session
-  const sessionId = await getAgentSessionId(config.slug);
+  const sessionId = await getThreadSessionId(sessionKey);
 
   // Load media library (provider-agnostic — same helper as Claude)
   const mediaLib = loadMediaLibrary(config.slug);
@@ -694,14 +787,11 @@ async function runViaGemini(
 
   // Build full prompt (system + history + message)
   // [Khách:] prefix injected so any JSONL log viewer can extract customer identity.
-  const ctx = (config as any)._customerContext;
-  const contextLine = ctx?.name
-    ? `[Khách: ${ctx.name} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
-    : '';
-  const messageWithCtx = contextLine + message;
+  // `message` already carries the [NGUỒN TIN NHẮN] identity header (prepended in
+  // runAgentWithConfig) so the model always knows which customer it is replying to.
   const fullPrompt = augmentedSystemPrompt
-    ? [augmentedSystemPrompt, '', buildFullPrompt(history, messageWithCtx)].join('\n')
-    : buildFullPrompt(history, messageWithCtx);
+    ? [augmentedSystemPrompt, '', buildFullPrompt(history, message)].join('\n')
+    : buildFullPrompt(history, message);
 
   // Gemini CLI: pipe prompt via stdin, use -p to signal non-interactive mode
   // Can't use -p with long prompts (Windows 8K cmd limit)
@@ -810,7 +900,7 @@ async function runViaGemini(
       if (code !== 0 && !stdout.trim()) {
         console.error(`[Router] Gemini CLI exited ${code}: ${stderr.substring(0, 200)}`);
         if (sessionId && stderr.includes('session')) {
-          await clearAgentSession(config.slug);
+          await clearThreadSession(sessionKey);
         }
         streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: stderr.substring(0, 200) });
         reject(new Error(stderr.substring(0, 200) || `Exit code ${code}`));
@@ -864,7 +954,7 @@ async function runViaGemini(
         }
 
         if (newSessionId && !sessionId) {
-          await saveAgentSession(config.slug, newSessionId);
+          await saveThreadSessionId(sessionKey, newSessionId);
         }
 
         // Expose session_id via side-channel (see runViaClaude for rationale).
