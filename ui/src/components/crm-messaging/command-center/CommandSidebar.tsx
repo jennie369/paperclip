@@ -20,7 +20,7 @@ function SubAccountRow({ account, onSelect }: { account: CommandAccount; onSelec
       type="button"
       onClick={() => onSelect?.(account.id)}
       className={cn(
-        "w-full flex items-center justify-between p-2 rounded-lg transition-colors text-sm group",
+        "w-full flex items-center justify-between p-2 rounded-lg transition-colors text-base group",
         account.active
           ? "bg-gem-surface-raised border border-gem-border/10"
           : "hover:bg-gem-surface-raised border border-transparent",
@@ -48,7 +48,7 @@ function SubAccountRow({ account, onSelect }: { account: CommandAccount; onSelec
         </div>
         <span
           className={cn(
-            "truncate text-xs font-medium",
+            "truncate text-sm font-medium",
             account.active ? "text-gem-text" : "text-gem-text-muted group-hover:text-gem-text",
           )}
         >
@@ -57,11 +57,11 @@ function SubAccountRow({ account, onSelect }: { account: CommandAccount; onSelec
       </div>
       {account.count != null &&
         (account.urgent ? (
-          <span className="bg-gem-danger text-white text-[10px] px-1.5 py-0.5 rounded-md font-bold shadow-[0_0_8px_rgb(var(--gem-danger-rgb))] shrink-0">
+          <span className="bg-gem-danger text-white text-[11px] px-1.5 py-0.5 rounded-md font-bold shadow-[0_0_8px_rgb(var(--gem-danger-rgb))] shrink-0">
             {account.count}
           </span>
         ) : (
-          <span className="bg-gem-surface-raised border border-gem-border/10 text-gem-text-muted text-[10px] px-1.5 py-0.5 rounded-md font-bold shrink-0">
+          <span className="bg-gem-surface-raised border border-gem-border/10 text-gem-text-muted text-[11px] px-1.5 py-0.5 rounded-md font-bold shrink-0">
             {account.count}
           </span>
         ))}
@@ -95,14 +95,14 @@ export function CommandSidebar({
             className="w-10 h-10 rounded-full border-2 border-gem-primary object-cover shadow-[0_0_10px_rgb(var(--gem-primary-rgb)/0.5)]"
           />
         ) : (
-          <div className="w-10 h-10 rounded-full border-2 border-gem-primary bg-gem-primary/15 flex items-center justify-center text-gem-primary font-bold text-sm shadow-[0_0_10px_rgb(var(--gem-primary-rgb)/0.5)]">
+          <div className="w-10 h-10 rounded-full border-2 border-gem-primary bg-gem-primary/15 flex items-center justify-center text-gem-primary font-bold text-base shadow-[0_0_10px_rgb(var(--gem-primary-rgb)/0.5)]">
             {initials(workspace.name)}
           </div>
         )}
         <div className="min-w-0">
-          <div className="text-sm font-bold text-gem-text truncate">{workspace.name}</div>
+          <div className="text-base font-bold text-gem-text truncate">{workspace.name}</div>
           {workspace.online && (
-            <div className="text-[10px] text-gem-success flex items-center gap-1 font-semibold uppercase tracking-wider">
+            <div className="text-[11px] text-gem-success flex items-center gap-1 font-semibold uppercase tracking-wider">
               <span className="w-1.5 h-1.5 rounded-full bg-gem-success shadow-[0_0_8px_rgb(var(--gem-success-rgb))] animate-pulse" />
               Trực tuyến
             </div>
@@ -112,16 +112,16 @@ export function CommandSidebar({
 
       {/* Channels */}
       <div className="flex flex-col flex-1 overflow-y-auto custom-scrollbar p-3 gap-1">
-        <div className="text-[10px] font-black text-gem-text-faint uppercase tracking-widest mb-1 pl-2">Omnichannel</div>
+        <div className="text-[11px] font-black text-gem-text-faint uppercase tracking-widest mb-1 pl-2">Omnichannel</div>
 
         <button
           type="button"
           className="flex items-center justify-between p-2.5 rounded-xl bg-gem-primary/15 border border-gem-primary/30 shadow-[0_0_15px_rgb(var(--gem-primary-rgb)/0.15)] text-gem-primary transition-colors"
         >
-          <div className="flex items-center gap-2.5 font-bold text-sm">
+          <div className="flex items-center gap-2.5 font-bold text-base">
             <Inbox className="w-4 h-4" /> Tất cả tin nhắn
           </div>
-          <span className="bg-gem-primary text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-[0_0_8px_rgb(var(--gem-primary-rgb))]">
+          <span className="bg-gem-primary text-white text-[11px] px-2 py-0.5 rounded-full font-black shadow-[0_0_8px_rgb(var(--gem-primary-rgb))]">
             {allCount}
           </span>
         </button>
@@ -134,8 +134,8 @@ export function CommandSidebar({
               className="w-full flex items-center justify-between pl-2 pr-1 py-1 mb-1 group"
             >
               <div className="flex items-center gap-1.5 min-w-0">
-                <ChannelIcon channel={group.channel} className="w-4 h-4 !rounded text-[8px]" iconClassName="w-2.5 h-2.5" />
-                <span className="text-[10px] font-black text-gem-text-muted uppercase tracking-widest group-hover:text-gem-text transition-colors truncate">
+                <ChannelIcon channel={group.channel} className="w-4 h-4 !rounded text-[9px]" iconClassName="w-2.5 h-2.5" />
+                <span className="text-[11px] font-black text-gem-text-muted uppercase tracking-widest group-hover:text-gem-text transition-colors truncate">
                   {group.label}
                 </span>
               </div>
@@ -162,7 +162,7 @@ export function CommandSidebar({
         <button
           type="button"
           onClick={onConnectChannel}
-          className="w-full flex items-center justify-center gap-2 p-2 rounded-lg border border-dashed border-gem-border/20 text-gem-text-muted hover:text-gem-text hover:border-gem-border/40 hover:bg-gem-surface-raised transition-all text-xs font-semibold"
+          className="w-full flex items-center justify-center gap-2 p-2 rounded-lg border border-dashed border-gem-border/20 text-gem-text-muted hover:text-gem-text hover:border-gem-border/40 hover:bg-gem-surface-raised transition-all text-sm font-semibold"
         >
           <Plus className="w-3 h-3" /> Kết nối kênh mới
         </button>

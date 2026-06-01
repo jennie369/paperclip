@@ -34,7 +34,7 @@ const INTENT_CHIP: Record<CrmTone, string> = {
 
 function TypingDots() {
   return (
-    <span className="text-[10px] text-gem-primary font-bold animate-pulse flex items-center gap-1">
+    <span className="text-[11px] text-gem-primary font-bold animate-pulse flex items-center gap-1">
       Đang nhập
       <span className="flex gap-0.5">
         <span className="w-1 h-1 bg-gem-primary rounded-full animate-bounce" />
@@ -81,7 +81,7 @@ function ConversationRow({
             ) : (
               <div
                 className={cn(
-                  "w-10 h-10 rounded-full bg-gem-gold/20 flex items-center justify-center text-gem-gold font-bold text-xs",
+                  "w-10 h-10 rounded-full bg-gem-gold/20 flex items-center justify-center text-gem-gold font-bold text-sm",
                   RING[sentiment],
                 )}
               >
@@ -108,19 +108,19 @@ function ConversationRow({
           <div className="min-w-0">
             <div
               className={cn(
-                "text-sm leading-tight flex items-center gap-1 truncate",
+                "text-base leading-tight flex items-center gap-1 truncate",
                 c.muted ? "font-semibold text-gem-text" : "font-bold text-gem-text",
               )}
             >
               {c.name}
               {c.vip && (
-                <span className="text-[9px] text-gem-gold border border-gem-gold/30 px-1 rounded bg-gem-gold/10 font-bold uppercase shrink-0">
+                <span className="text-[10px] text-gem-gold border border-gem-gold/30 px-1 rounded bg-gem-gold/10 font-bold uppercase shrink-0">
                   VIP
                 </span>
               )}
             </div>
             {c.targetAccount && (
-              <div className="flex items-center gap-1 mt-1 text-[10px] text-gem-text-muted font-medium">
+              <div className="flex items-center gap-1 mt-1 text-[11px] text-gem-text-muted font-medium">
                 <CornerDownRight className="w-3 h-3 text-gem-text-faint shrink-0" />
                 <div className="flex items-center gap-1 bg-gem-surface-overlay px-1.5 py-0.5 rounded border border-gem-border/10 min-w-0">
                   <ChannelIcon channel={c.targetAccount.channel} className="w-2.5 h-2.5 !rounded-none !bg-transparent" iconClassName="w-2.5 h-2.5" />
@@ -138,27 +138,27 @@ function ConversationRow({
           ) : c.sla ? (
             <span
               className={cn(
-                "bg-gem-danger text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-[0_0_8px_rgb(var(--gem-danger-rgb))]",
+                "bg-gem-danger text-white text-[10px] font-black px-1.5 py-0.5 rounded shadow-[0_0_8px_rgb(var(--gem-danger-rgb))]",
                 c.sla.blink && "animate-pulse",
               )}
             >
               {c.sla.label}
             </span>
           ) : (
-            <span className="text-[10px] text-gem-text-muted font-mono">{c.time}</span>
+            <span className="text-[11px] text-gem-text-muted font-mono">{c.time}</span>
           )}
         </div>
       </div>
 
       <p
         className={cn(
-          "text-[13px] line-clamp-1 mt-0.5",
+          "text-sm line-clamp-1 mt-0.5",
           active ? "text-gem-text font-medium" : c.unread ? "text-gem-text font-bold" : "text-gem-text-muted",
         )}
       >
         {c.intentTag && (
           <span
-            className={cn("text-[10px] px-1 rounded mr-1 font-bold", INTENT_CHIP[c.intentTag.tone ?? "primary"])}
+            className={cn("text-[11px] px-1 rounded mr-1 font-bold", INTENT_CHIP[c.intentTag.tone ?? "primary"])}
           >
             ✨ {c.intentTag.label}
           </span>
@@ -174,12 +174,16 @@ export function CommandConversationList({
   activeConversationId,
   onSelectConversation,
   listFilters,
+  activeFilter,
+  onSelectFilter,
   searchPlaceholder = "Tìm tên, số điện thoại...",
 }: {
   conversations: CommandConversation[];
   activeConversationId?: string;
   onSelectConversation?: (id: string) => void;
   listFilters: string[];
+  activeFilter?: string;
+  onSelectFilter?: (filter: string) => void;
   searchPlaceholder?: string;
 }) {
   return (
@@ -190,27 +194,31 @@ export function CommandConversationList({
           <input
             type="text"
             placeholder={searchPlaceholder}
-            className="w-full bg-gem-surface-overlay border border-gem-border/20 rounded-lg pl-9 pr-9 py-2 text-sm focus:outline-none focus:border-gem-primary transition-colors shadow-inner text-gem-text"
+            className="w-full bg-gem-surface-overlay border border-gem-border/20 rounded-lg pl-9 pr-9 py-2 text-base focus:outline-none focus:border-gem-primary transition-colors shadow-inner text-gem-text"
           />
           <button type="button" className="absolute right-2 top-2 p-0.5 text-gem-text-muted hover:text-gem-primary">
             <SlidersHorizontal className="w-4 h-4" />
           </button>
         </div>
         <div className="flex gap-2 mt-3 overflow-x-auto custom-scrollbar pb-1">
-          {listFilters.map((f, i) => (
-            <button
-              key={f}
-              type="button"
-              className={cn(
-                "px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border",
-                i === 0
-                  ? "bg-gem-primary/20 text-gem-primary border-gem-primary/30 shadow-[0_0_10px_rgb(var(--gem-primary-rgb)/0.1)]"
-                  : "bg-gem-surface-raised text-gem-text-muted border-gem-border/10 hover:bg-gem-surface-overlay",
-              )}
-            >
-              {f}
-            </button>
-          ))}
+          {listFilters.map((f, i) => {
+            const active = activeFilter != null ? f === activeFilter : i === 0;
+            return (
+              <button
+                key={f}
+                type="button"
+                onClick={() => onSelectFilter?.(f)}
+                className={cn(
+                  "px-3 py-1.5 rounded-full text-sm font-bold whitespace-nowrap border transition-colors",
+                  active
+                    ? "bg-gem-primary/20 text-gem-primary border-gem-primary/30 shadow-[0_0_10px_rgb(var(--gem-primary-rgb)/0.1)]"
+                    : "bg-gem-surface-raised text-gem-text-muted border-gem-border/10 hover:bg-gem-surface-overlay",
+                )}
+              >
+                {f}
+              </button>
+            );
+          })}
         </div>
       </div>
 

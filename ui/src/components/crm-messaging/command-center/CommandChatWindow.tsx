@@ -119,16 +119,16 @@ export function CommandChatWindow({
             {chatHeader.avatarUrl ? (
               <img src={chatHeader.avatarUrl} alt={chatHeader.name} className="w-10 h-10 rounded-full shadow-lg object-cover" />
             ) : (
-              <div className="w-10 h-10 rounded-full shadow-lg bg-gem-gold/20 flex items-center justify-center text-gem-gold font-bold text-sm">
+              <div className="w-10 h-10 rounded-full shadow-lg bg-gem-gold/20 flex items-center justify-center text-gem-gold font-bold text-base">
                 {initials(chatHeader.name)}
               </div>
             )}
             <ChannelIcon channel={chatHeader.channel} className="absolute bottom-0 right-0 w-4 h-4 border border-gem-bg" iconClassName="w-2.5 h-2.5" />
           </div>
           <div className="min-w-0">
-            <div className="text-base font-bold text-gem-text truncate">{chatHeader.name}</div>
+            <div className="text-lg font-bold text-gem-text truncate">{chatHeader.name}</div>
             {(chatHeader.context || chatHeader.contextDetail) && (
-              <div className="text-xs text-gem-text-muted flex items-center gap-1 truncate">
+              <div className="text-sm text-gem-text-muted flex items-center gap-1 truncate">
                 {chatHeader.context}
                 {chatHeader.contextDetail && (
                   <>
@@ -147,7 +147,7 @@ export function CommandChatWindow({
               type="button"
               onClick={() => onBotModeChange?.("human")}
               className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded text-[11px] transition-colors",
+                "flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors",
                 botMode === "human"
                   ? "bg-gem-primary/15 text-gem-primary border border-gem-primary/20 font-bold"
                   : "text-gem-text-muted hover:text-gem-text font-medium",
@@ -159,7 +159,7 @@ export function CommandChatWindow({
               type="button"
               onClick={() => onBotModeChange?.("bot")}
               className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded text-[11px] transition-all relative overflow-hidden group/bot",
+                "flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-all relative overflow-hidden group/bot",
                 botMode === "bot"
                   ? "bg-gem-cyan/15 text-gem-cyan border border-gem-cyan/20 shadow-[0_0_8px_rgb(var(--gem-cyan-rgb)/0.15)] font-bold"
                   : "text-gem-text-muted hover:text-gem-text font-medium",
@@ -181,7 +181,7 @@ export function CommandChatWindow({
 
       {/* Messages */}
       <div className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col gap-4">
-        <div className="text-center text-xs text-gem-text-muted my-2">
+        <div className="text-center text-sm text-gem-text-muted my-2">
           <span className="bg-gem-surface-raised px-3 py-1 rounded-full border border-gem-border/5">{dateLabel}</span>
         </div>
 
@@ -196,20 +196,20 @@ export function CommandChatWindow({
                         <Gem className="w-6 h-6 text-gem-cyan" />
                       </div>
                       <div className="pr-2">
-                        <div className="text-xs text-gem-cyan font-bold mb-0.5">Gợi ý sản phẩm</div>
-                        <div className="text-sm font-bold text-gem-text">{m.card.name}</div>
-                        <div className="text-xs text-gem-text-muted mt-0.5">{m.card.price}</div>
+                        <div className="text-sm text-gem-cyan font-bold mb-0.5">Gợi ý sản phẩm</div>
+                        <div className="text-base font-bold text-gem-text">{m.card.name}</div>
+                        <div className="text-sm text-gem-text-muted mt-0.5">{m.card.price}</div>
                       </div>
                     </div>
                   ) : (
                     <div className="p-2 bg-gem-surface-raised border border-gem-warning/50 rounded-l-xl rounded-tr-xl w-48 text-center shadow-[0_0_15px_rgb(var(--gem-warning-rgb)/0.2)]">
-                      <div className="text-xs text-gem-warning font-bold mb-2 pt-1 flex items-center justify-center gap-1">
+                      <div className="text-sm text-gem-warning font-bold mb-2 pt-1 flex items-center justify-center gap-1">
                         <Ticket className="w-3 h-3" /> VOUCHER MỚI
                       </div>
-                      <div className="bg-gem-surface border border-dashed border-gem-warning/50 p-2 text-gem-text font-black tracking-widest text-lg rounded mx-2 mb-2">
+                      <div className="bg-gem-surface border border-dashed border-gem-warning/50 p-2 text-gem-text font-black tracking-widest text-xl rounded mx-2 mb-2">
                         {m.card.code}
                       </div>
-                      <div className="text-[10px] text-gem-text-muted pb-1">
+                      <div className="text-[11px] text-gem-text-muted pb-1">
                         Hết hạn: <span className="text-gem-danger font-bold">{m.card.countdownLabel}</span>
                       </div>
                     </div>
@@ -217,11 +217,11 @@ export function CommandChatWindow({
                   <MessageActions side="left" onReact={() => onMessageReact?.(i)} onReply={() => onMessageReply?.(i)} onMore={() => onMessageMore?.(i)} />
                 </div>
               ) : (
-                <div className={cn("chat-bubble-sent p-3 text-sm relative group", m.aiReply && "overflow-hidden")}>
+                <div className={cn("chat-bubble-sent p-3 text-base relative group", m.aiReply && "overflow-hidden")}>
                   {m.aiReply && (
                     <>
                       <div className="absolute left-0 top-0 bottom-0 w-1 bg-gem-cyan" />
-                      <div className="flex items-center gap-1 text-[10px] font-black text-gem-cyan mb-1.5 border-b border-gem-cyan/20 pb-1 uppercase tracking-wider">
+                      <div className="flex items-center gap-1 text-[11px] font-black text-gem-cyan mb-1.5 border-b border-gem-cyan/20 pb-1 uppercase tracking-wider">
                         <Bot className="w-3 h-3" /> Trả lời tự động bằng AI
                       </div>
                     </>
@@ -231,7 +231,7 @@ export function CommandChatWindow({
                 </div>
               )}
               {m.time && (
-                <span className="text-[10px] text-gem-text-muted mr-1 flex items-center gap-1">
+                <span className="text-[11px] text-gem-text-muted mr-1 flex items-center gap-1">
                   {m.time}
                   {m.read && <CheckCheck className="w-3 h-3 text-gem-cyan" />}
                 </span>
@@ -241,7 +241,7 @@ export function CommandChatWindow({
             <div key={i} className={cn("flex flex-col gap-1 max-w-[70%]", m.sentiment === "positive" && "max-w-[85%] mt-4")}>
               <div
                 className={cn(
-                  "chat-bubble-received p-3 text-sm shadow-md group relative",
+                  "chat-bubble-received p-3 text-base shadow-md group relative",
                   m.sentiment === "positive" && "border-l-2 border-gem-gold bg-gem-gold/5",
                 )}
               >
@@ -251,7 +251,7 @@ export function CommandChatWindow({
                     <button
                       type="button"
                       onClick={() => onCaptureReview?.(i)}
-                      className="crm-bounce-short flex items-center gap-1.5 bg-gradient-to-r from-gem-gold/20 to-gem-gold/5 border border-gem-gold/40 text-gem-gold text-[10px] font-bold px-3 py-1.5 rounded-full shadow-[0_0_15px_rgb(var(--gem-gold-rgb)/0.2)] hover:bg-gem-gold hover:text-white transition-all whitespace-nowrap group/capture"
+                      className="crm-bounce-short flex items-center gap-1.5 bg-gradient-to-r from-gem-gold/20 to-gem-gold/5 border border-gem-gold/40 text-gem-gold text-[11px] font-bold px-3 py-1.5 rounded-full shadow-[0_0_15px_rgb(var(--gem-gold-rgb)/0.2)] hover:bg-gem-gold hover:text-white transition-all whitespace-nowrap group/capture"
                     >
                       <Star className="w-3.5 h-3.5 fill-gem-gold group-hover/capture:fill-white" /> AI Capture Review
                     </button>
@@ -260,10 +260,10 @@ export function CommandChatWindow({
                 <MessageActions side="right" onReact={() => onMessageReact?.(i)} onReply={() => onMessageReply?.(i)} onMore={() => onMessageMore?.(i)} />
               </div>
               {m.time && (
-                <span className="text-[10px] text-gem-text-muted ml-1 flex items-center gap-1">
+                <span className="text-[11px] text-gem-text-muted ml-1 flex items-center gap-1">
                   {m.time}
                   {m.sentimentLabel && (
-                    <span className="bg-gem-gold/20 text-gem-gold px-1.5 py-0.5 rounded uppercase tracking-wider text-[8px] font-bold">
+                    <span className="bg-gem-gold/20 text-gem-gold px-1.5 py-0.5 rounded uppercase tracking-wider text-[9px] font-bold">
                       {m.sentimentLabel}
                     </span>
                   )}
@@ -284,7 +284,7 @@ export function CommandChatWindow({
                 type="button"
                 onClick={() => onAiSuggestion?.(s, i)}
                 className={cn(
-                  "px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 whitespace-nowrap transition-colors border",
+                  "px-3 py-1.5 rounded-full text-sm font-semibold flex items-center gap-1 whitespace-nowrap transition-colors border",
                   i === 0
                     ? "bg-gem-primary/20 text-gem-primary border-gem-primary/30 hover:bg-gem-primary hover:text-white"
                     : "bg-gem-surface-raised border-gem-border/20 text-gem-text hover:bg-gem-border/40",
@@ -327,8 +327,8 @@ export function CommandChatWindow({
           <div className="flex-1 relative flex items-center">
             {/* Ghost-typing overlay (shows only while input empty) */}
             {ghostText && !draft && (
-              <div className="absolute left-2 right-10 text-sm text-gem-primary/60 pointer-events-none whitespace-nowrap overflow-hidden select-none font-medium flex items-center gap-2">
-                <span className="bg-gem-primary text-white text-[9px] px-1 rounded uppercase font-black tracking-wider shrink-0">TAB</span>
+              <div className="absolute left-2 right-10 text-base text-gem-primary/60 pointer-events-none whitespace-nowrap overflow-hidden select-none font-medium flex items-center gap-2">
+                <span className="bg-gem-primary text-white text-[10px] px-1 rounded uppercase font-black tracking-wider shrink-0">TAB</span>
                 <span className="truncate">{ghostText}</span>
               </div>
             )}
@@ -345,7 +345,7 @@ export function CommandChatWindow({
                   onSend();
                 }
               }}
-              className="w-full bg-transparent border-none focus:outline-none text-sm text-gem-text py-2 pr-8 placeholder-gem-text-muted/50"
+              className="w-full bg-transparent border-none focus:outline-none text-base text-gem-text py-2 pr-8 placeholder-gem-text-muted/50"
               placeholder="Nhập tin nhắn... (Dùng '/' để gọi mẫu câu, hoặc kéo thả Thẻ AI)"
             />
             {/* Magic Wand */}

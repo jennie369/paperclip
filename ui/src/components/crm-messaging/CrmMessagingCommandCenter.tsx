@@ -273,6 +273,8 @@ export function CrmMessagingCommandCenter({
   onSelectConversation,
   onSelectAccount,
   listFilters = ["Chưa đọc (24)", "Đang xử lý", "VIP"],
+  activeFilter,
+  onSelectFilter,
   chatHeader = SAMPLE_HEADER,
   botMode: botModeProp,
   onBotModeChange,
@@ -288,6 +290,7 @@ export function CrmMessagingCommandCenter({
   copilot = SAMPLE_COPILOT,
   onCopilotTool,
   reviewCapture = SAMPLE_REVIEW,
+  heightClass = "h-[800px]",
   className,
 }: {
   workspace?: CommandWorkspace;
@@ -298,6 +301,8 @@ export function CrmMessagingCommandCenter({
   onSelectConversation?: (id: string) => void;
   onSelectAccount?: (id: string) => void;
   listFilters?: string[];
+  activeFilter?: string;
+  onSelectFilter?: (filter: string) => void;
   chatHeader?: CommandChatHeader;
   botMode?: CommandBotMode;
   onBotModeChange?: (mode: CommandBotMode) => void;
@@ -313,6 +318,7 @@ export function CrmMessagingCommandCenter({
   copilot?: CommandCopilotData;
   onCopilotTool?: (mode: Exclude<CommandCopilotMode, "default">) => void;
   reviewCapture?: CommandReviewCapture;
+  heightClass?: string;
   className?: string;
 }) {
   const [draft, setDraft] = useState("");
@@ -482,7 +488,7 @@ export function CrmMessagingCommandCenter({
 
   return (
     <div className={cn("crm-scope", className)}>
-      <div className="pcard h-[800px] w-full p-0">
+      <div className={cn("pcard pcard-static w-full p-0", heightClass)}>
         <div className="aura" style={{ background: "rgb(var(--gem-primary-rgb))", width: 400, height: 400, top: -100, left: -100, opacity: "var(--gem-aura-strength)" }} />
         <div className="aura" style={{ background: "rgb(var(--gem-cyan-rgb))", width: 300, height: 300, bottom: -50, right: "20%", opacity: "calc(var(--gem-aura-strength) * 0.7)" }} />
 
@@ -499,6 +505,8 @@ export function CrmMessagingCommandCenter({
             activeConversationId={activeConversationId}
             onSelectConversation={onSelectConversation}
             listFilters={listFilters}
+            activeFilter={activeFilter}
+            onSelectFilter={onSelectFilter}
           />
 
           <CommandChatWindow

@@ -136,6 +136,12 @@
   box-shadow: var(--gem-shadow-card-hover);
   border-color: rgb(var(--gem-primary-rgb) / 0.28);
 }
+/* Static variant — full-workspace cards (Command Center, nested 360 card) must
+   NOT lift/jump on hover. */
+.crm-scope .pcard-static,
+.crm-scope .pcard-static:hover {
+  transform: none;
+}
 .crm-scope .pcard > * {
   position: relative;
   z-index: 2;

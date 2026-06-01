@@ -120,7 +120,7 @@ export function CommandAiCopilot({
               <div className={cn("w-6 h-6 rounded flex items-center justify-center bg-gem-surface-overlay", TOOL_ICON_COLOR[head.tone])}>
                 <head.icon className="w-3.5 h-3.5" />
               </div>
-              <span className={cn("text-xs font-black uppercase tracking-widest truncate", TOOL_ICON_COLOR[head.tone])}>{head.title}</span>
+              <span className={cn("text-sm font-black uppercase tracking-widest truncate", TOOL_ICON_COLOR[head.tone])}>{head.title}</span>
             </>
           ) : (
             <>
@@ -128,7 +128,7 @@ export function CommandAiCopilot({
                 <Bot className="w-4 h-4 text-gem-primary relative z-10" />
                 <div className="absolute inset-0 bg-gem-primary/30 blur-md rounded-full animate-pulse" />
               </div>
-              <span className="text-xs font-black text-gem-text tracking-widest uppercase">AI Copilot</span>
+              <span className="text-sm font-black text-gem-text tracking-widest uppercase">AI Copilot</span>
             </>
           )}
         </div>
@@ -148,7 +148,7 @@ export function CommandAiCopilot({
 
       {/* Loading takeover (brain activity) */}
       {loading ? (
-        <div className="h-44 flex flex-col justify-center items-center text-center font-mono text-[10px] p-4">
+        <div className="h-44 flex flex-col justify-center items-center text-center font-mono text-[11px] p-4">
           <div className="mb-4 relative">
             <div className="absolute inset-0 bg-gem-cyan/20 blur-md rounded-full animate-pulse" />
             <Loader2 className="w-8 h-8 relative z-10 text-gem-cyan animate-spin" />
@@ -165,10 +165,10 @@ export function CommandAiCopilot({
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-gem-cyan/5 to-transparent crm-shimmer" />
             <div className="flex items-center gap-2 relative z-10 mb-3">
               <Loader2 className="w-3 h-3 text-gem-cyan animate-spin" />
-              <span className="text-[9px] text-gem-cyan font-mono tracking-widest uppercase truncate">{data.brainStages?.[0] ?? "Quét DB Khách VIP → Tính xác suất..."}</span>
+              <span className="text-[10px] text-gem-cyan font-mono tracking-widest uppercase truncate">{data.brainStages?.[0] ?? "Quét DB Khách VIP → Tính xác suất..."}</span>
             </div>
             <div className="relative z-10">
-              <div className="flex justify-between text-[10px] font-bold mb-1">
+              <div className="flex justify-between text-[11px] font-bold mb-1">
                 <span className="text-gem-text-muted uppercase tracking-wider">Tỉ lệ chốt đơn (Win Rate)</span>
                 <span className="text-gem-success drop-shadow-[0_0_5px_rgb(var(--gem-success-rgb))]">{data.winRateLabel}</span>
               </div>
@@ -186,14 +186,14 @@ export function CommandAiCopilot({
           {/* Next Best Action */}
           <div className="p-3 border-b border-gem-border/10 relative overflow-hidden bg-gem-surface-overlay/30">
             <div className="absolute top-0 right-0 w-16 h-16 bg-gem-cyan/10 rounded-full blur-xl" />
-            <div className="text-[10px] text-gem-text-muted font-bold uppercase mb-1 flex items-center gap-1 relative z-10">
+            <div className="text-[11px] text-gem-text-muted font-bold uppercase mb-1 flex items-center gap-1 relative z-10">
               <Zap className="w-3 h-3 text-gem-gold" /> Next Best Action
             </div>
-            <div className="text-xs text-gem-text font-medium mb-3 leading-relaxed relative z-10">{data.nextBestActionText}</div>
+            <div className="text-sm text-gem-text font-medium mb-3 leading-relaxed relative z-10">{data.nextBestActionText}</div>
             <button
               type="button"
               onClick={onNextBestAction}
-              className="w-full py-1.5 bg-gem-cyan/20 text-gem-cyan text-[11px] font-bold rounded border border-gem-cyan/30 hover:bg-gem-cyan hover:text-white transition-all shadow-[0_0_10px_rgb(var(--gem-cyan-rgb)/0.2)] hover:shadow-[0_0_15px_rgb(var(--gem-cyan-rgb)/0.5)] relative z-10"
+              className="w-full py-1.5 bg-gem-cyan/20 text-gem-cyan text-xs font-bold rounded border border-gem-cyan/30 hover:bg-gem-cyan hover:text-white transition-all shadow-[0_0_10px_rgb(var(--gem-cyan-rgb)/0.2)] hover:shadow-[0_0_15px_rgb(var(--gem-cyan-rgb)/0.5)] relative z-10"
             >
               {data.nextBestActionCta}
             </button>
@@ -217,8 +217,8 @@ export function CommandAiCopilot({
                     <Icon className={cn("w-3.5 h-3.5", TOOL_ICON_COLOR[t.tone])} />
                     <GripVertical className="w-3 h-3 text-gem-text-muted opacity-0 group-hover/tool:opacity-100 transition-opacity" />
                   </div>
-                  <span className="text-[10px] font-bold text-gem-text mb-0.5">{t.label}</span>
-                  <span className="text-[8px] text-gem-text-muted line-clamp-1">{t.hint}</span>
+                  <span className="text-[11px] font-bold text-gem-text mb-0.5">{t.label}</span>
+                  <span className="text-[9px] text-gem-text-muted line-clamp-1">{t.hint}</span>
                 </button>
               );
             })}
@@ -230,33 +230,33 @@ export function CommandAiCopilot({
               type="button"
               onClick={() => onSelectTool?.("objection")}
               title="Trượt để đổi Tone giọng"
-              className="flex-1 flex justify-center items-center gap-1.5 py-1.5 rounded border border-gem-border/30 bg-gem-surface-overlay hover:bg-gem-surface-raised transition-colors text-[10px] font-medium text-gem-text-muted hover:text-gem-text"
+              className="flex-1 flex justify-center items-center gap-1.5 py-1.5 rounded border border-gem-border/30 bg-gem-surface-overlay hover:bg-gem-surface-raised transition-colors text-[11px] font-medium text-gem-text-muted hover:text-gem-text"
             >
               <SlidersHorizontal className="w-3 h-3" /> Tone Matcher
             </button>
             <button
               type="button"
               title="Magic Rewrite trong khung soạn tin"
-              className="flex-1 flex justify-center items-center gap-1.5 py-1.5 rounded border border-gem-primary/30 bg-gem-primary/10 hover:bg-gem-primary hover:text-white transition-all text-[10px] font-medium text-gem-primary shadow-[inset_0_0_10px_rgb(var(--gem-primary-rgb)/0.1)] group/magic"
+              className="flex-1 flex justify-center items-center gap-1.5 py-1.5 rounded border border-gem-primary/30 bg-gem-primary/10 hover:bg-gem-primary hover:text-white transition-all text-[11px] font-medium text-gem-primary shadow-[inset_0_0_10px_rgb(var(--gem-primary-rgb)/0.1)] group/magic"
             >
               <Wand2 className="w-3 h-3 group-hover/magic:rotate-12 transition-transform" /> Magic Rewrite
             </button>
           </div>
 
           {/* Footer hints */}
-          <div className="bg-gem-bg/60 py-1.5 px-3 flex justify-between items-center text-[8px] text-gem-text-muted uppercase tracking-widest border-t border-gem-border/10">
+          <div className="bg-gem-bg/60 py-1.5 px-3 flex justify-between items-center text-[9px] text-gem-text-muted uppercase tracking-widest border-t border-gem-border/10">
             <div className="flex items-center gap-1"><GripHorizontal className="w-2.5 h-2.5" /> Smart Drag &amp; Drop</div>
             <div className="flex items-center gap-1 text-gem-cyan/70"><Keyboard className="w-2.5 h-2.5 animate-pulse" /> Ghost-Typing</div>
           </div>
         </>
       ) : mode === "objection" ? (
         <div className="p-4">
-          <div className="text-[10px] text-gem-danger font-bold mb-2 flex items-center gap-1">
+          <div className="text-[11px] text-gem-danger font-bold mb-2 flex items-center gap-1">
             <ShieldAlert className="w-3 h-3" /> ĐỀ XUẤT TỪ AI ({data.objection.winRateLabel ?? "Tỉ lệ chốt: 85%"})
           </div>
           {/* Tone Matcher slider */}
           <div className="mb-3 px-1 mt-3">
-            <div className="flex justify-between text-[9px] text-gem-text-muted font-bold uppercase mb-2">
+            <div className="flex justify-between text-[10px] text-gem-text-muted font-bold uppercase mb-2">
               <span>Mềm mỏng</span>
               <span className="text-gem-danger">Tone Giọng</span>
               <span>Đanh thép</span>
@@ -273,17 +273,17 @@ export function CommandAiCopilot({
           {/* Draggable rebuttal */}
           <div
             {...dragProps({ kind: "text", text: data.objection.toneVariants[tone - 1] ?? data.objection.toneVariants[0]! })}
-            className="p-3 bg-gem-danger/10 border border-gem-danger/20 rounded-lg text-[13px] text-gem-text mb-2 cursor-grab active:cursor-grabbing hover:border-gem-danger/50 hover:bg-gem-danger/20 transition-all shadow-sm hover:shadow-[0_5px_15px_rgb(var(--gem-danger-rgb)/0.2)]"
+            className="p-3 bg-gem-danger/10 border border-gem-danger/20 rounded-lg text-sm text-gem-text mb-2 cursor-grab active:cursor-grabbing hover:border-gem-danger/50 hover:bg-gem-danger/20 transition-all shadow-sm hover:shadow-[0_5px_15px_rgb(var(--gem-danger-rgb)/0.2)]"
           >
             "{data.objection.toneVariants[tone - 1] ?? data.objection.toneVariants[0]}"
           </div>
-          <div className="text-[10px] text-center text-gem-text-muted mt-2 animate-pulse">
+          <div className="text-[11px] text-center text-gem-text-muted mt-2 animate-pulse">
             Kéo đoạn text thả vào ô Chat bên trái, hoặc nhấn TAB
           </div>
         </div>
       ) : mode === "upsell" ? (
         <div className="p-4">
-          <div className="text-[10px] text-gem-cyan font-bold mb-2 flex items-center gap-1">
+          <div className="text-[11px] text-gem-cyan font-bold mb-2 flex items-center gap-1">
             <PackagePlus className="w-3 h-3" /> GỢI Ý SẢN PHẨM CAO CẤP
           </div>
           <div
@@ -294,26 +294,26 @@ export function CommandAiCopilot({
               <Gem className="w-6 h-6 text-gem-cyan" />
             </div>
             <div className="min-w-0">
-              <div className="font-bold text-sm text-gem-text leading-tight truncate">{data.upsell.productName}</div>
-              <div className="text-xs text-gem-cyan font-bold mt-0.5">{data.upsell.price}</div>
+              <div className="font-bold text-base text-gem-text leading-tight truncate">{data.upsell.productName}</div>
+              <div className="text-sm text-gem-cyan font-bold mt-0.5">{data.upsell.price}</div>
             </div>
           </div>
-          <div className="text-[10px] text-center text-gem-text-muted mt-3 animate-pulse">Kéo Thẻ Sản Phẩm thả vào ô Chat bên trái</div>
+          <div className="text-[11px] text-center text-gem-text-muted mt-3 animate-pulse">Kéo Thẻ Sản Phẩm thả vào ô Chat bên trái</div>
         </div>
       ) : (
         <div className="p-4">
-          <div className="text-[10px] text-gem-warning font-bold mb-2 flex items-center gap-1">
+          <div className="text-[11px] text-gem-warning font-bold mb-2 flex items-center gap-1">
             <Flame className="w-3 h-3" /> KHÁCH ĐANG DO DỰ!
           </div>
-          <p className="text-xs text-gem-text-muted mb-3 leading-relaxed">Tạo nhanh 1 mã Freeship + Giảm 5% có hiệu lực 15 phút để ép chốt ngay.</p>
+          <p className="text-sm text-gem-text-muted mb-3 leading-relaxed">Tạo nhanh 1 mã Freeship + Giảm 5% có hiệu lực 15 phút để ép chốt ngay.</p>
           <div
             {...dragProps({ kind: "voucher", code: data.urgency.code, countdownLabel: data.urgency.countdownLabel })}
             className="flex gap-2 mb-2 cursor-grab active:cursor-grabbing hover:scale-[1.02] transition-transform shadow-sm hover:shadow-[0_5px_15px_rgb(var(--gem-warning-rgb)/0.2)]"
           >
-            <div className="flex-1 bg-gem-surface border border-gem-border/20 rounded p-2 text-center text-gem-text font-bold text-sm tracking-widest border-dashed">{data.urgency.code}</div>
-            <div className="w-16 bg-gem-warning/10 border border-gem-warning/30 rounded p-2 text-center text-gem-warning font-bold text-sm shrink-0 flex items-center justify-center">{data.urgency.countdownLabel}</div>
+            <div className="flex-1 bg-gem-surface border border-gem-border/20 rounded p-2 text-center text-gem-text font-bold text-base tracking-widest border-dashed">{data.urgency.code}</div>
+            <div className="w-16 bg-gem-warning/10 border border-gem-warning/30 rounded p-2 text-center text-gem-warning font-bold text-base shrink-0 flex items-center justify-center">{data.urgency.countdownLabel}</div>
           </div>
-          <div className="text-[10px] text-center text-gem-text-muted mt-3 animate-pulse">Kéo Voucher thả vào ô Chat bên trái</div>
+          <div className="text-[11px] text-center text-gem-text-muted mt-3 animate-pulse">Kéo Voucher thả vào ô Chat bên trái</div>
           {/* 1-Click Combo */}
           <div className="mt-3 border-t border-gem-border/20 pt-3">
             <button
@@ -322,10 +322,10 @@ export function CommandAiCopilot({
               className="w-full relative overflow-hidden group bg-gradient-to-r from-gem-primary/10 to-gem-warning/10 border border-gem-warning/30 hover:border-gem-warning rounded p-2 flex flex-col items-center justify-center transition-all shadow-[0_0_15px_rgb(var(--gem-warning-rgb)/0.1)] hover:shadow-[0_0_20px_rgb(var(--gem-warning-rgb)/0.3)]"
             >
               <div className="absolute inset-0 bg-gradient-to-r from-gem-primary/20 to-gem-warning/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10 flex items-center gap-1 text-[10px] uppercase font-black tracking-widest text-gem-text mb-1">
+              <div className="relative z-10 flex items-center gap-1 text-[11px] uppercase font-black tracking-widest text-gem-text mb-1">
                 <Zap className="w-3 h-3 text-gem-warning" /> COMBO CHỐT SALE
               </div>
-              <div className="relative z-10 text-[9px] text-gem-text-muted text-center leading-tight">[Gửi Voucher] + [Hối Thúc]</div>
+              <div className="relative z-10 text-[10px] text-gem-text-muted text-center leading-tight">[Gửi Voucher] + [Hối Thúc]</div>
             </button>
           </div>
         </div>
