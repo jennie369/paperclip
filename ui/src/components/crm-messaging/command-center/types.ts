@@ -103,6 +103,11 @@ export interface CommandChatHeader {
 
 export type CommandBotMode = "human" | "bot";
 
+/** A rich card bubble dropped into the chat (from the copilot drag arsenal). */
+export type CommandMessageCard =
+  | { kind: "product"; name: string; price: string }
+  | { kind: "voucher"; code: string; countdownLabel: string };
+
 export interface CommandMessage {
   from: "them" | "me";
   text: string;
@@ -115,6 +120,8 @@ export interface CommandMessage {
   sentiment?: "positive";
   /** Label under a sentiment message, e.g. "Positive Sentiment". */
   sentimentLabel?: string;
+  /** Rich card payload (product/voucher) — renders a card bubble instead of text. */
+  card?: CommandMessageCard;
 }
 
 /* ── Column 4a — Customer 360 (profile + journey) ─────────────────────── */

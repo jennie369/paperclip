@@ -28,6 +28,8 @@ import {
   Wand2,
   CheckCheck,
   Sparkles,
+  Gem,
+  Ticket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChannelIcon, initials } from "../_shared";
@@ -186,18 +188,48 @@ export function CommandChatWindow({
         {messages.map((m, i) =>
           m.from === "me" ? (
             <div key={i} className="flex flex-col gap-1 max-w-[70%] ml-auto items-end">
-              <div className={cn("chat-bubble-sent p-3 text-sm relative group", m.aiReply && "overflow-hidden")}>
-                {m.aiReply && (
-                  <>
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-gem-cyan" />
-                    <div className="flex items-center gap-1 text-[10px] font-black text-gem-cyan mb-1.5 border-b border-gem-cyan/20 pb-1 uppercase tracking-wider">
-                      <Bot className="w-3 h-3" /> Trả lời tự động bằng AI
+              {m.card ? (
+                <div className="relative group">
+                  {m.card.kind === "product" ? (
+                    <div className="p-2 bg-gem-surface-raised border border-gem-cyan/30 rounded-l-xl rounded-tr-xl flex gap-3 items-center shadow-[0_0_15px_rgb(var(--gem-cyan-rgb)/0.15)]">
+                      <div className="w-12 h-12 rounded bg-gem-surface border border-gem-cyan/50 flex items-center justify-center shrink-0">
+                        <Gem className="w-6 h-6 text-gem-cyan" />
+                      </div>
+                      <div className="pr-2">
+                        <div className="text-xs text-gem-cyan font-bold mb-0.5">Gợi ý sản phẩm</div>
+                        <div className="text-sm font-bold text-gem-text">{m.card.name}</div>
+                        <div className="text-xs text-gem-text-muted mt-0.5">{m.card.price}</div>
+                      </div>
                     </div>
-                  </>
-                )}
-                {m.text}
-                <MessageActions side="left" onReact={() => onMessageReact?.(i)} onReply={() => onMessageReply?.(i)} onMore={() => onMessageMore?.(i)} />
-              </div>
+                  ) : (
+                    <div className="p-2 bg-gem-surface-raised border border-gem-warning/50 rounded-l-xl rounded-tr-xl w-48 text-center shadow-[0_0_15px_rgb(var(--gem-warning-rgb)/0.2)]">
+                      <div className="text-xs text-gem-warning font-bold mb-2 pt-1 flex items-center justify-center gap-1">
+                        <Ticket className="w-3 h-3" /> VOUCHER MỚI
+                      </div>
+                      <div className="bg-gem-surface border border-dashed border-gem-warning/50 p-2 text-gem-text font-black tracking-widest text-lg rounded mx-2 mb-2">
+                        {m.card.code}
+                      </div>
+                      <div className="text-[10px] text-gem-text-muted pb-1">
+                        Hết hạn: <span className="text-gem-danger font-bold">{m.card.countdownLabel}</span>
+                      </div>
+                    </div>
+                  )}
+                  <MessageActions side="left" onReact={() => onMessageReact?.(i)} onReply={() => onMessageReply?.(i)} onMore={() => onMessageMore?.(i)} />
+                </div>
+              ) : (
+                <div className={cn("chat-bubble-sent p-3 text-sm relative group", m.aiReply && "overflow-hidden")}>
+                  {m.aiReply && (
+                    <>
+                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-gem-cyan" />
+                      <div className="flex items-center gap-1 text-[10px] font-black text-gem-cyan mb-1.5 border-b border-gem-cyan/20 pb-1 uppercase tracking-wider">
+                        <Bot className="w-3 h-3" /> Trả lời tự động bằng AI
+                      </div>
+                    </>
+                  )}
+                  {m.text}
+                  <MessageActions side="left" onReact={() => onMessageReact?.(i)} onReply={() => onMessageReply?.(i)} onMore={() => onMessageMore?.(i)} />
+                </div>
+              )}
               {m.time && (
                 <span className="text-[10px] text-gem-text-muted mr-1 flex items-center gap-1">
                   {m.time}

@@ -65,6 +65,7 @@ import type {
   CommandConversation,
   CommandDropPayload,
   CommandMessage,
+  CommandMessageCard,
   CommandQuickAction,
   CommandReviewCapture,
   CommandWorkspace,
@@ -421,6 +422,10 @@ export function CrmMessagingCommandCenter({
     setAppended((a) => [...a, { from: "me", text }]);
   }
 
+  function appendCard(card: CommandMessageCard) {
+    setAppended((a) => [...a, { from: "me", text: "", card }]);
+  }
+
   function doSend() {
     const text = draft.trim();
     if (!text) return;
@@ -452,14 +457,14 @@ export function CrmMessagingCommandCenter({
 
   function handleDrop(payload: CommandDropPayload) {
     if (payload.kind === "text") appendMe(payload.text);
-    else if (payload.kind === "product") appendMe(`🎁 ${payload.name} — ${payload.price}`);
-    else appendMe(`🎟️ Mã ${payload.code} (hiệu lực ${payload.countdownLabel})`);
+    else if (payload.kind === "product") appendCard({ kind: "product", name: payload.name, price: payload.price });
+    else appendCard({ kind: "voucher", code: payload.code, countdownLabel: payload.countdownLabel });
     setGhost("");
   }
 
   function executeCombo() {
     appendMe("Dạ chị Ngọc ơi, Shop đang có mã Flash Deal 15 phút, chị chốt để em lên đơn hỏa tốc luôn nhé?");
-    appendMe(`🎟️ Mã ${copilot.urgency.code} (hiệu lực ${copilot.urgency.countdownLabel})`);
+    appendCard({ kind: "voucher", code: copilot.urgency.code, countdownLabel: copilot.urgency.countdownLabel });
     closeCopilot();
   }
 
@@ -534,7 +539,7 @@ export function CrmMessagingCommandCenter({
               onToneChange={changeTone}
               onSelectTool={selectTool}
               onClose={closeCopilot}
-              onNextBestAction={() => appendMe(`🎟️ Mã ${copilot.urgency.code} (Freeship 50K)`)}
+              onNextBestAction={() => appendCard({ kind: "voucher", code: copilot.urgency.code, countdownLabel: "Freeship 50K" })}
               onExecuteCombo={executeCombo}
             />
           </div>
