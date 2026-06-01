@@ -144,6 +144,19 @@ router.post('/:key/read', async (req, res) => {
   res.json({ message: unread ? 'Đã đánh dấu chưa đọc' : 'Đã đánh dấu đã đọc' });
 });
 
+// ── POST /api/channels/conversations/:key/bot — Toggle bot auto-reply (Sale/BOT handoff) ──
+router.post('/:key/bot', async (req, res) => {
+  const { paused } = req.body; // true = Sale Trực (pause bot), false = BOT Tự Động
+  const { data: sess } = await supabase
+    .from('channel_sessions')
+    .select('metadata')
+    .eq('session_key', req.params.key)
+    .maybeSingle();
+  const metadata = { ...((sess?.metadata as Record<string, unknown>) || {}), bot_paused: !!paused };
+  await supabase.from('channel_sessions').update({ metadata }).eq('session_key', req.params.key);
+  res.json({ bot_paused: !!paused, message: paused ? 'Đã chuyển Sale trực' : 'Đã bật BOT tự động' });
+});
+
 // ── POST /api/channels/conversations/:key/mute — Toggle mute ──
 router.post('/:key/mute', async (req, res) => {
   const { data } = await supabase.from('channel_sessions')

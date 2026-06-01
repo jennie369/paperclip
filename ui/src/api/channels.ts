@@ -274,6 +274,12 @@ export const channelsApi = {
       `/channels/conversations/${encodeURIComponent(key)}/read`, { unread }
     ),
 
+  /** Bot/Sale handoff: paused=true → Sale Trực (pause bot), false → BOT Tự Động. */
+  setBotPaused: (key: string, paused: boolean) =>
+    api.post<{ bot_paused: boolean; message: string }>(
+      `/channels/conversations/${encodeURIComponent(key)}/bot`, { paused }
+    ),
+
   muteConversation: (key: string) =>
     api.post<{ muted: boolean; message: string }>(
       `/channels/conversations/${encodeURIComponent(key)}/mute`, {}
