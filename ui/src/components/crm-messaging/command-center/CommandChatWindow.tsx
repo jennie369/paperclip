@@ -109,7 +109,7 @@ export function CommandChatWindow({
   const magicVisible = draft.trim().length > 0;
 
   return (
-    <div className="flex-1 flex flex-col bg-gem-surface-overlay/20 min-w-0 min-h-0">
+    <div className="flex-1 flex flex-col bg-gem-surface-overlay/20 min-w-0 min-h-0 overflow-hidden">
       {/* Header */}
       <div className="h-16 border-b border-gem-border/10 flex items-center justify-between px-6 backdrop-blur-md bg-gem-surface/30 shrink-0 gap-3">
         <div className="flex items-center gap-3 min-w-0">
@@ -138,7 +138,7 @@ export function CommandChatWindow({
           </div>
         </div>
 
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="flex items-center gap-3 shrink-0">
           {/* Bot handoff segmented control */}
           <div className="flex items-center bg-gem-surface-raised/80 border border-gem-border/30 rounded-md p-0.5 shadow-[inset_0_1px_4px_rgba(0,0,0,0.3)] backdrop-blur-md">
             <button
@@ -169,10 +169,10 @@ export function CommandChatWindow({
             </button>
           </div>
 
-          <div className="flex gap-2">
-            <button type="button" className="glass-btn p-2 rounded-lg text-gem-text hover:text-gem-primary"><Phone className="w-4 h-4" /></button>
-            <button type="button" className="glass-btn p-2 rounded-lg text-gem-text hover:text-gem-primary"><Star className="w-4 h-4" /></button>
-            <button type="button" className="glass-btn p-2 rounded-lg text-gem-text hover:text-gem-primary"><MoreVertical className="w-4 h-4" /></button>
+          <div className="flex gap-1.5">
+            <button type="button" className="glass-btn p-1.5 rounded-lg text-gem-text hover:text-gem-primary"><Phone className="w-4 h-4" /></button>
+            <button type="button" className="glass-btn p-1.5 rounded-lg text-gem-text hover:text-gem-primary"><Star className="w-4 h-4" /></button>
+            <button type="button" className="glass-btn p-1.5 rounded-lg text-gem-text hover:text-gem-primary"><MoreVertical className="w-4 h-4" /></button>
           </div>
         </div>
       </div>

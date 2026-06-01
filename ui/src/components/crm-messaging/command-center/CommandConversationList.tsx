@@ -183,7 +183,7 @@ export function CommandConversationList({
   searchPlaceholder?: string;
 }) {
   return (
-    <div className="w-[300px] xl:w-[340px] border-r border-gem-border/10 bg-gem-surface/30 flex flex-col shrink-0 min-h-0">
+    <div className="w-[300px] border-r border-gem-border/10 bg-gem-surface/30 flex flex-col shrink-0 min-h-0">
       <div className="p-4 border-b border-gem-border/10 backdrop-blur-md">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-2.5 text-gem-text-muted" />

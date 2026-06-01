@@ -518,7 +518,7 @@ export function CrmMessagingCommandCenter({
           />
 
           {/* Column 4 — Customer 360 + AI Copilot (one scroll container) */}
-          <div className="hidden xl:flex w-80 border-l border-gem-border/10 bg-gem-surface-overlay/40 p-5 overflow-y-auto custom-scrollbar shrink-0 flex-col">
+          <div className="hidden xl:flex w-72 2xl:w-80 border-l border-gem-border/10 bg-gem-surface-overlay/40 p-5 overflow-y-auto custom-scrollbar shrink-0 flex-col">
             <CommandCustomer360
               crm={crm}
               onDealStageChange={onDealStageChange}
