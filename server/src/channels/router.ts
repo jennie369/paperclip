@@ -55,6 +55,28 @@ const CONFIG_CACHE_TTL_MS = 60_000;
  *   Tier 2: CUSTOMER-SPECIFIC AGENT — override per sender/chat
  *   Tier 3: CHANNEL DEFAULT — agent assigned to channel
  */
+/**
+ * Gate a resolved agent slug on paperclip_agents.enabled (chatbot SSOT — RULE 5).
+ * A DISABLED agent must NOT reply on any channel: return '' so the consumer
+ * treats it like "no agent" (saves the message to the human inbox, sends
+ * nothing). Without this, runAgent() returns the fallback string for a disabled
+ * agent and the consumer still publishes it — i.e. "tắt rồi vẫn trả lời".
+ * Only blocks the explicit enabled=false case; missing/true row → unchanged.
+ */
+async function gateEnabledSlug(msg: InboundMessage, slug: string): Promise<string> {
+  if (!slug) return '';
+  const { data: pa } = await supabase
+    .from('paperclip_agents')
+    .select('enabled')
+    .eq('slug', slug)
+    .single();
+  if (pa && pa.enabled === false) {
+    (msg as any)._skipReason = 'agent_disabled';
+    return '';
+  }
+  return slug;
+}
+
 export async function resolveAgent(msg: InboundMessage): Promise<string> {
   // ── Tier 1: Check ignored chats ──
   const { data: ignored } = await supabase
@@ -85,7 +107,7 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
     }
     if (ov.agent_slug) {
       (msg as any)._routeTier = 'override';
-      return ov.agent_slug;
+      return await gateEnabledSlug(msg, ov.agent_slug);
     }
   }
 
@@ -94,7 +116,7 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
   const cached = agentCache.get(cacheKey);
 
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.slug;
+    return await gateEnabledSlug(msg, cached.slug);
   }
 
   const { data: instance } = await supabase
@@ -110,7 +132,7 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
 
-  return slug;
+  return await gateEnabledSlug(msg, slug);
 }
 
 /**
