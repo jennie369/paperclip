@@ -420,6 +420,18 @@ async function processMessage(
     // router.saveHistory() (single writer). Removed duplicate appendMessage
     // that caused BUG-047.
 
+    // ── Empty reply = stay SILENT (no fallback). ──
+    // The router returns '' when the agent is disabled / unknown / errors / the
+    // provider fails. We NEVER send a canned fallback message — leave the
+    // customer message in the inbox for a human, publish nothing.
+    const hasChunks = Array.isArray((merged as any)._messageChunks) && (merged as any)._messageChunks.length > 0;
+    if ((!replyText || !replyText.trim()) && !hasChunks) {
+      console.log(`${logPrefix} Agent produced empty reply — staying silent (no fallback), left in inbox`);
+      if (pendingId) await bus.markHandled(pendingId, 'agent', 'skipped', 'agent_silent');
+      if (customerId) aiSummarizer.scheduleSummary(sessionKey, customerId);
+      return;
+    }
+
     // ── Step 10: Publish outbound reply ──
     // Pull outbound media (if any) extracted from [[SEND_MEDIA: id]] markers
     // by the agent's media-library lookup in runViaOllama.

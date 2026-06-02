@@ -34,7 +34,6 @@ streamEvents.setMaxListeners(100);
 
 const AGENT_TIMEOUT_MS = 300_000; // 300 seconds (5 min — Gemini CLI cold-start + large prompts)
 const DEFAULT_AGENT = 'sales-closer';
-const FALLBACK_REPLY = 'Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau.';
 
 // Cache channel → agent slug mapping for 60s
 const agentCache = new Map<string, { slug: string; expiresAt: number }>();
@@ -206,13 +205,15 @@ export async function runAgent(
     const baseConfig = await loadAgentConfig(agentSlug);
 
     if (!baseConfig) {
-      // Fallback to old Claude CLI behavior for unknown agents
-      console.warn(`[Router] ❌ No config for agent "${agentSlug}" — returning fallback reply`);
-      return FALLBACK_REPLY;
+      // No config → stay SILENT (no fallback message). Consumer saves to inbox.
+      console.warn(`[Router] ❌ No config for agent "${agentSlug}" — staying silent`);
+      return '';
     }
 
     if (!baseConfig.enabled) {
-      return baseConfig.fallback_message || FALLBACK_REPLY;
+      // Disabled agent → NO reply at all (no fallback). Normally already gated
+      // in resolveAgent; this is defense-in-depth.
+      return '';
     }
 
     // PER-REQUEST CLONE (provider-agnostic safety). loadAgentConfig returns a
@@ -262,7 +263,7 @@ export async function runAgent(
     return reply;
   } catch (err: any) {
     console.error(`[Router] ❌ Agent "${agentSlug}" failed:`, err.message);
-    return FALLBACK_REPLY;
+    return '';  // no fallback — stay silent; consumer saves to inbox
   }
 }
 
@@ -309,10 +310,10 @@ export async function runAgentWithConfig(
         reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
     }
 
-    return reply.trim() || config.fallback_message || FALLBACK_REPLY;
+    return reply.trim();  // empty → consumer stays silent (no fallback)
   } catch (err: any) {
     console.error(`[Router] Provider ${config.provider} failed for ${config.slug}:`, err.message);
-    return config.fallback_message || FALLBACK_REPLY;
+    return '';  // no fallback — stay silent
   }
 }
 
