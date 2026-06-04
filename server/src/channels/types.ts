@@ -10,7 +10,7 @@ export interface Channel {
   isAllowed(senderId: string): boolean;
 }
 
-export type ChannelType = 'facebook' | 'facebook_web' | 'zalo_personal' | 'zalo_oa' | 'telegram' | 'youtube';
+export type ChannelType = 'facebook' | 'facebook_web' | 'zalo_personal' | 'zalo_oa' | 'telegram' | 'youtube' | 'cskh';
 
 export type DmPolicy = 'open' | 'allowlist' | 'pairing' | 'disabled';
 export type GroupPolicy = 'open' | 'allowlist' | 'pairing' | 'disabled';
