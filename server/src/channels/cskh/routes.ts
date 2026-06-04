@@ -1,5 +1,6 @@
 // paperclip/server/src/channels/cskh/routes.ts
 import { Router } from 'express';
+import { bus } from '../bus.js';
 import { supabase } from './supabase.js';
 import { cskhChannel } from './channel.js';
 import { mirrorReplyToCustomer } from './mirror.js';
@@ -45,5 +46,10 @@ export async function resumeCskhChannel(): Promise<void> {
     return;
   }
   await cskhChannel.start();
-  console.log('[cskh] Channel resumed');
+  // CSKH inbound arrives via edge-function INSERT into channel_pending_messages
+  // (cross-process), so the bus must bridge DB INSERTs → 'inbound:realtime'.
+  // app.ts starts the consumer directly but never calls subscribeRealtime();
+  // it is idempotent (guards on an existing channel), so calling it here is safe.
+  bus.subscribeRealtime();
+  console.log('[cskh] Channel resumed (realtime ingestion active)');
 }
