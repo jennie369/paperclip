@@ -38,6 +38,7 @@ import agentConfigRoutes from "./channels/agent-config-routes.js";
 import qaRoutes from "./channels/qa-routes.js";
 import facebookWebhook from "./channels/facebook/webhook.js";
 import facebookWebRoutes, { resumeAllFacebookWebChannels } from "./channels/facebook-web/routes.js";
+import { cskhRouter, resumeCskhChannel } from "./channels/cskh/routes.js";
 import youtubeRoutes from "./channels/youtube/routes.js";
 import crmRoutes from "./channels/crm/crm-routes.js";
 import ticketRoutes from "./channels/crm/ticket-routes.js";
@@ -253,6 +254,7 @@ export async function createApp(
   );
   api.use("/channels/facebook", facebookWebhook);
   api.use("/channels/facebook-web", facebookWebRoutes);
+  api.use("/channels/cskh", cskhRouter);
   api.use("/channels/youtube", youtubeRoutes);
   api.use("/channels/zalo-personal", zaloPersonalRoutes);
   api.use("/channels/agent-configs", agentConfigRoutes);
@@ -463,6 +465,10 @@ export async function createApp(
   resumeAllFacebookWebChannels().then(() => {
     console.log("[FbWeb] Channel restore complete");
   }).catch((err) => console.error("[FbWeb] Restore error:", err));
+
+  resumeCskhChannel().then(() => {
+    console.log("[cskh] resume complete");
+  }).catch((err) => console.error("[cskh] Resume error:", err));
 
   restoreChannels().then(async () => {
     console.log("[ZaloPersonal] Channel restore complete");

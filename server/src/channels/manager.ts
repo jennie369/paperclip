@@ -113,6 +113,8 @@ class ChannelManager {
       if (msg.channel.startsWith('fb-')) return;
       // Facebook Web (Reverse Protocol) channels self-handle via FacebookWebChannel.installBusOutboundHandler
       if (msg.channel.startsWith('fbweb-')) return;
+      // CSKH internal channel self-handles outbound via CskhChannel.installBusOutboundHandler
+      if (msg.channel.startsWith('cskh')) return;
       console.warn(`[Manager] Channel not found for dispatch: ${msg.channel}`);
       await this.logSentMessage(msg, 'failed', 'Channel not found');
       return;

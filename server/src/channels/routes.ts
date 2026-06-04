@@ -688,9 +688,11 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: `Kênh "${channel_name}" không tồn tại` });
   }
 
-  // Forward đến Zalo Personal sub-handler qua internal fetch
+  // Forward đến sub-handler theo channel_type (default zalo-personal — giữ nguyên hành vi cũ)
   try {
-    const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/zalo-personal/send`;
+    const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
+    const sub = subPathByType[inst.channel_type] || 'zalo-personal';
+    const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/${sub}/send`;
     const fwdRes = await fetch(forwardUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
