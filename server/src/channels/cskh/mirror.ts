@@ -40,3 +40,25 @@ export async function mirrorInboundFromCustomer(
   });
   if (error) console.error('[cskh/mirror] inbound insert failed:', error.message);
 }
+
+/**
+ * Mirror an outbound reply for an anonymous Shopify visitor (no auth user).
+ * Keyed by visitor_id (user_id NULL). The widget reads it via cskh-widget-thread.
+ */
+export async function mirrorReplyToVisitor(
+  visitorId: string,
+  role: CskhRole,
+  body: string,
+  agentSlug?: string | null,
+): Promise<void> {
+  const sessionKey = `cskh-shopify:${visitorId}:${visitorId}`;
+  const { error } = await supabase.from('cskh_messages').insert({
+    visitor_id: visitorId,
+    channel: 'cskh-shopify',
+    session_key: sessionKey,
+    role,
+    body,
+    agent_slug: agentSlug || null,
+  });
+  if (error) console.error('[cskh/mirror] visitor reply insert failed:', error.message);
+}

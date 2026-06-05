@@ -1,7 +1,7 @@
 // paperclip/server/src/channels/cskh/channel.ts
 import { bus } from '../bus.js';
 import { supabase } from './supabase.js';
-import { mirrorReplyToCustomer } from './mirror.js';
+import { mirrorReplyToCustomer, mirrorReplyToVisitor } from './mirror.js';
 import { pushSupportReply } from './push.js';
 import type { Channel, ChannelType, OutboundMessage } from '../types.js';
 
@@ -43,7 +43,8 @@ export class CskhChannel implements Channel {
     if (this.busListenerInstalled) return;
     this.busListenerInstalled = true;
     bus.on('outbound', async (msg: OutboundMessage) => {
-      if (msg.channel !== this.name) return;
+      // Handle every internal CSKH channel (cskh-internal, cskh-shopify, ...).
+      if (!msg.channel?.startsWith('cskh-')) return;
       try {
         await this.send(msg);
       } catch (err: any) {
@@ -52,21 +53,26 @@ export class CskhChannel implements Channel {
     });
   }
 
-  /** OutboundMessage.chatId === customer user_id. */
+  /** OutboundMessage.chatId === customer user_id (internal) or visitor_id (shopify). */
   async send(msg: OutboundMessage): Promise<void> {
-    const userId = msg.chatId;
+    const threadId = msg.chatId;
     const agentSlug = (msg.metadata?.agentSlug as string) || null;
     const sentBy = (msg.metadata?.sentBy as string) || (agentSlug ? `agent:${agentSlug}` : 'agent');
-    // Treat agent-bus replies as 'assistant'. Manual replies go through the
-    // sub-handler (routes.ts) with role 'human'; they are NOT published to the bus.
-    await this.logSentMessage(userId, msg.content, sentBy);
-    await mirrorReplyToCustomer(userId, 'assistant', msg.content, agentSlug);
-    await pushSupportReply(userId, msg.content);
+    // Log to channel_sent_messages (Paperclip inbox + Shopify widget poll read this).
+    await this.logSentMessage(msg.channel, threadId, msg.content, sentBy);
+    if (msg.channel === 'cskh-shopify') {
+      // Anonymous visitor: mirror by visitor_id; no push (no device token).
+      await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug);
+    } else {
+      // Authenticated Gemral customer.
+      await mirrorReplyToCustomer(threadId, 'assistant', msg.content, agentSlug);
+      await pushSupportReply(threadId, msg.content);
+    }
   }
 
-  private async logSentMessage(threadId: string, body: string, sentBy: string): Promise<void> {
+  private async logSentMessage(channelName: string, threadId: string, body: string, sentBy: string): Promise<void> {
     const { error } = await supabase.from('channel_sent_messages').insert({
-      channel_name: this.name,
+      channel_name: channelName,
       thread_id: threadId,
       thread_type: 'dm',
       to_uid: threadId,
