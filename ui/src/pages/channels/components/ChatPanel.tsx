@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, X, ChevronDown } from "lucide-react";
+import { Search, X, ChevronDown, SmilePlus } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
@@ -60,6 +60,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null); // tin đang mở full reaction picker
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
 
   // D7: Scroll to bottom button
@@ -259,7 +260,10 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                 <div
                   className={`relative flex items-center ${isOutbound ? "justify-end" : "justify-start"} ${isSameGroup ? "mt-0.5" : "mt-3"}`}
                   onMouseEnter={() => setHoveredMessageId(msgId)}
-                  onMouseLeave={() => setHoveredMessageId(null)}
+                  onMouseLeave={() => {
+                    setHoveredMessageId(null);
+                    setReactionPickerMsgId((cur) => (cur === msgId ? null : cur));
+                  }}
                 >
                   {/* Reply button left — always takes space (invisible for outbound) */}
                   <button
@@ -338,12 +342,27 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                       </div>
                     )}
 
-                    {/* Reaction emoji row — always rendered, opacity+translate transition (no scale jitter) */}
+                    {/* Reaction trigger — icon nhỏ ở góc, chỉ hiện khi hover (và picker chưa mở) */}
+                    <button
+                      className={`absolute -top-3 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-popover border border-border shadow-sm text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-all duration-150 ${
+                        isOutbound ? "right-1" : "left-1"
+                      } ${
+                        hoveredMessageId === msgId && reactionPickerMsgId !== msgId
+                          ? "opacity-100 scale-100 pointer-events-auto"
+                          : "opacity-0 scale-90 pointer-events-none"
+                      }`}
+                      title="Bày tỏ cảm xúc"
+                      onClick={() => setReactionPickerMsgId(msgId)}
+                    >
+                      <SmilePlus className="h-3.5 w-3.5" />
+                    </button>
+
+                    {/* Full reaction picker — chỉ hiện khi đã bấm icon */}
                     <div
-                      className={`absolute -top-9 z-10 flex items-center gap-0.5 bg-popover border border-border rounded-full px-2 py-1 shadow-md transition-all duration-150 ${
+                      className={`absolute -top-9 z-20 flex items-center gap-0.5 bg-popover border border-border rounded-full px-2 py-1 shadow-md transition-all duration-150 ${
                         isOutbound ? "right-0" : "left-0"
                       } ${
-                        hoveredMessageId === msgId
+                        reactionPickerMsgId === msgId
                           ? "opacity-100 translate-y-0 pointer-events-auto"
                           : "opacity-0 translate-y-1 pointer-events-none"
                       }`}
@@ -352,7 +371,10 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                         <button
                           key={emoji}
                           className="text-sm w-7 h-7 flex items-center justify-center rounded-full cursor-pointer hover:bg-muted/70 transition-colors"
-                          onClick={() => toggleReaction(msgId, emoji)}
+                          onClick={() => {
+                            toggleReaction(msgId, emoji);
+                            setReactionPickerMsgId(null);
+                          }}
                         >
                           {emoji}
                         </button>
@@ -360,7 +382,10 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                       {/* Reply button in reaction row */}
                       <button
                         className="w-7 h-7 flex items-center justify-center rounded-full cursor-pointer ml-0.5 border-l border-border/50 pl-1 text-sm hover:bg-muted/70 transition-colors text-muted-foreground"
-                        onClick={() => setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel })}
+                        onClick={() => {
+                          setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel });
+                          setReactionPickerMsgId(null);
+                        }}
                         title="Trả lời"
                       >
                         ↩
