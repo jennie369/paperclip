@@ -175,22 +175,17 @@ async function processMessage(
   }
 
   // ── Step 6: Group @mention gating ──
+  // A group message without an @mention must NOT trigger an auto-reply, but it
+  // MUST still surface in the inbox as part of the SINGLE group thread. Returning
+  // early here (the old behavior) skipped session creation entirely → the group
+  // either fragmented per-sender (when peer_kind was mis-set to 'direct') or
+  // vanished from the inbox. So we set a suppress flag and let the pipeline
+  // continue to session creation; auto-reply is gated off at Step 9 below.
+  let suppressAutoReply = false;
   if (merged.peerKind === 'group' && channelConfig.require_mention) {
     if (!hasMention(merged.content, channelConfig)) {
-      console.log(`${logPrefix} Group message without @mention, skipping`);
-
-      // Still save to group history for context
-      await session.saveGroupMessage(
-        merged.channel,
-        merged.chatId,
-        merged.senderId,
-        merged.senderName,
-        merged.content,
-        merged.timestamp
-      );
-
-      if (pendingId) await bus.markHandled(pendingId, 'consumer', 'skipped', 'group_no_mention');
-      return;
+      console.log(`${logPrefix} Group message without @mention → inbox only, no auto-reply`);
+      suppressAutoReply = true;
     }
   }
 
@@ -260,7 +255,10 @@ async function processMessage(
   }
 
   // ── Step 7: Resolve agent ──
-  const agentSlug = await router.resolveAgent(merged);
+  // Group messages without an @mention skip the agent entirely (inbox-only),
+  // routing through the no-agent branch at Step 9 so the message is saved to the
+  // group thread without producing a reply.
+  const agentSlug = suppressAutoReply ? undefined : await router.resolveAgent(merged);
 
   if (!agentSlug) {
     const skipReason = (merged as any)._skipReason || 'no_agent_assigned';
@@ -310,6 +308,27 @@ async function processMessage(
 
   // Get history for agent context
   const historyLimit = channelConfig.history_limit || 50;
+
+  // Persist inbound group messages that won't be routed to an agent (no @mention
+  // or no agent assigned) into the session transcript. The agent path relies on
+  // router.saveHistory() as the single writer (BUG-047), so we only append here
+  // when no agent will run — otherwise the group thread renders empty / frozen.
+  if (merged.peerKind === 'group' && !agentSlug) {
+    // Prefix the sender name into the stored content: the inbox transcript
+    // renderer (mapHistory) shows `content` only, so without the prefix a group
+    // thread would lose track of who said what.
+    const groupLine = merged.senderName
+      ? `${merged.senderName}: ${merged.content}`
+      : merged.content;
+    await session.appendMessage(
+      sessionKey,
+      'user',
+      groupLine,
+      historyLimit,
+      merged.senderName,
+    );
+  }
+
   let history = await session.getHistory(sessionKey, historyLimit);
 
   // For groups, also include recent group context
@@ -563,11 +582,11 @@ async function processMessage(
     console.log(`${logPrefix} ✅ Reply sent via agent ${agentSlug} (${replyText.length} chars) | "${replyText.substring(0, 60)}"`);
   } else {
     // If no agent, just leave it as 'pending' for a human to read from the inbox
-    console.log(`${logPrefix} ✅ Saved to inbox (no AI agent assigned)`);
+    console.log(`${logPrefix} ✅ Saved to inbox (${suppressAutoReply ? 'group, no @mention' : 'no AI agent assigned'})`);
     // Note: Do not mark pendingId as 'handled' so that humans can see it's waiting for them if needed,
     // or you could mark it as 'skipped' so it doesn't get retried by the consumer!
     if (pendingId) {
-      await bus.markHandled(pendingId, 'human', 'skipped', 'no_agent_assigned');
+      await bus.markHandled(pendingId, 'human', 'skipped', suppressAutoReply ? 'group_no_mention' : 'no_agent_assigned');
     }
   }
 

@@ -220,7 +220,7 @@ export class ZaloPersonalChannel {
       // Create auth with saved cookies
       const auth = new ZaloAuth();
       for (const c of credentials.cookie) {
-        auth['cm'].set(c.name, c.value, c.domain);
+        (auth as any).cm.set(c.name, c.value, c.domain);
       }
 
       // Call getLoginInfo to get fresh zpw_enk
@@ -598,6 +598,11 @@ export class ZaloPersonalChannel {
       message_id: msg.msgId,
       body,
       content_type: msg.msgType || 'text',
+      // Carry the group/direct classification explicitly. The column DEFAULTs to
+      // 'direct', so omitting it made the Realtime re-emit path (bus.subscribeRealtime,
+      // which reads peer_kind || 'direct') treat every group message as a DM →
+      // per-sender session fragmentation in the inbox. thread_type is the source of truth.
+      peer_kind: threadType === 'group' ? 'group' : 'direct',
       metadata: { raw: msg },
       dedupe_key: dedupeKey,
       ts: new Date(parseInt(msg.ts) > 9999999999 ? parseInt(msg.ts) : parseInt(msg.ts) * 1000).toISOString(),
