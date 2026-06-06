@@ -664,7 +664,8 @@ export class ZaloPersonalChannel {
     threadId: string,
     message: string,
     threadType: 'dm' | 'group' = 'dm',
-    agentSlug?: string
+    agentSlug?: string,
+    skipDbLog = false
   ): Promise<{ success: boolean; error?: string }> {
     if (!this.session) return { success: false, error: 'Not connected' };
 
@@ -675,18 +676,22 @@ export class ZaloPersonalChannel {
       ? await sendGroupText(this.session, threadId, message)
       : await sendDMText(this.session, threadId, message);
 
-    await supabase.from('channel_sent_messages').insert({
-      channel_name: this.channelName,
-      thread_id: threadId,
-      thread_type: threadType,
-      to_uid: threadId,
-      body: message,
-      content_type: 'text',
-      status: result.success ? 'sent' : 'failed',
-      error_message: result.error,
-      platform_message_id: result.messageId,
-      sent_by: agentSlug || 'manual',
-    });
+    // skipDbLog=true khi caller (universal /send) đã ghi row channel_sent_messages rồi
+    // → tránh double-insert. Path agent gọi trực tiếp vẫn log bình thường.
+    if (!skipDbLog) {
+      await supabase.from('channel_sent_messages').insert({
+        channel_name: this.channelName,
+        thread_id: threadId,
+        thread_type: threadType,
+        to_uid: threadId,
+        body: message,
+        content_type: 'text',
+        status: result.success ? 'sent' : 'failed',
+        error_message: result.error,
+        platform_message_id: result.messageId,
+        sent_by: agentSlug || 'manual',
+      });
+    }
 
     return result;
   }

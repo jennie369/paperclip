@@ -661,23 +661,7 @@ router.post('/send', async (req, res) => {
     return res.status(400).json({ error: 'channel_name, thread_id và message là bắt buộc' });
   }
 
-  // 1. Ghi outbound message vào DB ngay để UI hiển thị tức thì
-  const { error: dbErr } = await supabase
-    .from('channel_sent_messages')
-    .insert({
-      channel_name,
-      thread_id,
-      thread_type,
-      to_uid: thread_id,
-      body: message,
-      content_type: 'text',
-      status: 'sending',
-      sent_by: 'manual',
-    });
-  if (dbErr) console.error('[Send] DB insert error:', dbErr.message);
-
-  // 2. Forward đến sub-handler theo channel_name
-  // Detect channel type từ DB
+  // Detect channel type từ DB (cần trước khi forward)
   const { data: inst } = await supabase
     .from('channel_instances')
     .select('channel_type, name')
@@ -688,48 +672,59 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: `Kênh "${channel_name}" không tồn tại` });
   }
 
-  // Forward đến sub-handler theo channel_type (default zalo-personal — giữ nguyên hành vi cũ)
-  try {
-    const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
-    const sub = subPathByType[inst.channel_type] || 'zalo-personal';
-    const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/${sub}/send`;
-    const fwdRes = await fetch(forwardUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel_name, thread_id, message, thread_type }),
-    });
-    const fwdData = await fwdRes.json().catch(() => ({}));
+  // 1. Ghi outbound message vào DB NGAY (status 'sending') để UI hiển thị tức thì.
+  //    Đây là row DUY NHẤT cho tin này — sub-handler được yêu cầu skip_db_log
+  //    để tránh double-insert (channel.send tự log trước đây tạo row thứ 2).
+  const { data: row, error: dbErr } = await supabase
+    .from('channel_sent_messages')
+    .insert({
+      channel_name,
+      thread_id,
+      thread_type,
+      to_uid: thread_id,
+      body: message,
+      content_type: 'text',
+      status: 'sending',
+      sent_by: 'manual',
+    })
+    .select('id')
+    .single();
+  if (dbErr) console.error('[Send] DB insert error:', dbErr.message);
+  const rowId = row?.id;
 
-    if (fwdRes.ok) {
-      // Update DB status to sent
-      await supabase
-        .from('channel_sent_messages')
-        .update({ status: 'sent' })
-        .eq('channel_name', channel_name)
-        .eq('thread_id', thread_id)
-        .eq('status', 'sending');
-      return res.json({ success: true, ...fwdData });
-    } else {
-      // Update DB to failed
-      await supabase
-        .from('channel_sent_messages')
-        .update({ status: 'failed' })
-        .eq('channel_name', channel_name)
-        .eq('thread_id', thread_id)
-        .eq('status', 'sending');
-      return res.status(fwdRes.status).json({ success: false, error: fwdData.error || 'Gửi thất bại' });
+  // 2. Trả về NGAY để UI render tức thì (không chờ ~2s typing+gửi của Zalo).
+  //    Việc forward + cập nhật trạng thái chạy nền; status reconcile ở refetch kế.
+  res.json({ success: true, optimistic: true, id: rowId });
+
+  // 3. Forward (nền) đến sub-handler theo channel_type, rồi cập nhật status theo id.
+  const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
+  const sub = subPathByType[inst.channel_type] || 'zalo-personal';
+  const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/${sub}/send`;
+  (async () => {
+    try {
+      const fwdRes = await fetch(forwardUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel_name, thread_id, message, thread_type, skip_db_log: true }),
+      });
+      const ok = fwdRes.ok;
+      if (rowId) {
+        await supabase
+          .from('channel_sent_messages')
+          .update({ status: ok ? 'sent' : 'failed' })
+          .eq('id', rowId);
+      }
+      if (!ok) {
+        const fwdData = await fwdRes.json().catch(() => ({}));
+        console.error('[Send] Forward failed:', fwdData?.error || fwdRes.status);
+      }
+    } catch (err: any) {
+      console.error('[Send] Forward error:', err.message);
+      if (rowId) {
+        await supabase.from('channel_sent_messages').update({ status: 'failed' }).eq('id', rowId);
+      }
     }
-  } catch (err: any) {
-    console.error('[Send] Forward error:', err.message);
-    // Message đã ghi vào DB, mark failed
-    await supabase
-      .from('channel_sent_messages')
-      .update({ status: 'failed' })
-      .eq('channel_name', channel_name)
-      .eq('thread_id', thread_id)
-      .eq('status', 'sending');
-    return res.status(500).json({ success: false, error: err.message });
-  }
+  })();
 });
 
 // ── POST /api/channels/conversations — create new conversation (FIX 7) ──
