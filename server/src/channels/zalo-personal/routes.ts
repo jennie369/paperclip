@@ -27,6 +27,25 @@ const router = Router();
 // Active channels in memory
 const activeChannels = new Map<string, ZaloPersonalChannel>();
 
+// Dedup backstop: chặn gửi trùng (double-click / retry / 2 tab) trong cửa sổ ngắn.
+// Key = channel:thread:message, value = timestamp gửi gần nhất.
+const recentSends = new Map<string, number>();
+const SEND_DEDUP_WINDOW_MS = 8000;
+function isDuplicateSend(channelName: string, threadId: string, message: string): boolean {
+  const key = `${channelName}:${threadId}:${message}`;
+  const now = Date.now();
+  const last = recentSends.get(key);
+  if (last && now - last < SEND_DEDUP_WINDOW_MS) return true;
+  recentSends.set(key, now);
+  // Dọn entry cũ để map không phình
+  if (recentSends.size > 200) {
+    for (const [k, t] of recentSends) {
+      if (now - t > SEND_DEDUP_WINDOW_MS) recentSends.delete(k);
+    }
+  }
+  return false;
+}
+
 /**
  * GET /api/channels/zalo-personal
  * List all Zalo personal channels
@@ -94,6 +113,12 @@ router.post('/send', async (req, res) => {
   if (!channel) {
     console.error(`[ZaloRoutes] Channel NOT in activeChannels: ${channel_name}`);
     return res.status(404).json({ error: 'Channel not connected' });
+  }
+
+  // Dedup backstop: tin trùng (cùng channel+thread+nội dung) trong 8s → bỏ qua, trả OK idempotent
+  if (message && isDuplicateSend(channel_name, thread_id, message)) {
+    console.warn(`[ZaloRoutes] Duplicate send suppressed thread=${thread_id} msg="${message?.substring(0, 30)}"`);
+    return res.json({ success: true, deduped: true });
   }
 
   try {

@@ -90,6 +90,7 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
   const allTemplates = [...DEFAULT_TEMPLATES, ...customTemplates];
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendingRef = useRef(false); // synchronous guard chống double-submit (state async không kịp)
   const fileRef = useRef<HTMLInputElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const quickReplyRef = useRef<HTMLDivElement>(null);
@@ -110,21 +111,30 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    // Guard đồng bộ qua ref: chặn click/Enter thứ hai trước khi state kịp cập nhật
+    if (!trimmed || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
+    // Clear ô input NGAY để tránh user tưởng chưa gửi (Zalo send delay ~2s) rồi bấm lại → double
+    setText("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
     try {
       await onSend(trimmed, replyTo?.id);
-      setText("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
+    } catch (err) {
+      // Gửi thất bại → khôi phục nội dung để user thử lại
+      setText(trimmed);
+      throw err;
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [text, sending, onSend, replyTo]);
+  }, [text, onSend, replyTo]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter = gửi; Shift+Enter = xuống dòng. Guard IME tiếng Việt (Telex/VNI) đang ghép ký tự.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
@@ -358,7 +368,7 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
           onClick={handleSend}
           disabled={!text.trim() || sending}
           className="p-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-30 shrink-0"
-          title="Gửi (Ctrl+Enter)"
+          title="Gửi (Enter)"
         >
           {sending ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -368,7 +378,7 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
         </button>
       </div>
       <div className="text-[10px] text-muted-foreground mt-1 text-right">
-        Ctrl+Enter gửi · Shift+Enter xuống dòng
+        Enter gửi · Shift+Enter xuống dòng
       </div>
     </div>
   );
