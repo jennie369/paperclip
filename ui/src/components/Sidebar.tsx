@@ -123,7 +123,7 @@ export function Sidebar() {
   const itemMap: Record<string, React.ReactNode> = useMemo(() => ({
     // Kênh Chat
     "/inbox": <SidebarNavItem to="/inbox" label="Inbox (Agents)" icon={Inbox} />,
-    "/channels/inbox": <SidebarNavItem to="/channels/inbox" label="Hộp thư" icon={Inbox} badge={totalUnread > 0 ? totalUnread : inboxBadge.inbox} badgeTone={totalUnread > 0 ? "danger" : inboxBadge.failedRuns > 0 ? "danger" : "default"} alert={totalUnread > 0 || inboxBadge.failedRuns > 0} />,
+    "/channels/inbox": <SidebarNavItem to="/channels/inbox" label="Hộp thư" icon={Inbox} badge={totalUnread > 0 ? totalUnread : undefined} badgeTone="danger" alert={totalUnread > 0} />,
     "/channels/settings": <SidebarNavItem to="/channels/settings" label="Cài đặt kênh" icon={Settings} />,
     "/war-room": <SidebarNavItem to="/war-room" label="War Room" icon={Zap} />,
     "/training": <SidebarNavItem to="/training" label="Phòng Training" icon={Activity} />,

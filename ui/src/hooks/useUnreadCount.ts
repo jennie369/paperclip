@@ -29,7 +29,11 @@ export function useUnreadCount() {
       .from("channel_sessions")
       .select("channel_name, unread_count")
       .gt("unread_count", 0)
-      .eq("is_deleted", false);
+      .eq("is_deleted", false)
+      // Muted conversations must not contribute to the sidebar badge or the
+      // browser-tab title count. `not is true` matches both false and NULL so
+      // un-muted rows (default) are still counted.
+      .not("is_muted", "is", true);
 
     const rows = data || [];
     const total = rows.reduce((sum, s) => sum + (s.unread_count || 0), 0);

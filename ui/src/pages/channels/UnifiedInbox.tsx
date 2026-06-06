@@ -151,9 +151,13 @@ export function UnifiedInbox() {
 
   const selected = filteredConversations.find((c) => c.session_key === selectedKey) || null;
 
-  // Play sound on new unread message (use ALL conversations, not filtered, to avoid false triggers on tab switch)
+  // Play sound on new unread message (use ALL conversations, not filtered, to avoid false triggers on tab switch).
+  // Muted conversations are excluded: muting suppresses the notification sound AND the inbox badge.
+  // (The per-row unread count is still shown — muted ≠ marked read, matching WhatsApp/Telegram.)
   const totalUnreadCount = useMemo(() => {
-    return (data?.conversations || []).reduce((sum, c) => sum + (c.unread_count || 0), 0);
+    return (data?.conversations || [])
+      .filter((c) => !c.is_muted)
+      .reduce((sum, c) => sum + (c.unread_count || 0), 0);
   }, [data?.conversations]);
 
   const prevUnreadRef = usePrevious(totalUnreadCount);
@@ -196,9 +200,9 @@ export function UnifiedInbox() {
           >
             <MessageSquare className="h-4 w-4" />
             <span>Hộp thư</span>
-            {data?.conversations && data.conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0) > 0 && (
+            {totalUnreadCount > 0 && (
               <span className="min-w-[16px] h-[16px] flex items-center justify-center text-[9px] font-bold text-white bg-red-500 rounded-full px-1">
-                {data.conversations.reduce((sum, c) => sum + (c.unread_count || 0), 0)}
+                {totalUnreadCount}
               </span>
             )}
           </button>
