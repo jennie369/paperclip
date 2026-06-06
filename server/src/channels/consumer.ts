@@ -300,8 +300,10 @@ async function processMessage(
     sessionUpdate.is_group = true;
     if (merged.metadata?.groupName) sessionUpdate.group_name = merged.metadata.groupName;
   }
-  // Link CRM customer to session (required for order/ticket creation in chat)
-  if (customerId) {
+  // Link CRM customer to session (required for order/ticket creation in chat).
+  // NOT for groups: a group session is shared by many members, so linking it to
+  // whoever sent last would thrash the CRM linkage between members.
+  if (customerId && merged.peerKind !== 'group') {
     sessionUpdate.customer_id = customerId;
   }
   try { await supabase.from('channel_sessions').update(sessionUpdate).eq('session_key', sessionKey); } catch {}
@@ -359,8 +361,11 @@ async function processMessage(
       console.warn(`${logPrefix} CRM context build failed (non-blocking): ${err.message}`);
     }
 
-    // Link customer to session + pending message
-    try { await supabase.from('channel_sessions').update({ customer_id: customerId }).eq('session_key', sessionKey); } catch {}
+    // Link customer to session + pending message (session link skipped for groups
+    // — shared session must not be bound to a single member; see Step 8 above).
+    if (merged.peerKind !== 'group') {
+      try { await supabase.from('channel_sessions').update({ customer_id: customerId }).eq('session_key', sessionKey); } catch {}
+    }
 
     if (pendingId) {
       try { await supabase.from('channel_pending_messages').update({ customer_id: customerId }).eq('id', pendingId); } catch {}
@@ -447,7 +452,7 @@ async function processMessage(
     if ((!replyText || !replyText.trim()) && !hasChunks) {
       console.log(`${logPrefix} Agent produced empty reply — staying silent (no fallback), left in inbox`);
       if (pendingId) await bus.markHandled(pendingId, 'agent', 'skipped', 'agent_silent');
-      if (customerId) aiSummarizer.scheduleSummary(sessionKey, customerId);
+      if (customerId && merged.peerKind !== 'group') aiSummarizer.scheduleSummary(sessionKey, customerId);
       return;
     }
 
@@ -590,8 +595,10 @@ async function processMessage(
     }
   }
 
-  // Schedule AI summary after idle (5 min) - run for both AI-handled and Human-handled messages
-  if (customerId) {
+  // Schedule AI summary after idle (5 min) - run for both AI-handled and Human-handled messages.
+  // Skip for groups: a group session has no single customer to summarize; attributing
+  // the summary to whichever member sent last would be misleading.
+  if (customerId && merged.peerKind !== 'group') {
     aiSummarizer.scheduleSummary(sessionKey, customerId);
   }
 }
