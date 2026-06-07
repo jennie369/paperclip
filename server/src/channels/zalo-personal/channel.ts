@@ -143,6 +143,9 @@ export class ZaloPersonalChannel {
   private _healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private _lastConnectedAt: Date | null = null;
   private _stopped = false; // true when stop() called explicitly — no reconnect
+  // Single stored reference to the bus 'outbound' listener so startListening()
+  // (which re-runs on every reconnect) doesn't stack duplicate listeners.
+  private _outboundHandler: ((msg: OutboundMessage) => Promise<void>) | null = null;
 
   /** Log prefix with account display name for easy tracking */
   private get tag(): string {
@@ -452,7 +455,13 @@ export class ZaloPersonalChannel {
     // Subscribe to bus outbound events for auto-reply dispatch.
     // Handles BOTH text content AND media attachments (images / files) that
     // the router extracted from [[SEND_MEDIA: id]] markers.
-    bus.on('outbound', async (outMsg: OutboundMessage) => {
+    //
+    // startListening() re-runs on every reconnect (_scheduleReconnect → startListening).
+    // Register the dispatcher exactly ONCE per instance — drop any prior reference
+    // first — so one outbound message is never sent N times. Incident 2026-06-08:
+    // a single follow-up was delivered 8× because 8 reconnects stacked 8 listeners.
+    if (this._outboundHandler) { bus.off('outbound', this._outboundHandler); }
+    this._outboundHandler = async (outMsg: OutboundMessage) => {
       if (outMsg.channel !== this.channelName) return;
       const threadType = (outMsg.metadata?.threadType === 'group' ? 'group' : 'dm') as 'dm' | 'group';
       const agentSlug = outMsg.metadata?.agentSlug as string | undefined;
@@ -570,7 +579,8 @@ export class ZaloPersonalChannel {
       } catch (err: any) {
         console.error(`${this.tag} Bus outbound dispatch error:`, err);
       }
-    });
+    };
+    bus.on('outbound', this._outboundHandler);
 
     await this.listener.start();
   }
@@ -764,6 +774,7 @@ export class ZaloPersonalChannel {
     this._isConnected = false;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     if (this._healthCheckInterval) { clearInterval(this._healthCheckInterval); this._healthCheckInterval = null; }
+    if (this._outboundHandler) { bus.off('outbound', this._outboundHandler); this._outboundHandler = null; }
     this.listener?.stop();
     await this.updateStatus('disconnected', 'Stopped by user');
   }
