@@ -110,7 +110,9 @@ export function UnifiedInbox() {
     (instances || []).forEach((ci) => {
       map[ci.name] = {
         display_name: ci.display_name || ci.name,
-        color: getChannelColor(ci.display_name || ci.name),
+        // Per-account color override (set in Cài đặt kênh) wins; otherwise fall
+        // back to the platform color so the inbox/header identity is unambiguous.
+        color: ci.color || getChannelColor(ci.display_name || ci.name),
       };
     });
     return map;

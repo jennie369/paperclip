@@ -169,6 +169,7 @@ router.post('/settings/:channelName', async (req, res) => {
     allow_from,
     enabled,
     save_contacts_to_crm,
+    color,
   } = req.body;
 
   const updates: Record<string, any> = {
@@ -187,6 +188,7 @@ router.post('/settings/:channelName', async (req, res) => {
   if (allow_from !== undefined) updates.allow_from = allow_from;
   if (enabled !== undefined) updates.enabled = enabled;
   if (save_contacts_to_crm !== undefined) updates.save_contacts_to_crm = save_contacts_to_crm;
+  if (color !== undefined) updates.color = color || null;
 
   const { data, error } = await supabase
     .from('channel_instances')

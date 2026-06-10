@@ -10,6 +10,8 @@ export interface ChannelInstance {
   zalo_uid?: string;
   zalo_name?: string;
   enabled: boolean;
+  /** Per-account display color (hex). NULL → fall back to platform color. */
+  color?: string | null;
   config: Record<string, unknown>;
   agent_id?: string;
   agent_slug?: string;
