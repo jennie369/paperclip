@@ -1848,6 +1848,12 @@ export function heartbeatService(db: Db) {
       intervalSec: Math.max(0, asNumber(heartbeat.intervalSec, 0)),
       cronExpression: cron ? rawCron : "",
       cron,
+      // GEMRAL FIX 2026-06-10 (B): max lateness (seconds) an overdue cron slot may
+      // still fire as a catch-up. Beyond this the slot is skipped and the baseline
+      // resynced to the next scheduled time. Default 3600s (1h): a 07:00 daily brief
+      // restarted at 07:30 still fires, but a restart at 14:00 does NOT run the
+      // "morning" job in the afternoon. Set 0 to disable the guard (legacy always-fire).
+      catchUpGraceSec: Math.max(0, asNumber(heartbeat.catchUpGraceSec, 3600)),
       wakeOnDemand: asBoolean(heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation, true),
       maxConcurrentRuns: normalizeMaxConcurrentRuns(heartbeat.maxConcurrentRuns),
     };
@@ -4287,6 +4293,10 @@ export function heartbeatService(db: Db) {
         reason: string;
       };
       const pendingFires: PendingFire[] = [];
+      // GEMRAL FIX 2026-06-10 (B): agents whose cron is overdue beyond the catch-up
+      // grace window — skip the stale fire but resync baseline so the NEXT scheduled
+      // tick fires on time (prevents a missed 07:00 brief from firing hours later).
+      const staleResyncIds: string[] = [];
 
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
@@ -4306,8 +4316,23 @@ export function heartbeatService(db: Db) {
         if (policy.cron) {
           const next = nextCronTick(policy.cron, baseline);
           if (next && now.getTime() >= next.getTime()) {
-            shouldFire = true;
-            reason = `cron_elapsed:${policy.cronExpression}`;
+            const lateMs = now.getTime() - next.getTime();
+            const graceMs = policy.catchUpGraceSec * 1000;
+            // GEMRAL FIX 2026-06-10 (B): staleness guard. If the scheduler was
+            // asleep/down through the scheduled time and only ticks again much
+            // later (e.g. a 07:00 brief first noticed at 14:00 after a restart),
+            // firing the overdue slot now would run a "morning" job in the
+            // afternoon. Skip it; resync baseline so it fires on time next cycle.
+            if (graceMs > 0 && lateMs > graceMs) {
+              staleResyncIds.push(agent.id);
+              logger.info(
+                { agentId: agent.id, cron: policy.cronExpression, lateMs, graceMs },
+                "[tickTimers] Skipping stale cron catch-up (overdue beyond grace); resyncing baseline",
+              );
+            } else {
+              shouldFire = true;
+              reason = `cron_elapsed:${policy.cronExpression}`;
+            }
           }
         } else {
           const elapsedMs = now.getTime() - baseline.getTime();
@@ -4320,6 +4345,13 @@ export function heartbeatService(db: Db) {
         if (shouldFire) {
           pendingFires.push({ agent, policy, reason });
         }
+      }
+
+      // GEMRAL FIX 2026-06-10 (B): resync baseline for agents whose overdue cron was
+      // skipped as stale — set lastHeartbeatAt=now so nextCronTick targets the NEXT
+      // scheduled time instead of re-detecting the same stale slot on every tick.
+      for (const agentId of staleResyncIds) {
+        await db.update(agents).set({ lastHeartbeatAt: now, updatedAt: now }).where(eq(agents.id, agentId));
       }
 
       // GEM-316 fix: Batch-fetch task status for agents whose timers fired.
@@ -4390,8 +4422,19 @@ export function heartbeatService(db: Db) {
             intervalSec: policy.cron ? undefined : policy.intervalSec,
           },
         });
-        if (run) { enqueued += 1; enqueuedInThisTick += 1; }
-        else skipped += 1;
+        if (run) {
+          enqueued += 1;
+          enqueuedInThisTick += 1;
+          // GEMRAL FIX 2026-06-10 (C): claim the slot at ENQUEUE time, not only on
+          // run completion (finalizeAgentStatus). Without this the baseline stays old
+          // while the run executes, so every 30s tick re-enqueues the same agent
+          // (runaway), and a run that dies mid-flight never advances baseline → the
+          // agent stays "due" → re-fires on every restart. Monotonic forward-only
+          // write to the same field (no new writer/row — finalize still sets it later).
+          await db.update(agents).set({ lastHeartbeatAt: now, updatedAt: now }).where(eq(agents.id, agent.id));
+        } else {
+          skipped += 1;
+        }
       }
 
       return { checked, enqueued, skipped };
