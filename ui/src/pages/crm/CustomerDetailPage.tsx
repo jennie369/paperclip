@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LeadScoreBadge } from "./components/LeadScoreBadge";
 import { crmApi } from "@/api/crm";
+import { CustomerNotes } from "./components/CustomerNotes";
 
 function formatVND(n: number): string {
   return new Intl.NumberFormat('vi-VN').format(n || 0) + '₫';
@@ -48,7 +49,6 @@ export function CustomerDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState('overview');
-  const [newNote, setNewNote] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
 
@@ -73,15 +73,6 @@ export function CustomerDetailPage() {
   const updateMut = useMutation({
     mutationFn: (data: any) => crmApi.updateCustomer(id!, data),
     onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
-  });
-
-  const addNoteMut = useMutation({
-    mutationFn: () => fetch(`/api/channels/crm/customers/${id}/notes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: newNote, note_type: 'manual', created_by: 'board' }),
-    }),
-    onSettled: () => { qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }); setNewNote(''); },
   });
 
   // Tags — gán/gỡ từ bộ tag CRM (crm_tags), nhóm theo category
@@ -557,23 +548,14 @@ export function CustomerDetailPage() {
           )}
 
           {activeTab === 'notes' && (
-            <div className="space-y-4">
-              <div className="flex gap-2">
-                <Input value={newNote} onChange={e => setNewNote(e.target.value)} placeholder="Thêm ghi chú..." className="flex-1"
-                  onKeyDown={e => { if (e.key === 'Enter' && newNote.trim()) addNoteMut.mutate(); }} />
-                <Button size="sm" disabled={!newNote.trim() || addNoteMut.isPending} onClick={() => addNoteMut.mutate()}>Thêm</Button>
-              </div>
-              {(c.notes || []).length === 0 ? (
-                <p className="text-sm text-muted-foreground py-8 text-center">Chưa có ghi chú nào.</p>
-              ) : (
-                <div className="space-y-2">
-                  {(c.notes || []).map((n: any) => (
-                    <Card key={n.id} className="p-3">
-                      <p className="text-sm">{n.content}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{n.created_by} — {timeAgo(n.created_at)}</p>
-                    </Card>
-                  ))}
-                </div>
+            <div className="max-w-xl">
+              <CustomerNotes
+                customerId={id!}
+                notes={(c.notes as any[]) || []}
+                onChanged={() => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] })}
+              />
+              {((c.notes as any[]) || []).length === 0 && (
+                <p className="text-sm text-muted-foreground py-6 text-center">Chưa có ghi chú nào.</p>
               )}
             </div>
           )}

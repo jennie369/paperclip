@@ -4,12 +4,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SimpleModal } from "../../crm/components/SimpleModal";
+import { CustomerNotes } from "../../crm/components/CustomerNotes";
 import { getChannelVisual } from "./channelConfig";
 import type { CommandCrmProfile } from "@/components/crm-messaging/command-center/types";
 import { CommandCustomer360 } from "@/components/crm-messaging/command-center/CommandCustomer360";
@@ -142,25 +143,6 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         : Promise.resolve(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
-    },
-  });
-
-  // Add note
-  const [noteText, setNoteText] = useState("");
-  const addNoteMutation = useMutation({
-    mutationFn: () =>
-      customer?.id
-        ? fetch(`/api/channels/crm/customers/${customer.id}/notes`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content: noteText }),
-          }).then((r) => r.json())
-        : Promise.resolve(null),
-    onSuccess: () => {
-      setNoteText("");
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      // BẮT BUỘC invalidate full customer → list ghi chú dưới mới refresh
-      if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
     },
   });
 
@@ -361,7 +343,6 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
               { label: "Phiếu HT", icon: "ticket", tone: "neutral" as const },
             ],
           } as CommandCrmProfile}
-          onEdit={() => { setNameDraft(customer.display_name || displayName); setEditingName(true); }}
           onAddTag={goProfile}
           onCreateQuote={goProfile}
           onQuickAction={(a) => {
@@ -502,61 +483,45 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </div>
       )}
 
-      {/* Hoạt động gần đây (tab Tổng quan trang CRM) — từ crm_interactions */}
+      {/* Hoạt động gần đây — timeline style (port từ Gemral WidgetHistoricalTimeline,
+          giữ token paperclip: border/background/muted-foreground thay token gem).
+          Đường dọc nối (before:) + chấm phát sáng hover-scale + card per event. */}
       {((f.interactions as any[]) || []).length > 0 && (
         <div>
-          <div className="text-[11px] text-muted-foreground font-medium mb-1.5">Hoạt động gần đây</div>
-          <div className="space-y-1.5">
-            {((f.interactions as any[]) || []).slice(0, 8).map((i: any) => (
-              <div key={i.id} className="flex items-start gap-2 text-xs border-b pb-1.5 last:border-0">
-                <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
-                  i.type === "chat" ? "bg-blue-500" : i.type === "order" ? "bg-green-500" : i.type === "ticket" ? "bg-yellow-500" : "bg-muted-foreground"
-                }`} />
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium truncate">{i.title || i.type}</p>
-                  {i.content && <p className="text-[11px] text-muted-foreground truncate">{i.content}</p>}
-                  <p className="text-[10px] text-muted-foreground">{timeAgo(i.created_at)}</p>
+          <div className="text-[11px] text-muted-foreground font-medium mb-2 flex items-center gap-1.5">
+            <History className="h-3.5 w-3.5" /> Hoạt động gần đây
+          </div>
+          <div className="relative space-y-3 before:absolute before:inset-y-1.5 before:left-[5px] before:w-[2px] before:bg-border before:content-['']">
+            {((f.interactions as any[]) || []).slice(0, 8).map((i: any) => {
+              const tone =
+                i.type === "chat" ? "bg-blue-500" : i.type === "order" ? "bg-green-500"
+                : i.type === "ticket" ? "bg-yellow-500" : "bg-primary";
+              return (
+                <div key={i.id} className="relative pl-5 group">
+                  <div className={`absolute left-0 top-1 w-2.5 h-2.5 rounded-full border-2 border-background transition-transform group-hover:scale-125 ${tone}`} />
+                  <div className="text-[9px] text-muted-foreground font-bold mb-0.5 tracking-wider uppercase">{timeAgo(i.created_at)}</div>
+                  <div className="rounded-lg p-2 border border-border bg-muted/40 hover:bg-muted/70 transition-colors">
+                    <p className="text-xs font-semibold truncate">{i.title || i.type}</p>
+                    {i.content && <p className="text-[11px] text-muted-foreground line-clamp-2">{i.content}</p>}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Quick note */}
-      <div>
-        <div className="text-[11px] text-muted-foreground font-medium mb-1">Ghi chú nhanh</div>
-        <div className="flex gap-1">
-          <input
-            type="text"
-            value={noteText}
-            onChange={(e) => setNoteText(e.target.value)}
-            placeholder="Thêm ghi chú..."
-            className="flex-1 text-xs px-2 py-1.5 rounded border bg-muted/20 focus:outline-none focus:ring-1 focus:ring-ring"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && noteText.trim()) addNoteMutation.mutate();
-            }}
-          />
-          <button
-            onClick={() => noteText.trim() && addNoteMutation.mutate()}
-            disabled={!noteText.trim() || addNoteMutation.isPending}
-            className="px-2 py-1 text-xs bg-primary text-primary-foreground rounded disabled:opacity-30"
-          >
-            +
-          </button>
-        </div>
-        {/* Danh sách ghi chú (từ crm_notes qua getCustomer) — hiển thị ngay tại panel */}
-        {((f.notes as any[]) || []).length > 0 && (
-          <div className="space-y-1.5 mt-2">
-            {((f.notes as any[]) || []).map((n: any) => (
-              <div key={n.id} className="text-xs bg-muted/20 rounded-md px-2 py-1.5">
-                <p className="text-foreground/90 whitespace-pre-wrap break-words">{n.content}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{n.created_by || "board"} · {timeAgo(n.created_at)}</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Ghi chú — CRUD đầy đủ (shared CustomerNotes: thêm/sửa inline/xoá/chọn nhiều) */}
+      {customer?.id && (
+        <CustomerNotes
+          customerId={customer.id}
+          notes={(f.notes as any[]) || []}
+          onChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
+            queryClient.invalidateQueries({ queryKey: ["conversations"] });
+          }}
+        />
+      )}
 
       {/* Link to full CRM profile */}
       {customer?.id && (

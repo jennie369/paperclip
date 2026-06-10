@@ -77,9 +77,11 @@ export function CommandCustomer360({
     <>
       <div className="flex justify-between items-center mb-6">
         <h3 className="font-bold text-base text-gem-text uppercase tracking-wider">Customer 360</h3>
-        <button type="button" onClick={onEdit} className="text-gem-primary text-sm font-bold hover:underline">
-          Sửa
-        </button>
+        {onEdit && (
+          <button type="button" onClick={onEdit} className="text-gem-primary text-sm font-bold hover:underline">
+            Sửa
+          </button>
+        )}
       </div>
 
       {/* Deep Profile Card */}

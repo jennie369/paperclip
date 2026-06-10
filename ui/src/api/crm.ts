@@ -82,6 +82,15 @@ export const crmApi = {
     fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags/${tagId}`, { method: 'DELETE' }),
   getCustomerSegments: (customerId: string) =>
     fetchJSON<Array<{ id: string; name: string }>>(`${BASE}/customers/${customerId}/segments`),
+  // Notes CRUD
+  addNote: (customerId: string, content: string) =>
+    fetchJSON<any>(`${BASE}/customers/${customerId}/notes`, { method: 'POST', body: JSON.stringify({ content }) }),
+  updateNote: (customerId: string, noteId: string, data: { content?: string; pinned?: boolean }) =>
+    fetchJSON<any>(`${BASE}/customers/${customerId}/notes/${noteId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteNote: (customerId: string, noteId: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/notes/${noteId}`, { method: 'DELETE' }),
+  bulkDeleteNotes: (customerId: string, ids: string[]) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/notes/bulk-delete`, { method: 'POST', body: JSON.stringify({ ids }) }),
 
   // Gemral
   syncGemral: (customerId: string) =>
