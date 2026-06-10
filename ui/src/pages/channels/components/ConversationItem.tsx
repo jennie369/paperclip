@@ -5,7 +5,7 @@ import { useState } from "react";
 import { type ChannelSession } from "@/api/channels";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ConversationActions } from "./ConversationActions";
-import { Pin, VolumeX, Phone, Facebook, Globe, Mail, Users, Bot, Paperclip } from "lucide-react";
+import { Pin, VolumeX, Phone, Facebook, Globe, Mail, Users, Bot, Paperclip, CornerDownRight } from "lucide-react";
 
 interface Props {
   conversation: ChannelSession;
@@ -198,7 +198,8 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
             </div>
 
             {/* Row 2: Channel badge + Agent badge */}
-            <div className="flex items-center gap-1.5 mb-1">
+            <div className="flex items-center gap-1 mb-1">
+              <CornerDownRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
               <span className={`
                 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium
                 ${getChannelStyle(conv.channel_name || "")}
