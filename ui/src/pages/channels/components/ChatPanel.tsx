@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, X, ChevronDown, SmilePlus, Bot, Reply } from "lucide-react";
+import { Search, X, ChevronDown, SmilePlus, Bot, Reply, MoreHorizontal, Copy, Pin, Star, ListChecks, RotateCcw, Trash2, Check } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
@@ -56,11 +56,48 @@ function highlightText(text: string, query: string): React.ReactNode {
   );
 }
 
+// Row in the "..." message-actions menu. `soon` = BE not wired yet (disabled,
+// labelled "sắp có" — honest, not a fake-working button). `danger` = destructive.
+function MenuItem({
+  icon,
+  label,
+  onClick,
+  soon,
+  danger,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+  soon?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={soon}
+      onClick={onClick}
+      className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-left transition-colors [&>span>svg]:h-4 [&>span>svg]:w-4 ${
+        soon
+          ? "opacity-40 cursor-not-allowed"
+          : danger
+            ? "text-red-500 hover:bg-red-500/10"
+            : "hover:bg-muted/70"
+      }`}
+    >
+      <span className="shrink-0 flex items-center">{icon}</span>
+      <span className="flex-1">{label}</span>
+      {soon && <span className="text-[10px] text-muted-foreground">sắp có</span>}
+    </button>
+  );
+}
+
 export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPanel, onAction, channelMap }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null); // tin đang mở full reaction picker
+  const [menuMsgId, setMenuMsgId] = useState<string | null>(null); // tin đang mở menu "..." (copy/ghim/thu hồi...)
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null); // feedback "Đã copy"
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
 
   // D7: Scroll to bottom button
@@ -166,6 +203,26 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
     });
   };
 
+  // Copy message text to clipboard (real, FE-only — no BE needed).
+  const copyMessage = async (msgId: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMsgId(msgId);
+      setTimeout(() => setCopiedMsgId((cur) => (cur === msgId ? null : cur)), 1500);
+    } catch {
+      // clipboard blocked (insecure context) — fall back to a temporary textarea
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); setCopiedMsgId(msgId); setTimeout(() => setCopiedMsgId((cur) => (cur === msgId ? null : cur)), 1500); } catch { /* noop */ }
+      document.body.removeChild(ta);
+    }
+    setMenuMsgId(null);
+  };
+
   // Reverse messages (API returns newest first)
   const sortedMsgs = [...messages].reverse();
 
@@ -248,6 +305,79 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
             const reactions = messageReactions[msgId] || [];
             const bodyText = msg.body || "";
 
+            // Consolidated hover toolbar — reaction + reply + "..." menu, grouped.
+            // Sits on the INNER side of the bubble (toward the center): right of an
+            // inbound bubble, left of an outbound bubble.
+            const actionBar = (
+              <div
+                className={`relative shrink-0 self-end mb-1 flex items-center transition-opacity duration-150 ${
+                  hoveredMessageId === msgId || reactionPickerMsgId === msgId || menuMsgId === msgId
+                    ? "opacity-100"
+                    : "opacity-0 pointer-events-none"
+                }`}
+              >
+                <div className="flex items-center gap-0.5 rounded-full bg-popover border border-border shadow-sm px-0.5 py-0.5">
+                  <button
+                    title="Bày tỏ cảm xúc"
+                    className="w-7 h-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors"
+                    onClick={() => { setReactionPickerMsgId((c) => (c === msgId ? null : msgId)); setMenuMsgId(null); }}
+                  >
+                    <SmilePlus className="h-4 w-4" />
+                  </button>
+                  <button
+                    title="Trả lời"
+                    className="w-7 h-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors"
+                    onClick={() => { setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel }); setReactionPickerMsgId(null); setMenuMsgId(null); }}
+                  >
+                    <Reply className="h-4 w-4" />
+                  </button>
+                  <button
+                    title="Thêm"
+                    className="w-7 h-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors"
+                    onClick={() => { setMenuMsgId((c) => (c === msgId ? null : msgId)); setReactionPickerMsgId(null); }}
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Reaction picker (above the toolbar) */}
+                {reactionPickerMsgId === msgId && (
+                  <div className={`absolute bottom-full mb-1 z-30 flex items-center gap-0.5 bg-popover border border-border rounded-full px-2 py-1 shadow-md ${isOutbound ? "right-0" : "left-0"}`}>
+                    {REACTION_EMOJIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        className="text-sm w-7 h-7 flex items-center justify-center rounded-full cursor-pointer hover:bg-muted/70 transition-colors"
+                        onClick={() => { toggleReaction(msgId, emoji); setReactionPickerMsgId(null); }}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* "..." actions menu (Zalo-style). Copy works now; BE-backed actions
+                    land in later phases and are disabled ("sắp có") meanwhile. */}
+                {menuMsgId === msgId && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setMenuMsgId(null)} />
+                    <div className={`absolute bottom-full mb-1 z-50 w-52 py-1 rounded-xl bg-popover border border-border shadow-lg ${isOutbound ? "right-0" : "left-0"}`}>
+                      <MenuItem
+                        icon={copiedMsgId === msgId ? <Check /> : <Copy />}
+                        label={copiedMsgId === msgId ? "Đã copy" : "Copy tin nhắn"}
+                        onClick={() => copyMessage(msgId, bodyText)}
+                      />
+                      <MenuItem icon={<Pin />} label="Ghim tin nhắn" soon />
+                      <MenuItem icon={<Star />} label="Đánh dấu tin nhắn" soon />
+                      <MenuItem icon={<ListChecks />} label="Chọn nhiều tin nhắn" soon />
+                      <div className="my-1 border-t border-border/60" />
+                      {isOutbound && <MenuItem icon={<RotateCcw />} label="Thu hồi" soon danger />}
+                      <MenuItem icon={<Trash2 />} label="Xóa chỉ ở phía tôi" soon danger />
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+
             return (
               <div key={msgId}>
                 {/* FIX 5: Date divider */}
@@ -260,24 +390,15 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                 )}
 
                 <div
-                  className={`relative flex items-center ${isOutbound ? "justify-end" : "justify-start"} ${isSameGroup ? "mt-0.5" : "mt-3"}`}
+                  className={`relative flex items-end gap-1 ${isOutbound ? "justify-end" : "justify-start"} ${isSameGroup ? "mt-0.5" : "mt-3"}`}
                   onMouseEnter={() => setHoveredMessageId(msgId)}
                   onMouseLeave={() => {
                     setHoveredMessageId(null);
                     setReactionPickerMsgId((cur) => (cur === msgId ? null : cur));
                   }}
                 >
-                  {/* Reply button left — always takes space (invisible for outbound) */}
-                  <button
-                    className={`shrink-0 mr-1.5 w-6 h-6 flex items-center justify-center rounded text-muted-foreground transition-all duration-150 ${
-                      isOutbound ? "invisible pointer-events-none" :
-                      hoveredMessageId === msgId ? "opacity-100 hover:bg-muted/60" : "opacity-0 pointer-events-none"
-                    }`}
-                    title="Trả lời"
-                    onClick={() => !isOutbound && setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel })}
-                  >
-                    <Reply className="h-3.5 w-3.5" />
-                  </button>
+                  {/* Action toolbar on the inner side — outbound bubble: toolbar on its LEFT */}
+                  {isOutbound && actionBar}
 
                   <div className={`relative max-w-[70%] ${isOutbound ? "items-end" : "items-start"}`}>
                     {/* Sender name + time (only for first in group) */}
@@ -346,68 +467,10 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                       </div>
                     )}
 
-                    {/* Reaction trigger — icon nhỏ ở góc, chỉ hiện khi hover (và picker chưa mở) */}
-                    <button
-                      className={`absolute -top-3 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-popover border border-border shadow-sm text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-all duration-150 ${
-                        isOutbound ? "right-1" : "left-1"
-                      } ${
-                        hoveredMessageId === msgId && reactionPickerMsgId !== msgId
-                          ? "opacity-100 scale-100 pointer-events-auto"
-                          : "opacity-0 scale-90 pointer-events-none"
-                      }`}
-                      title="Bày tỏ cảm xúc"
-                      onClick={() => setReactionPickerMsgId(msgId)}
-                    >
-                      <SmilePlus className="h-3.5 w-3.5" />
-                    </button>
-
-                    {/* Full reaction picker — chỉ hiện khi đã bấm icon */}
-                    <div
-                      className={`absolute -top-9 z-20 flex items-center gap-0.5 bg-popover border border-border rounded-full px-2 py-1 shadow-md transition-all duration-150 ${
-                        isOutbound ? "right-0" : "left-0"
-                      } ${
-                        reactionPickerMsgId === msgId
-                          ? "opacity-100 translate-y-0 pointer-events-auto"
-                          : "opacity-0 translate-y-1 pointer-events-none"
-                      }`}
-                    >
-                      {REACTION_EMOJIS.map((emoji) => (
-                        <button
-                          key={emoji}
-                          className="text-sm w-7 h-7 flex items-center justify-center rounded-full cursor-pointer hover:bg-muted/70 transition-colors"
-                          onClick={() => {
-                            toggleReaction(msgId, emoji);
-                            setReactionPickerMsgId(null);
-                          }}
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                      {/* Reply button in reaction row */}
-                      <button
-                        className="w-7 h-7 flex items-center justify-center rounded-full cursor-pointer ml-0.5 border-l border-border/50 pl-1 text-sm hover:bg-muted/70 transition-colors text-muted-foreground"
-                        onClick={() => {
-                          setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel });
-                          setReactionPickerMsgId(null);
-                        }}
-                        title="Trả lời"
-                      >
-                        <Reply className="h-4 w-4" />
-                      </button>
-                    </div>
                   </div>
 
-                  {/* Reply button right — always takes space (invisible for inbound) */}
-                  <button
-                    className={`shrink-0 ml-1.5 w-6 h-6 flex items-center justify-center rounded text-muted-foreground transition-all duration-150 ${
-                      !isOutbound ? "invisible pointer-events-none" :
-                      hoveredMessageId === msgId ? "opacity-100 hover:bg-muted/60" : "opacity-0 pointer-events-none"
-                    }`}
-                    title="Trả lời"
-                    onClick={() => isOutbound && setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel })}
-                  >
-                    <Reply className="h-3.5 w-3.5" />
-                  </button>
+                  {/* Action toolbar on the inner side — inbound bubble: toolbar on its RIGHT */}
+                  {!isOutbound && actionBar}
                 </div>
               </div>
             );
