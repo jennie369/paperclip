@@ -124,6 +124,7 @@ router.post('/customers/bulk-delete', async (req, res) => {
 const CUSTOMER_EDITABLE_COLUMNS = new Set([
   'display_name', 'phone', 'email', 'avatar_url',
   'status',
+  'lead_temperature_manual', // override nhiệt độ (display = COALESCE(manual, auto-from-score))
   'ai_summary', 'ai_tags', 'internal_notes',
   'assigned_agent', 'next_follow_up_at',
 ]);
