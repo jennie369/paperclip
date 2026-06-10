@@ -440,6 +440,66 @@ router.delete('/customers/:id/tags/:tagId', async (req, res) => {
   }
 });
 
+// ─── Segments (read-only — segment ĐỘNG theo rule, đánh giá best-effort) ───
+
+// GET /api/channels/crm/customers/:id/segments — segment mà khách THUỘC VỀ.
+// chatbot_segments.rules là vocab cố định cho "chatbot user"; map best-effort
+// sang dữ liệu CRM. Conservative: điều kiện không có data CRM để verify (vd
+// has_abandoned_cart) → coi như KHÔNG thoả → không claim thuộc về.
+router.get('/customers/:id/segments', async (req, res) => {
+  try {
+    const { data: c } = await supabase
+      .from('crm_customers')
+      .select('channels, gemral_data, total_orders, last_contact_at')
+      .eq('id', req.params.id).single();
+    if (!c) return res.status(404).json({ error: 'Không tìm thấy khách hàng' });
+
+    const { data: segs } = await supabase
+      .from('chatbot_segments')
+      .select('id, name, rules')
+      .eq('is_active', true);
+
+    // Dữ liệu khách để so rule
+    const platforms = new Set(
+      (Array.isArray(c.channels) ? c.channels : []).map((ch: any) => {
+        const t = String(ch?.channel_type || '').toLowerCase();
+        if (t.includes('zalo')) return 'zalo';
+        if (t.includes('facebook') || t.includes('messenger')) return 'messenger';
+        if (t.includes('telegram')) return 'telegram';
+        return t;
+      }),
+    );
+    const gd = (c.gemral_data || {}) as Record<string, any>;
+    const tier = String(gd.tier || gd.chatbot_tier || gd.scanner_tier || '').toUpperCase();
+    const purchaseCount = c.total_orders || 0;
+    const lastActiveDays = c.last_contact_at
+      ? Math.floor((Date.now() - new Date(c.last_contact_at).getTime()) / 86400000)
+      : null;
+
+    const matchRange = (v: number | null, r: any) =>
+      v != null && (r.lte == null || v <= r.lte) && (r.gte == null || v >= r.gte);
+
+    const matched: Array<{ id: string; name: string }> = [];
+    const seenNames = new Set<string>(); // dedup các segment trùng tên
+    for (const s of segs || []) {
+      const rules = (s.rules || {}) as Record<string, any>;
+      let ok = true;
+      for (const [key, cond] of Object.entries(rules)) {
+        if (key === 'platform') ok = Array.isArray(cond) && cond.some((p: string) => platforms.has(p));
+        else if (key === 'tier') ok = Array.isArray(cond) && cond.map((t) => String(t).toUpperCase()).includes(tier);
+        else if (key === 'purchase_count') ok = matchRange(purchaseCount, cond);
+        else if (key === 'last_active_days') ok = matchRange(lastActiveDays, cond);
+        else ok = false; // điều kiện không map được (has_abandoned_cart…) → conservative
+        if (!ok) break;
+      }
+      if (ok && !seenNames.has(s.name)) { seenNames.add(s.name); matched.push({ id: s.id, name: s.name }); }
+    }
+    res.json(matched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Webhook Logs + Replay ───
 
 // GET /api/channels/crm/webhooks/logs — recent webhook events

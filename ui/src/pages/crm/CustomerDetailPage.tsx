@@ -86,6 +86,12 @@ export function CustomerDetailPage() {
 
   // Tags — gán/gỡ từ bộ tag CRM (crm_tags), nhóm theo category
   const { data: allTags = [] } = useQuery({ queryKey: ['crm', 'tags'], queryFn: () => crmApi.getTags() });
+  // Segments — read-only: segment ĐỘNG theo rule (không gán tay), đánh giá best-effort
+  const { data: segments = [] } = useQuery({
+    queryKey: ['crm', 'customer-segments', id],
+    queryFn: () => crmApi.getCustomerSegments(id!),
+    enabled: !!id,
+  });
   const addTagMut = useMutation({
     mutationFn: (tagId: string) => crmApi.addTag(id!, tagId),
     onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
@@ -235,6 +241,22 @@ export function CustomerDetailPage() {
               .map((t: any) => <option key={t.id} value={t.id}>{t.category ? `[${t.category}] ` : ''}{t.name}</option>)}
           </select>
         </div>
+
+        {/* Segments — READ-ONLY: audience động theo rule, tự gom (không gán tay) */}
+        {segments.length > 0 && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground" title="Segment là nhóm động tự gom theo điều kiện — không gán tay. Đánh giá best-effort theo dữ liệu CRM.">
+              Segment (tự động)
+            </label>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {segments.map((s) => (
+                <span key={s.id} className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium border border-dashed bg-primary/5 text-primary">
+                  {s.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 gap-2 text-center text-xs">

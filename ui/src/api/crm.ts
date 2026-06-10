@@ -80,6 +80,8 @@ export const crmApi = {
     fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags`, { method: 'POST', body: JSON.stringify({ tag_id }) }),
   removeTag: (customerId: string, tagId: string) =>
     fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags/${tagId}`, { method: 'DELETE' }),
+  getCustomerSegments: (customerId: string) =>
+    fetchJSON<Array<{ id: string; name: string }>>(`${BASE}/customers/${customerId}/segments`),
 
   // Gemral
   syncGemral: (customerId: string) =>
