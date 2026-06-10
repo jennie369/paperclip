@@ -405,6 +405,57 @@ router.post('/customers/:id/notes', async (req, res) => {
   }
 });
 
+// PUT /api/channels/crm/customers/:id/notes/:noteId — sửa ghi chú (content/pinned)
+router.put('/customers/:id/notes/:noteId', async (req, res) => {
+  try {
+    const patch: Record<string, any> = {};
+    if (typeof req.body.content === 'string') {
+      if (!req.body.content.trim()) return res.status(400).json({ error: 'Nội dung không được trống' });
+      patch.content = req.body.content.trim();
+    }
+    if (typeof req.body.pinned === 'boolean') patch.pinned = req.body.pinned;
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Không có gì để cập nhật' });
+
+    const { data, error } = await supabase
+      .from('crm_notes')
+      .update(patch)
+      .eq('id', req.params.noteId).eq('customer_id', req.params.id)
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/channels/crm/customers/:id/notes/:noteId — xoá 1 ghi chú
+router.delete('/customers/:id/notes/:noteId', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('crm_notes')
+      .delete().eq('id', req.params.noteId).eq('customer_id', req.params.id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/channels/crm/customers/:id/notes/bulk-delete — xoá nhiều ghi chú
+router.post('/customers/:id/notes/bulk-delete', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids required' });
+    const { error } = await supabase
+      .from('crm_notes')
+      .delete().eq('customer_id', req.params.id).in('id', ids);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true, deleted: ids.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Tags (gán/gỡ tag cho khách — crm_customer_tags) ───
 
 // POST /api/channels/crm/customers/:id/tags — gán 1 tag (idempotent)
