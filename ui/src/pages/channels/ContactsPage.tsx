@@ -7,6 +7,7 @@ import {
   Search, Plus, X, Upload, Pencil, Trash2, Phone, Mail, User,
   Calendar, Tag, FileText, MoreHorizontal, ExternalLink
 } from "lucide-react";
+import { ChannelBadge } from "@/components/ChannelBadge";
 
 interface InboxContact {
   id: string;
@@ -150,34 +151,6 @@ function Avatar({ src, name, size = "md" }: { src?: string | null; name: string;
         {name.charAt(0).toUpperCase()}
       </div>
     </div>
-  );
-}
-
-// Channel badge
-function ChannelBadge({ channel }: { channel: string }) {
-  const ch = channel.toLowerCase();
-  let color = "bg-muted text-muted-foreground";
-  let icon = "🌐";
-
-  if (ch.includes("zalo")) {
-    color = "bg-blue-500/10 text-blue-500";
-    icon = "💬";
-  } else if (ch.includes("facebook") || ch.includes("fb")) {
-    color = "bg-blue-600/10 text-blue-600";
-    icon = "📘";
-  } else if (ch.includes("telegram")) {
-    color = "bg-sky-500/10 text-sky-500";
-    icon = "✈️";
-  } else if (ch.includes("email")) {
-    color = "bg-orange-500/10 text-orange-500";
-    icon = "📧";
-  }
-
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${color}`}>
-      <span>{icon}</span>
-      {channel}
-    </span>
   );
 }
 
@@ -457,7 +430,7 @@ export function ContactsPage() {
                     </td>
                     <td className="px-4 py-4 hidden lg:table-cell">
                       {c.channel ? (
-                        <ChannelBadge channel={c.channel} />
+                        <ChannelBadge name={c.channel} size="sm" />
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}

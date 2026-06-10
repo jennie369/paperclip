@@ -12,6 +12,7 @@
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "../context/ThemeContext";
 import { CrmMessagingCommandCenter, CrmMessagingPipelineKanban } from "@/components/crm-messaging";
+import { ChannelBadge } from "@/components/ChannelBadge";
 
 interface ShowcaseEntry {
   id: string;
@@ -40,6 +41,44 @@ const ENTRIES: ShowcaseEntry[] = [
     blurb: "Quản lý lead theo phễu: New Lead → Đang tư vấn → Follow Up → Won. Card hover nâng + glow.",
     wide: true,
     render: () => <CrmMessagingPipelineKanban />,
+  },
+  {
+    id: "channel-badge",
+    name: "Channel Badge — nhãn kênh/account",
+    importName: "ChannelBadge",
+    blurb:
+      "Nhãn pill nhận diện kênh/account. Màu tự suy ra theo platform; truyền prop `color` (màu chị set ở Cài đặt kênh) để override. `withOriginArrow` thêm mũi tên ↳ (dùng ở danh sách hội thoại — \"trả lời từ kênh này\"). `compact` rút gọn còn nhãn platform (FB/Zalo/TG).",
+    render: () => (
+      <div className="space-y-4 rounded-lg border border-border bg-card p-5">
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-medium text-muted-foreground">Màu tự suy theo platform</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ChannelBadge name="Facebook Gemral" />
+            <ChannelBadge name="Zalo Personal Jennie" />
+            <ChannelBadge name="Telegram Gemral" />
+            <ChannelBadge name="CSKH Hỗ trợ" />
+            <ChannelBadge name="Email Marketing" />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-medium text-muted-foreground">Override màu per-account (prop <code className="text-[10px]">color</code>)</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ChannelBadge name="Zalo Shop A" color="#E11D48" />
+            <ChannelBadge name="Zalo Shop B" color="#7C3AED" />
+            <ChannelBadge name="Zalo Shop C" color="#0891B2" />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-medium text-muted-foreground">Mũi tên gốc + compact + size sm</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ChannelBadge name="Zalo Personal Jennie" withOriginArrow />
+            <ChannelBadge name="Facebook Gemral" withOriginArrow color="#1877F2" />
+            <ChannelBadge name="Telegram Gemral" compact />
+            <ChannelBadge name="Facebook Gemral" size="sm" />
+          </div>
+        </div>
+      </div>
+    ),
   },
 ];
 
