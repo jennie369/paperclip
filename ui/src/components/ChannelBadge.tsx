@@ -21,6 +21,7 @@ const PLATFORM_DOT: Record<Platform, string> = {
   instagram: "bg-[#E4405F]",
   email: "bg-zinc-400",
   web: "bg-emerald-500",
+  cskh: "bg-[#14B8A6]",
   unknown: "bg-zinc-400",
 };
 
