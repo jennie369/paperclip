@@ -2,10 +2,9 @@
 // Ticket modal reuses TicketForm + SimpleModal from CRM (no duplication)
 
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Package, Ticket, User, Pin, BellOff,
+  Package, Ticket, Pin, BellOff,
   ClipboardList, X, Pause, Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,7 +28,6 @@ interface Props {
 
 const defaultTicketForm = { title: '', description: '', category: 'general', priority: 'medium', status: 'open', assigned_to_agent: '' };
 export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPanel, onAction, channelMap }: Props) {
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [ticketForm, setTicketForm] = useState(defaultTicketForm);
@@ -178,14 +176,11 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
                   : <><Pause className="h-3.5 w-3.5" /> Dừng Bot</>}
               </button>
             )}
-            <IconBtn icon={<Package className="h-3.5 w-3.5" />} title="Tạo đơn" onClick={() => onShowOrderPanel?.()} />
-            <IconBtn icon={<Ticket className="h-3.5 w-3.5" />} title="Phiếu HT" onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }} />
-            {conv.customer?.id && (
-              <IconBtn icon={<User className="h-3.5 w-3.5" />} title="Xem CRM" onClick={() => navigate(`/crm/customers/${conv.customer!.id}`)} />
-            )}
-            <IconBtn icon={<Pin className="h-3.5 w-3.5" />} title={conv.is_pinned ? "Bỏ ghim" : "Ghim"} onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))} active={conv.is_pinned} />
-            <IconBtn icon={<BellOff className="h-3.5 w-3.5" />} title={conv.is_muted ? "Bật TB" : "Tắt TB"} onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))} active={conv.is_muted} />
-            <IconBtn icon={<ClipboardList className="h-3.5 w-3.5" />} title="Xem CRM" onClick={onToggleCustomer} />
+            <IconBtn icon={<Package className="h-4 w-4" />} label="Tạo đơn" title="Tạo đơn hàng cho khách" onClick={() => onShowOrderPanel?.()} />
+            <IconBtn icon={<Ticket className="h-4 w-4" />} label="Phiếu HT" title="Tạo phiếu hỗ trợ" onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }} />
+            <IconBtn icon={<Pin className="h-4 w-4" />} label={conv.is_pinned ? "Bỏ ghim" : "Ghim"} title={conv.is_pinned ? "Bỏ ghim hội thoại" : "Ghim hội thoại lên đầu"} onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))} active={conv.is_pinned} />
+            <IconBtn icon={<BellOff className="h-4 w-4" />} label={conv.is_muted ? "Bật TB" : "Tắt TB"} title={conv.is_muted ? "Bật lại thông báo" : "Tắt thông báo hội thoại"} onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))} active={conv.is_muted} />
+            <IconBtn icon={<ClipboardList className="h-4 w-4" />} label="Hồ sơ" title="Mở/đóng hồ sơ khách hàng" onClick={onToggleCustomer} />
           </div>
         </div>
       </div>
@@ -250,14 +245,16 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
   );
 }
 
-// Compact icon-only button for header actions
+// Header action button — icon + short label, larger hit area for easy clicking.
 function IconBtn({
   icon,
+  label,
   title,
   onClick,
   active,
 }: {
   icon: React.ReactNode;
+  label: string;
   title: string;
   onClick: () => void;
   active?: boolean;
@@ -266,13 +263,14 @@ function IconBtn({
     <button
       onClick={onClick}
       title={title}
-      className={`p-1.5 rounded-md transition-colors ${
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
         active
           ? "bg-primary/10 text-primary"
           : "text-muted-foreground hover:bg-muted hover:text-foreground"
       }`}
     >
       {icon}
+      <span>{label}</span>
     </button>
   );
 }
