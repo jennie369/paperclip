@@ -48,6 +48,8 @@ export interface PendingMessage {
   extra_data?: Record<string, unknown>;
   ts: string;
   created_at: string;
+  starred?: boolean;
+  pinned?: boolean;
 }
 
 export interface ChannelSession {
@@ -111,6 +113,8 @@ export interface ConversationMessage {
   timestamp: string;
   extra_data?: Record<string, unknown>;
   extraData?: Record<string, unknown>;
+  starred?: boolean;
+  pinned?: boolean;
 }
 
 export type ConversationLabel = "hot" | "warm" | "cold" | "vip" | "spam";
@@ -220,6 +224,16 @@ export const channelsApi = {
   getSessionMessages: (sessionKey: string, limit = 100) =>
     api.get<PendingMessage[]>(
       `/channels/sessions/${encodeURIComponent(sessionKey)}/messages?limit=${limit}`
+    ),
+
+  // Operator-side per-message flags (star / pin / delete-for-me). Partial patch.
+  setMessageFlag: (
+    messageId: string,
+    patch: { starred?: boolean; pinned?: boolean; deleted_for_me?: boolean; session_key?: string }
+  ) =>
+    api.post<{ message_id: string; starred: boolean; pinned: boolean; deleted_for_me: boolean }>(
+      `/channels/messages/${encodeURIComponent(messageId)}/flags`,
+      patch
     ),
 
   getChannelSettings: (channelName: string) =>

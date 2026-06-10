@@ -147,7 +147,51 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
     return tb.localeCompare(ta);
   });
 
-  res.json(messages.slice(0, limit));
+  // Apply operator-side flags (star / pin / delete-for-me) from inbox_message_flags.
+  // Keyed by the message uuid (unique across both source tables).
+  const ids = messages.map((m: any) => m.id).filter(Boolean);
+  const flagMap: Record<string, { starred: boolean; pinned: boolean; deleted_for_me: boolean }> = {};
+  if (ids.length) {
+    const { data: flags } = await supabase
+      .from('inbox_message_flags')
+      .select('message_id, starred, pinned, deleted_for_me')
+      .in('message_id', ids);
+    for (const f of flags || []) flagMap[(f as any).message_id] = f as any;
+  }
+
+  const withFlags = messages
+    .filter((m: any) => !flagMap[m.id]?.deleted_for_me) // hide messages deleted on our side only
+    .map((m: any) => ({
+      ...m,
+      starred: flagMap[m.id]?.starred || false,
+      pinned: flagMap[m.id]?.pinned || false,
+    }));
+
+  res.json(withFlags.slice(0, limit));
+});
+
+/**
+ * POST /api/channels/messages/:id/flags
+ * Toggle operator-side per-message flags (star / pin / delete-for-me). Partial
+ * upsert — only provided fields change; others keep their stored value.
+ */
+router.post('/messages/:id/flags', async (req, res) => {
+  const { id } = req.params;
+  const { starred, pinned, deleted_for_me, session_key } = req.body || {};
+  const patch: Record<string, any> = { message_id: id, updated_at: new Date().toISOString() };
+  if (starred !== undefined) patch.starred = !!starred;
+  if (pinned !== undefined) patch.pinned = !!pinned;
+  if (deleted_for_me !== undefined) patch.deleted_for_me = !!deleted_for_me;
+  if (session_key !== undefined) patch.session_key = session_key;
+
+  const { data, error } = await supabase
+    .from('inbox_message_flags')
+    .upsert(patch, { onConflict: 'message_id' })
+    .select('message_id, starred, pinned, deleted_for_me')
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 /**

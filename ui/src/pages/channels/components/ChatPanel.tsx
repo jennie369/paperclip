@@ -223,6 +223,20 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
     setMenuMsgId(null);
   };
 
+  // Toggle/persist an operator-side message flag (star / pin / delete-for-me) via BE.
+  const setFlag = async (
+    msgId: string,
+    patch: { starred?: boolean; pinned?: boolean; deleted_for_me?: boolean }
+  ) => {
+    setMenuMsgId(null);
+    try {
+      await channelsApi.setMessageFlag(msgId, { ...patch, session_key: conv.session_key });
+    } catch (e) {
+      console.error("setMessageFlag failed", e);
+    }
+    refetch();
+  };
+
   // Reverse messages (API returns newest first)
   const sortedMsgs = [...messages].reverse();
 
@@ -304,6 +318,8 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
             const msgId = msg.id || String(i);
             const reactions = messageReactions[msgId] || [];
             const bodyText = msg.body || "";
+            const isPinned = !!(msg as { pinned?: boolean }).pinned;
+            const isStarred = !!(msg as { starred?: boolean }).starred;
 
             // Consolidated hover toolbar — reaction + reply + "..." menu, grouped.
             // Sits on the INNER side of the bubble (toward the center): right of an
@@ -366,12 +382,25 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                         label={copiedMsgId === msgId ? "Đã copy" : "Copy tin nhắn"}
                         onClick={() => copyMessage(msgId, bodyText)}
                       />
-                      <MenuItem icon={<Pin />} label="Ghim tin nhắn" soon />
-                      <MenuItem icon={<Star />} label="Đánh dấu tin nhắn" soon />
+                      <MenuItem
+                        icon={<Pin />}
+                        label={isPinned ? "Bỏ ghim tin nhắn" : "Ghim tin nhắn"}
+                        onClick={() => setFlag(msgId, { pinned: !isPinned })}
+                      />
+                      <MenuItem
+                        icon={<Star />}
+                        label={isStarred ? "Bỏ đánh dấu" : "Đánh dấu tin nhắn"}
+                        onClick={() => setFlag(msgId, { starred: !isStarred })}
+                      />
                       <MenuItem icon={<ListChecks />} label="Chọn nhiều tin nhắn" soon />
                       <div className="my-1 border-t border-border/60" />
                       {isOutbound && <MenuItem icon={<RotateCcw />} label="Thu hồi" soon danger />}
-                      <MenuItem icon={<Trash2 />} label="Xóa chỉ ở phía tôi" soon danger />
+                      <MenuItem
+                        icon={<Trash2 />}
+                        label="Xóa chỉ ở phía tôi"
+                        danger
+                        onClick={() => setFlag(msgId, { deleted_for_me: true })}
+                      />
                     </div>
                   </>
                 )}
@@ -453,6 +482,22 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                         />
                       )}
                     </div>
+
+                    {/* Pin / star indicators (operator-side flags) */}
+                    {(isPinned || isStarred) && (
+                      <div className={`flex items-center gap-1.5 mt-0.5 ${isOutbound ? "justify-end" : "justify-start"}`}>
+                        {isPinned && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 dark:text-amber-500">
+                            <Pin className="h-3 w-3" /> Đã ghim
+                          </span>
+                        )}
+                        {isStarred && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-yellow-600 dark:text-yellow-500">
+                            <Star className="h-3 w-3 fill-current" /> Đã đánh dấu
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Existing reactions */}
                     {reactions.length > 0 && (
