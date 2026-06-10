@@ -17,9 +17,6 @@ const STATUS_LABELS: Record<string, string> = {
   dang_tu_van: "Tư vấn", cho_thanh_toan: "Chờ TT", da_mua: "Đã mua",
   khach_vip: "VIP", khach_than_thiet: "Thân thiết", churned: "Churned", blacklist: "Blacklist",
 };
-const TEMP_LABELS: Record<string, string> = {
-  cold: "Lạnh", warm: "Ấm", hot: "Nóng", on_fire: "Rất nóng",
-};
 
 interface RecentOrder {
   id: string;
@@ -181,31 +178,20 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </button>
       </div>
 
-      {/* Inline edit: Trạng thái + Nhiệt độ lead — autosave xuống crm_customers thật */}
+      {/* Inline edit: Trạng thái (funnel thủ công) — autosave xuống crm_customers.
+          Nhiệt độ lead KHÔNG có ở đây vì là cột dẫn xuất (trigger tự tính từ
+          lead_score) — chỉ hiển thị read-only ở khối Lead Score bên dưới. */}
       {customer?.id && (
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
-            <select
-              value={customer.status || "lead_moi"}
-              onChange={(e) => updateMutation.mutate({ status: e.target.value })}
-              disabled={updateMutation.isPending}
-              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[11px] text-muted-foreground font-medium">Nhiệt độ</label>
-            <select
-              value={customer.lead_temperature || "cold"}
-              onChange={(e) => updateMutation.mutate({ lead_temperature: e.target.value })}
-              disabled={updateMutation.isPending}
-              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              {Object.entries(TEMP_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </div>
+        <div>
+          <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
+          <select
+            value={customer.status || "lead_moi"}
+            onChange={(e) => updateMutation.mutate({ status: e.target.value })}
+            disabled={updateMutation.isPending}
+            className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+          >
+            {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
         </div>
       )}
 

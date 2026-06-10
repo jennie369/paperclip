@@ -29,6 +29,8 @@ const statusLabels: Record<string, string> = {
   dang_tu_van: 'Tư vấn', cho_thanh_toan: 'Chờ TT', da_mua: 'Đã mua',
   khach_vip: 'VIP', khach_than_thiet: 'Thân thiết', churned: 'Churned', blacklist: 'Blacklist',
 };
+const tempLabel = (t?: string): string =>
+  ({ cold: 'Lạnh', warm: 'Ấm', hot: 'Nóng', on_fire: 'Rất nóng' }[t || 'cold'] || 'Lạnh');
 
 const tabs = [
   { key: 'overview', label: 'Tổng quan', icon: User },
@@ -147,19 +149,14 @@ export function CustomerDetailPage() {
           </select>
         </div>
 
-        {/* Nhiệt độ lead */}
+        {/* Nhiệt độ lead — READ-ONLY: cột dẫn xuất do trigger trg_lead_score tự
+            tính từ lead_score (>=80 on_fire, >=60 hot, >=30 warm, else cold). */}
         <div>
           <label className="text-xs font-medium text-muted-foreground">Nhiệt độ lead</label>
-          <select
-            value={c.lead_temperature || 'cold'}
-            onChange={e => updateMut.mutate({ lead_temperature: e.target.value })}
-            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
-          >
-            <option value="cold">Lạnh</option>
-            <option value="warm">Ấm</option>
-            <option value="hot">Nóng</option>
-            <option value="on_fire">Rất nóng</option>
-          </select>
+          <div className="w-full rounded-md border border-input bg-muted/30 px-3 py-1.5 text-sm mt-1 flex items-center justify-between">
+            <span className="capitalize">{tempLabel(c.lead_temperature)}</span>
+            <span className="text-xs text-muted-foreground" title="Tự động tính từ điểm lead, không sửa tay">tự động · {c.lead_score ?? 0}đ</span>
+          </div>
         </div>
 
         {/* Stats */}
