@@ -436,6 +436,18 @@ function ChannelSettingsList() {
       channelsApi.updateChannelSettings(name, { enabled }),
     onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
   });
+  // Agent options for the inline per-row picker (assign/unassign without leaving the list).
+  const { data: agentOptions = [] } = useQuery({
+    queryKey: ["agent-configs"],
+    queryFn: agentConfigsApi.fetchAll,
+    staleTime: 60_000,
+  });
+  // Change a channel's default agent inline + auto-save. "" → null (no agent).
+  const setChannelAgentMut = useMutation({
+    mutationFn: ({ name, agent_slug }: { name: string; agent_slug: string }) =>
+      channelsApi.updateChannelSettings(name, { agent_slug: agent_slug || null } as any),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
+  });
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
@@ -525,9 +537,23 @@ function ChannelSettingsList() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Badge variant="secondary" className="text-[10px]">
-                {inst.agent_slug || "không có agent"}
-              </Badge>
+              <select
+                value={inst.agent_slug || ""}
+                disabled={setChannelAgentMut.isPending && setChannelAgentMut.variables?.name === inst.name}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { e.stopPropagation(); setChannelAgentMut.mutate({ name: inst.name, agent_slug: e.target.value }); }}
+                title="Đổi agent cho kênh — tự lưu ngay, không cần vào trang cài đặt"
+                className={`text-[11px] rounded-md border px-2 py-1 max-w-[190px] cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 ${
+                  inst.agent_slug
+                    ? "border-border/60 bg-muted/40 hover:bg-muted text-foreground"
+                    : "border-dashed border-border/60 bg-transparent text-muted-foreground hover:bg-muted/40"
+                }`}
+              >
+                <option value="">— Không có agent —</option>
+                {agentOptions.map((a: any) => (
+                  <option key={a.slug} value={a.slug}>{a.display_name} ({a.slug})</option>
+                ))}
+              </select>
               {inst.agent_slug && (
                 <Button
                   size="sm"
