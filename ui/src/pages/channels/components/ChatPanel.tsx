@@ -15,7 +15,6 @@ const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "😡"];
 interface Props {
   conversation: ChannelSession;
   onToggleCustomer: () => void;
-  onShowOrderPanel?: () => void;
   onAction: () => void;
   channelMap?: ChannelDisplayMap;
 }
@@ -91,7 +90,7 @@ function MenuItem({
   );
 }
 
-export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPanel, onAction, channelMap }: Props) {
+export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, channelMap }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
@@ -252,7 +251,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
 
   return (
     <div className="flex flex-col h-full">
-      <ChatHeader conversation={conv} onToggleCustomer={onToggleCustomer} onShowOrderPanel={onShowOrderPanel} onAction={onAction} channelMap={channelMap} />
+      <ChatHeader conversation={conv} onToggleCustomer={onToggleCustomer} onAction={onAction} channelMap={channelMap} />
 
       {/* FIX 4: Search bar (slides in on Ctrl+F) */}
       {showSearch && (

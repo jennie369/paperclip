@@ -4,12 +4,18 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake, Pencil, Check } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake, Pencil, Check, CalendarClock } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { SimpleModal } from "../../crm/components/SimpleModal";
 import { getChannelVisual } from "./channelConfig";
+import type { CommandCrmProfile } from "@/components/crm-messaging/command-center/types";
 import { CommandCustomer360 } from "@/components/crm-messaging/command-center/CommandCustomer360";
 import { mapCrm } from "@/components/crm-messaging/command-center/adapters";
+
+const defaultTicketForm = { title: "", description: "", category: "general", priority: "medium", status: "open", assigned_to_agent: "" };
 
 // SSOT enums (crm_customers) — khớp docs/design_and_architecture/CRM_AND_META_CAPI_SSOT.md
 const STATUS_LABELS: Record<string, string> = {
@@ -38,9 +44,10 @@ interface RecentTicket {
 interface Props {
   conversation: ChannelSession;
   onClose: () => void;
+  onShowOrderPanel?: () => void;
 }
 
-export function CustomerSidebar({ conversation: conv, onClose }: Props) {
+export function CustomerSidebar({ conversation: conv, onClose, onShowOrderPanel }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const customer = conv.customer;
@@ -68,6 +75,32 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
     if (v && v !== customer?.display_name) updateMutation.mutate({ display_name: v });
     setEditingName(false);
   };
+
+  // ── Lịch Hẹn: inline date picker → next_follow_up_at (cột đã whitelist) ──
+  const [showFollowUp, setShowFollowUp] = useState(false);
+
+  // ── Phiếu HT: ticket modal (move từ ChatHeader vào card) ──
+  const [showTicketModal, setShowTicketModal] = useState(false);
+  const [ticketForm, setTicketForm] = useState(defaultTicketForm);
+  const { data: agentList = [] } = useQuery({
+    queryKey: ["agents-list"],
+    queryFn: async () => {
+      const res = await fetch("/api/channels/agent-configs");
+      if (!res.ok) return [];
+      return (await res.json()).map((a: any) => ({ slug: a.slug, name: a.display_name || a.slug }));
+    },
+    staleTime: 60_000,
+    enabled: showTicketModal,
+  });
+  const createTicketMut = useMutation({
+    mutationFn: (d: any) => crmApi.createTicket({ ...d, customer_id: customer?.id }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["crm"] });
+      queryClient.invalidateQueries({ queryKey: ["customer-tickets", customer?.id] });
+      setShowTicketModal(false);
+      setTicketForm(defaultTicketForm);
+    },
+  });
 
   // Sync Gemral data
   const syncMutation = useMutation({
@@ -196,22 +229,47 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
       )}
 
       {/* Rich Customer 360 card — same component as /crm-inbox Command Center.
-          Profile built from real conv.customer via mapCrm; actions wired to real
-          handlers (tel: dial, open full CRM record) — no dead/showcase buttons. */}
+          Quick actions THẬT (không showcase/navigate): Gọi (tel) · Lịch Hẹn
+          (inline date) · Tạo đơn (mở order panel) · Phiếu HT (modal ticket). */}
       {customer && (
         <CommandCustomer360
-          crm={mapCrm(conv)}
+          crm={{
+            ...mapCrm(conv),
+            quickActions: [
+              ...(customer.phone ? [{ label: "Gọi Ngay", icon: "phone", tone: "success" as const }] : []),
+              { label: "Lịch Hẹn", icon: "calendar", tone: "primary" as const },
+              { label: "Tạo đơn", icon: "package", tone: "primary" as const },
+              { label: "Phiếu HT", icon: "ticket", tone: "neutral" as const },
+            ],
+          } as CommandCrmProfile}
           onEdit={() => { setNameDraft(customer.display_name || displayName); setEditingName(true); }}
           onAddTag={goProfile}
           onCreateQuote={goProfile}
           onQuickAction={(a) => {
-            if (a.icon === "phone" && customer.phone) {
-              window.location.href = `tel:${customer.phone}`;
-            } else {
-              goProfile();
-            }
+            if (a.icon === "phone" && customer.phone) window.location.href = `tel:${customer.phone}`;
+            else if (a.icon === "calendar") setShowFollowUp((v) => !v);
+            else if (a.icon === "package") onShowOrderPanel?.();
+            else if (a.icon === "ticket") { setTicketForm(defaultTicketForm); setShowTicketModal(true); }
           }}
         />
+      )}
+
+      {/* Lịch Hẹn — inline date, autosave next_follow_up_at */}
+      {customer?.id && showFollowUp && (
+        <div className="rounded-md border bg-muted/20 p-2">
+          <label className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
+            <CalendarClock className="h-3 w-3" /> Hẹn follow-up
+          </label>
+          <input
+            type="date"
+            value={customer.next_follow_up_at ? customer.next_follow_up_at.slice(0, 10) : ""}
+            onChange={(e) => {
+              updateMutation.mutate({ next_follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null });
+              setShowFollowUp(false);
+            }}
+            className="w-full mt-1 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+        </div>
       )}
 
       {/* Lead score (Command Center card omits it) */}
@@ -390,7 +448,7 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
       {/* Link to full CRM profile */}
       {customer?.id && (
         <button
-          onClick={() => navigate(`/crm/customers/${customer.id}`)}
+          onClick={goProfile}
           className="w-full flex items-center justify-center gap-1.5 text-xs text-primary hover:underline py-2"
         >
           Xem hồ sơ đầy đủ <ExternalLink className="h-3 w-3" />
@@ -406,6 +464,57 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           </p>
         </div>
       )}
+
+      {/* Modal: Phiếu hỗ trợ (chuyển từ ChatHeader vào card — reuse SimpleModal) */}
+      <SimpleModal open={showTicketModal} onClose={() => setShowTicketModal(false)} title="Tạo phiếu hỗ trợ mới" footer={<>
+        <Button variant="outline" onClick={() => setShowTicketModal(false)}>Hủy</Button>
+        <Button disabled={!ticketForm.title.trim() || createTicketMut.isPending} onClick={() => createTicketMut.mutate(ticketForm)}>
+          {createTicketMut.isPending ? "Đang tạo..." : "Tạo phiếu"}
+        </Button>
+      </>}>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Tiêu đề *</label>
+            <Input value={ticketForm.title} onChange={(e) => setTicketForm((f) => ({ ...f, title: e.target.value }))} placeholder="Nhập tiêu đề..." />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Mô tả</label>
+            <textarea value={ticketForm.description} onChange={(e) => setTicketForm((f) => ({ ...f, description: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[80px]" placeholder="Mô tả chi tiết..." />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium">Loại</label>
+              <select value={ticketForm.category} onChange={(e) => setTicketForm((f) => ({ ...f, category: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                <option value="general">Chung</option>
+                <option value="product_inquiry">Hỏi sản phẩm</option>
+                <option value="order_issue">Vấn đề đơn hàng</option>
+                <option value="payment_issue">Thanh toán</option>
+                <option value="shipping_issue">Giao hàng</option>
+                <option value="refund_request">Hoàn tiền</option>
+                <option value="technical_support">Kỹ thuật</option>
+                <option value="complaint">Khiếu nại</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Ưu tiên</label>
+              <select value={ticketForm.priority} onChange={(e) => setTicketForm((f) => ({ ...f, priority: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                <option value="low">Thấp</option>
+                <option value="medium">Trung bình</option>
+                <option value="high">Cao</option>
+                <option value="urgent">Khẩn cấp</option>
+                <option value="critical">Nghiêm trọng</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-medium">Gán cho agent</label>
+            <select value={ticketForm.assigned_to_agent} onChange={(e) => setTicketForm((f) => ({ ...f, assigned_to_agent: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="">— Không gán —</option>
+              {(agentList as Array<{ slug: string; name: string }>).map((a) => <option key={a.slug} value={a.slug}>{a.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </SimpleModal>
     </div>
   );
 }

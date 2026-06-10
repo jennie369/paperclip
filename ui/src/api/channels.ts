@@ -94,6 +94,8 @@ export interface ChannelSession {
     tags?: string[];
     ai_summary?: string | null;
     gemral_data?: Record<string, unknown> | null;
+    total_revenue?: number | null;
+    next_follow_up_at?: string | null;
   } | null;
 }
 

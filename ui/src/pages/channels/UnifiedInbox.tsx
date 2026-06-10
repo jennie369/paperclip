@@ -331,7 +331,6 @@ export function UnifiedInbox() {
                 <ChatPanel
                   conversation={selected}
                   onToggleCustomer={() => setRightPanel(p => p === "customer" ? "none" : "customer")}
-                  onShowOrderPanel={() => setRightPanel(p => p === "order" ? "none" : "order")}
                   onAction={handleAction}
                   channelMap={channelMap}
                 />
@@ -346,6 +345,7 @@ export function UnifiedInbox() {
                 <CustomerSidebar
                   conversation={selected}
                   onClose={() => setRightPanel("none")}
+                  onShowOrderPanel={() => setRightPanel("order")}
                 />
               </div>
             )}

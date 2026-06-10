@@ -17,6 +17,8 @@ import {
   Calendar,
   Phone,
   MoreHorizontal,
+  Package,
+  Ticket,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -28,6 +30,8 @@ const QUICK_ICON: Record<string, LucideIcon> = {
   calendar: Calendar,
   phone: Phone,
   "more-horizontal": MoreHorizontal,
+  package: Package,
+  ticket: Ticket,
 };
 
 const TAG_CHIP: Record<CrmTone, string> = {

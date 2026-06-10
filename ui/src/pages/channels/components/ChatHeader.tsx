@@ -1,37 +1,25 @@
 // Chat Header — customer info + quick actions
-// Ticket modal reuses TicketForm + SimpleModal from CRM (no duplication)
+// ("Tạo đơn" + "Phiếu HT" đã chuyển sang card Customer 360 trong panel Hồ sơ.)
 
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import {
-  Package, Ticket, Pin, BellOff,
-  ClipboardList, X, Pause, Play,
+  Pin, BellOff, ClipboardList, X, Pause, Play,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
 import { channelsApi, type ChannelSession } from "@/api/channels";
-import { crmApi } from "@/api/crm";
-import { SimpleModal } from "../../crm/components/SimpleModal";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { AgentBadge } from "@/components/ChannelBadge";
 
 interface Props {
   conversation: ChannelSession;
   onToggleCustomer: () => void;
-  onShowOrderPanel?: () => void;
   onAction: () => void;
   channelMap?: ChannelDisplayMap;
 }
 
-const defaultTicketForm = { title: '', description: '', category: 'general', priority: 'medium', status: 'open', assigned_to_agent: '' };
-export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPanel, onAction, channelMap }: Props) {
-  const qc = useQueryClient();
-  const [showTicketModal, setShowTicketModal] = useState(false);
-  const [ticketForm, setTicketForm] = useState(defaultTicketForm);
-
+export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, channelMap }: Props) {
   const chInfo = conv.channel_name && channelMap ? channelMap[conv.channel_name] : null;
   const channelLabel = chInfo?.display_name || conv.channel_name || "Kênh";
   const channelColor = chInfo?.color || "#6B7280";
@@ -41,29 +29,6 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
   // a single thread instantly — agent goes silent for THIS customer only,
   // messages still arrive. Channel-wide pause lives in Cài đặt kênh.
   const botPaused = (conv.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true;
-
-  // Agent list for ticket assignment (same query as TicketListPage)
-  const { data: agents } = useQuery({
-    queryKey: ['agents-list'],
-    queryFn: async () => {
-      const res = await fetch('/api/channels/agent-configs');
-      if (!res.ok) return [];
-      return (await res.json()).map((a: any) => ({ slug: a.slug, name: a.display_name || a.slug }));
-    },
-    staleTime: 60_000,
-    enabled: showTicketModal,
-  });
-  const agentList = (agents || []) as Array<{ slug: string; name: string }>;
-
-  // Create ticket mutation (same as TicketListPage)
-  const createTicketMut = useMutation({
-    mutationFn: (d: any) => crmApi.createTicket(d),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['crm'] });
-      setShowTicketModal(false);
-      setTicketForm(defaultTicketForm);
-    },
-  });
 
   // Agent options for the inline per-chat picker (always loaded — lets the operator
   // turn the bot ON with a chosen agent even on a channel that has no default agent).
@@ -178,8 +143,7 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
                   : <><Pause className="h-3.5 w-3.5" /> Dừng Bot</>}
               </button>
             )}
-            <IconBtn icon={<Package className="h-4 w-4" />} label="Tạo đơn" title="Tạo đơn hàng cho khách" onClick={() => onShowOrderPanel?.()} />
-            <IconBtn icon={<Ticket className="h-4 w-4" />} label="Phiếu HT" title="Tạo phiếu hỗ trợ" onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }} />
+            {/* "Tạo đơn" + "Phiếu HT" đã chuyển vào card Customer 360 (panel Hồ sơ). */}
             <IconBtn icon={<Pin className="h-4 w-4" />} label={conv.is_pinned ? "Bỏ ghim" : "Ghim"} title={conv.is_pinned ? "Bỏ ghim hội thoại" : "Ghim hội thoại lên đầu"} onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))} active={conv.is_pinned} />
             <IconBtn icon={<BellOff className="h-4 w-4" />} label={conv.is_muted ? "Bật TB" : "Tắt TB"} title={conv.is_muted ? "Bật lại thông báo" : "Tắt thông báo hội thoại"} onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))} active={conv.is_muted} />
             <IconBtn icon={<ClipboardList className="h-4 w-4" />} label="Hồ sơ" title="Mở/đóng hồ sơ khách hàng" onClick={onToggleCustomer} />
@@ -187,62 +151,6 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
         </div>
       </div>
 
-      {/* ═══ Modal: Phiếu hỗ trợ (reuse TicketForm từ CRM) ═══ */}
-      <SimpleModal open={showTicketModal} onClose={() => setShowTicketModal(false)} title="Tạo phiếu hỗ trợ mới" footer={<>
-        <Button variant="outline" onClick={() => setShowTicketModal(false)}>Hủy</Button>
-        <Button disabled={!ticketForm.title.trim() || createTicketMut.isPending} onClick={() => createTicketMut.mutate(ticketForm)}>
-          {createTicketMut.isPending ? 'Đang tạo...' : 'Tạo phiếu'}
-        </Button>
-      </>}>
-        {/* Same form as TicketListPage — Tiêu đề, Mô tả, Loại, Ưu tiên, Gán agent */}
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium">Tiêu đề *</label>
-            <Input value={ticketForm.title} onChange={e => setTicketForm(f => ({ ...f, title: e.target.value }))} placeholder="Nhập tiêu đề..." />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Mô tả</label>
-            <textarea value={ticketForm.description} onChange={e => setTicketForm(f => ({ ...f, description: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[80px]" placeholder="Mô tả chi tiết..." />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium">Loại</label>
-              <select value={ticketForm.category} onChange={e => setTicketForm(f => ({ ...f, category: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option value="general">Chung</option>
-                <option value="product_inquiry">Hỏi sản phẩm</option>
-                <option value="order_issue">Vấn đề đơn hàng</option>
-                <option value="payment_issue">Thanh toán</option>
-                <option value="shipping_issue">Giao hàng</option>
-                <option value="refund_request">Hoàn tiền</option>
-                <option value="technical_support">Kỹ thuật</option>
-                <option value="complaint">Khiếu nại</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm font-medium">Ưu tiên</label>
-              <select value={ticketForm.priority} onChange={e => setTicketForm(f => ({ ...f, priority: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option value="low">Thấp</option>
-                <option value="medium">Trung bình</option>
-                <option value="high">Cao</option>
-                <option value="urgent">Khẩn cấp</option>
-                <option value="critical">Nghiêm trọng</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="text-sm font-medium">Gán cho agent</label>
-            <select value={ticketForm.assigned_to_agent} onChange={e => setTicketForm(f => ({ ...f, assigned_to_agent: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-              <option value="">— Không gán —</option>
-              {agentList.map(a => <option key={a.slug} value={a.slug}>{a.name}</option>)}
-            </select>
-            {ticketForm.assigned_to_agent && (
-              <p className="text-xs text-blue-600 mt-1">
-                Agent "{ticketForm.assigned_to_agent}" sẽ nhận thông báo qua War Room và xử lý ngay.
-              </p>
-            )}
-          </div>
-        </div>
-      </SimpleModal>
     </>
   );
 }

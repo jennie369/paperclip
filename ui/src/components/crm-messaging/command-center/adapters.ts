@@ -129,12 +129,16 @@ const DEFAULT_QUICK_ACTIONS: CommandCrmProfile["quickActions"] = [
 export function mapCrm(s: ChannelSession): CommandCrmProfile {
   const c = s.customer;
   const tags: CrmTag[] = (c?.tags ?? []).map((t) => ({ label: t, tone: tagTone(t) }));
+  // LTV = doanh thu thực (crm_customers.total_revenue, tổng từ đơn Shopify 'paid').
+  // Fallback gemral total_spent. 0/không có → "Chưa có đơn".
+  const rev = typeof c?.total_revenue === "number" ? c.total_revenue : undefined;
   const spent = (c?.gemral_data as { total_spent?: number } | null | undefined)?.total_spent;
+  const ltvNum = rev && rev > 0 ? rev : (typeof spent === "number" && spent > 0 ? spent : 0);
   return {
     company: undefined,
     phone: c?.phone || undefined,
     email: c?.email || undefined,
-    ltv: typeof spent === "number" ? `${spent.toLocaleString("vi-VN")}₫` : "Chưa cập nhật",
+    ltv: ltvNum > 0 ? `${ltvNum.toLocaleString("vi-VN")}₫` : "Chưa có đơn",
     tags,
     quickActions: DEFAULT_QUICK_ACTIONS,
     // journey/dealStages: no read endpoint yet → omitted (Phase C / crm-routes enrich).
