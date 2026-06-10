@@ -178,25 +178,50 @@ router.post('/:key/label', async (req, res) => {
   res.json({ label, message: label ? `Đã phân loại: ${labels[label] || label}` : 'Đã gỡ phân loại' });
 });
 
-// ── POST /api/channels/conversations/:key/agent — Change agent ──
+// ── POST /api/channels/conversations/:key/agent — Set the agent for THIS chat ──
+// Lets the operator turn the bot ON (with a chosen agent) or OFF for a single
+// conversation — even on a channel that has no default agent. Writes a
+// chat_agent_overrides row that resolveAgent's Tier-2 actually matches
+// (match_type='chat_id'). Tier-2 is queried per-message (uncached) so the change
+// takes effect on the very next inbound message — no cache flush needed.
+//
+// Body: { agent_slug }. Empty/null agent_slug = bot OFF for this chat (action='ignore',
+// which suppresses even a channel default). A non-empty slug = bot ON with that agent.
 router.post('/:key/agent', async (req, res) => {
-  const { agent_slug } = req.body;
-  await supabase.from('channel_sessions')
-    .update({ agent_slug }).eq('session_key', req.params.key);
+  const agentSlug = (req.body?.agent_slug || '').trim() || null;
+  const key = req.params.key;
 
-  // Create override for future messages
+  // Keep the session's own agent_slug in sync (drives the inbox UI display).
+  await supabase.from('channel_sessions')
+    .update({ agent_slug: agentSlug }).eq('session_key', key);
+
   const { data: sess } = await supabase.from('channel_sessions')
-    .select('customer_id, sender_id').eq('session_key', req.params.key).single();
-  if (sess?.customer_id) {
-    await supabase.from('chat_agent_overrides').upsert({
-      customer_id: sess.customer_id,
-      action: 'assign',
-      agent_slug,
-      reason: 'Đổi agent từ hội thoại',
+    .select('chat_id, sender_id').eq('session_key', key).single();
+
+  // resolveAgent Tier-2 matches match_value against msg.chatId / msg.senderId.
+  const matchValue = sess?.chat_id || sess?.sender_id || null;
+  if (matchValue) {
+    const matchType = sess?.chat_id ? 'chat_id' : 'sender_id';
+    // Replace any prior per-chat override for this thread (idempotent — no reliance
+    // on a unique constraint), then write the explicit current choice.
+    await supabase.from('chat_agent_overrides')
+      .delete().eq('match_type', matchType).eq('match_value', matchValue);
+    await supabase.from('chat_agent_overrides').insert({
+      match_type: matchType,
+      match_value: matchValue,
+      agent_slug: agentSlug,
+      action: agentSlug ? 'route' : 'ignore',
+      is_active: true,
+      priority: 100, // beat channel default + keyword rules
+      reason: agentSlug ? 'Bật bot/đổi agent từ hội thoại' : 'Tắt bot cho hội thoại này',
+      created_by: 'board',
     });
   }
 
-  res.json({ agent_slug, message: `Đã gán agent: ${agent_slug}` });
+  res.json({
+    agent_slug: agentSlug,
+    message: agentSlug ? `Đã bật bot với agent: ${agentSlug}` : 'Đã tắt bot cho hội thoại này',
+  });
 });
 
 // ── POST /api/channels/conversations/:key/export — Export conversation ──

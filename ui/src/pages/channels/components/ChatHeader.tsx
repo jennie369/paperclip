@@ -64,6 +64,24 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
     },
   });
 
+  // Agent options for the inline per-chat picker (always loaded — lets the operator
+  // turn the bot ON with a chosen agent even on a channel that has no default agent).
+  const { data: chatAgentOptions = [] } = useQuery({
+    queryKey: ['chat-agent-options'],
+    queryFn: async () => {
+      const res = await fetch('/api/channels/agent-configs');
+      if (!res.ok) return [];
+      return (await res.json()).map((a: any) => ({ slug: a.slug, name: a.display_name || a.slug }));
+    },
+    staleTime: 60_000,
+  });
+  // Assign / clear the agent for THIS conversation (writes a chat_id override that
+  // resolveAgent matches; takes effect on the next inbound message).
+  const changeAgentMut = useMutation({
+    mutationFn: (slug: string) => channelsApi.changeAgent(conv.session_key, slug),
+    onSettled: () => onAction(),
+  });
+
   const quickAction = async (fn: () => Promise<any>) => {
     await fn();
     onAction();
@@ -100,6 +118,24 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
 
           {/* Quick actions inline */}
           <div className="flex items-center gap-1 shrink-0">
+            {/* Per-chat agent picker — turn bot ON (pick agent) / OFF (— Không bot —),
+                works even when the channel has no default agent. */}
+            <select
+              value={conv.agent_slug || ""}
+              disabled={changeAgentMut.isPending}
+              onChange={(e) => changeAgentMut.mutate(e.target.value)}
+              title="Chọn agent trả lời hội thoại này (bật bot) — hoặc '— Không bot —' để tắt bot riêng chat này"
+              className={`text-[11px] rounded-md border px-1.5 py-1 max-w-[150px] cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 mr-1 ${
+                conv.agent_slug
+                  ? "border-border/60 bg-muted/50 text-foreground"
+                  : "border-dashed border-amber-500/50 bg-amber-500/5 text-amber-600 font-medium"
+              }`}
+            >
+              <option value="">— Không bot —</option>
+              {chatAgentOptions.map((a: { slug: string; name: string }) => (
+                <option key={a.slug} value={a.slug}>{a.name}</option>
+              ))}
+            </select>
             {conv.agent_slug && (
               <button
                 onClick={() => quickAction(() => channelsApi.setBotPaused(conv.session_key, !botPaused))}
