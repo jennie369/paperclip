@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake, Pencil, Check, CalendarClock } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,16 @@ const STATUS_LABELS: Record<string, string> = {
   dang_tu_van: "Tư vấn", cho_thanh_toan: "Chờ TT", da_mua: "Đã mua",
   khach_vip: "VIP", khach_than_thiet: "Thân thiết", churned: "Churned", blacklist: "Blacklist",
 };
+const TEMP_LABELS: Record<string, string> = { cold: "Lạnh", warm: "Ấm", hot: "Nóng", on_fire: "Rất nóng" };
+const tempLabel = (t?: string | null) => TEMP_LABELS[t || "cold"] || "Lạnh";
+
+function timeAgo(d?: string): string {
+  if (!d) return "—";
+  const ms = Date.now() - new Date(d).getTime();
+  if (ms < 3600000) return Math.round(ms / 60000) + " phút trước";
+  if (ms < 86400000) return Math.round(ms / 3600000) + " giờ trước";
+  return Math.round(ms / 86400000) + " ngày trước";
+}
 
 interface RecentOrder {
   id: string;
@@ -44,10 +54,9 @@ interface RecentTicket {
 interface Props {
   conversation: ChannelSession;
   onClose: () => void;
-  onShowOrderPanel?: () => void;
 }
 
-export function CustomerSidebar({ conversation: conv, onClose, onShowOrderPanel }: Props) {
+export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const customer = conv.customer;
@@ -76,8 +85,31 @@ export function CustomerSidebar({ conversation: conv, onClose, onShowOrderPanel 
     setEditingName(false);
   };
 
-  // ── Lịch Hẹn: inline date picker → next_follow_up_at (cột đã whitelist) ──
-  const [showFollowUp, setShowFollowUp] = useState(false);
+  // ── Full CRM record (parity với trang detail: tags có id, lead_temperature_manual,
+  //    stats, metadata, email_status...) — fetch riêng, KHÔNG phình payload conversations ──
+  const { data: full } = useQuery({
+    queryKey: ["crm", "customer", customer?.id],
+    queryFn: () => crmApi.getCustomer(customer!.id),
+    enabled: !!customer?.id,
+  });
+  const f = full || (customer as any) || {};
+
+  // Tags (crm_tags) + segments (read-only) — như trang detail
+  const { data: allTags = [] } = useQuery({ queryKey: ["crm", "tags"], queryFn: () => crmApi.getTags() });
+  const { data: segments = [] } = useQuery({
+    queryKey: ["crm", "customer-segments", customer?.id],
+    queryFn: () => crmApi.getCustomerSegments(customer!.id),
+    enabled: !!customer?.id,
+  });
+  const addTagMut = useMutation({
+    mutationFn: (tagId: string) => crmApi.addTag(customer!.id, tagId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer?.id] }),
+  });
+  const removeTagMut = useMutation({
+    mutationFn: (tagId: string) => crmApi.removeTag(customer!.id, tagId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer?.id] }),
+  });
+  const fmtVND = (n: any) => (n && Number(n) > 0 ? `${Number(n).toLocaleString("vi-VN")}₫` : "0₫");
 
   // ── Phiếu HT: ticket modal (move từ ChatHeader vào card) ──
   const [showTicketModal, setShowTicketModal] = useState(false);
@@ -211,34 +243,119 @@ export function CustomerSidebar({ conversation: conv, onClose, onShowOrderPanel 
         </button>
       </div>
 
-      {/* Inline edit: Trạng thái (funnel thủ công) — autosave xuống crm_customers.
-          Nhiệt độ lead KHÔNG có ở đây vì là cột dẫn xuất (trigger tự tính từ
-          lead_score) — chỉ hiển thị read-only ở khối Lead Score bên dưới. */}
+      {/* ── Bộ control đầy đủ (parity với cột trái trang CRM detail) ── */}
       {customer?.id && (
-        <div>
-          <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
-          <select
-            value={customer.status || "lead_moi"}
-            onChange={(e) => updateMutation.mutate({ status: e.target.value })}
-            disabled={updateMutation.isPending}
-            className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-          >
-            {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
+        <div className="space-y-3">
+          {/* Trạng thái */}
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
+            <select
+              value={f.status || customer.status || "lead_moi"}
+              onChange={(e) => updateMutation.mutate({ status: e.target.value })}
+              disabled={updateMutation.isPending}
+              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+
+          {/* Nhiệt độ lead — override tay (lead_temperature_manual); __auto__ = về auto */}
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium">
+              Nhiệt độ {f.lead_temperature_manual ? "· tay" : `· tự động (${f.lead_score ?? customer.lead_score ?? 0}đ)`}
+            </label>
+            <select
+              value={f.lead_temperature_manual || "__auto__"}
+              onChange={(e) => updateMutation.mutate({ lead_temperature_manual: e.target.value === "__auto__" ? null : e.target.value })}
+              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="__auto__">Tự động ({tempLabel(f.lead_temperature || customer.lead_temperature)})</option>
+              {Object.entries(TEMP_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+
+          {/* Hẹn follow-up */}
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
+              <CalendarClock className="h-3 w-3" /> Hẹn follow-up
+            </label>
+            <input
+              type="date"
+              value={f.next_follow_up_at ? String(f.next_follow_up_at).slice(0, 10) : ""}
+              onChange={(e) => updateMutation.mutate({ next_follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
+              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+
+          {/* Phân loại (Tags) — add/remove inline */}
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium">Phân loại (Tags)</label>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {((f.tags as any[]) || []).map((t: any) => (
+                <span key={t.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border bg-muted/40">
+                  {t.name}
+                  <button onClick={() => removeTagMut.mutate(t.id)} className="hover:text-destructive" title="Gỡ tag"><X className="h-3 w-3" /></button>
+                </span>
+              ))}
+              {((f.tags as any[]) || []).length === 0 && <span className="text-[11px] text-muted-foreground">Chưa có tag</span>}
+            </div>
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) addTagMut.mutate(e.target.value); }}
+              disabled={addTagMut.isPending}
+              className="w-full mt-1 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="">+ Thêm tag...</option>
+              {(allTags as any[])
+                .filter((t: any) => !((f.tags as any[]) || []).some((ct: any) => ct.id === t.id))
+                .map((t: any) => <option key={t.id} value={t.id}>{t.category ? `[${t.category}] ` : ""}{t.name}</option>)}
+            </select>
+          </div>
+
+          {/* Segment (read-only — audience động theo rule) */}
+          {segments.length > 0 && (
+            <div>
+              <label className="text-[11px] text-muted-foreground font-medium" title="Nhóm động tự gom theo điều kiện — không gán tay">Segment (tự động)</label>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {segments.map((s) => (
+                  <span key={s.id} className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium border border-dashed bg-primary/5 text-primary">{s.name}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Stats + Newsletter */}
+          <div className="grid grid-cols-2 gap-2 text-center text-xs">
+            <div className="rounded-md bg-muted/30 p-2">
+              <div className="font-bold text-base">{f.total_orders ?? 0}</div>
+              <div className="text-muted-foreground">Đơn hàng</div>
+            </div>
+            <div className="rounded-md bg-muted/30 p-2">
+              <div className="font-bold text-base">{fmtVND(f.total_revenue)}</div>
+              <div className="text-muted-foreground">Doanh thu</div>
+            </div>
+          </div>
+          {f.email_status && customer.email && (
+            <div className="flex items-center gap-2 text-[11px]" title="Newsletter quản lý ở Resend (suppression list), không sửa tại đây.">
+              <span className="text-muted-foreground">Newsletter:</span>
+              <span className={`px-1.5 py-0.5 rounded ${f.email_status === "active" ? "bg-green-500/10 text-green-600" : "bg-muted text-muted-foreground"}`}>
+                {f.email_status === "active" ? "Đang nhận" : f.email_status === "unsubscribed" ? "Đã huỷ" : f.email_status}
+              </span>
+              <span className="text-muted-foreground/60">· qua Resend</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Rich Customer 360 card — same component as /crm-inbox Command Center.
-          Quick actions THẬT (không showcase/navigate): Gọi (tel) · Lịch Hẹn
-          (inline date) · Tạo đơn (mở order panel) · Phiếu HT (modal ticket). */}
+      {/* Rich Customer 360 card — contact + LTV + journey + quick actions (Gọi · Phiếu HT).
+          Tags ẩn ở đây (đã có khối tag editable phía trên). Tạo đơn đã bỏ theo yêu cầu. */}
       {customer && (
         <CommandCustomer360
           crm={{
             ...mapCrm(conv),
+            tags: [],
             quickActions: [
               ...(customer.phone ? [{ label: "Gọi Ngay", icon: "phone", tone: "success" as const }] : []),
-              { label: "Lịch Hẹn", icon: "calendar", tone: "primary" as const },
-              { label: "Tạo đơn", icon: "package", tone: "primary" as const },
               { label: "Phiếu HT", icon: "ticket", tone: "neutral" as const },
             ],
           } as CommandCrmProfile}
@@ -247,47 +364,9 @@ export function CustomerSidebar({ conversation: conv, onClose, onShowOrderPanel 
           onCreateQuote={goProfile}
           onQuickAction={(a) => {
             if (a.icon === "phone" && customer.phone) window.location.href = `tel:${customer.phone}`;
-            else if (a.icon === "calendar") setShowFollowUp((v) => !v);
-            else if (a.icon === "package") onShowOrderPanel?.();
             else if (a.icon === "ticket") { setTicketForm(defaultTicketForm); setShowTicketModal(true); }
           }}
         />
-      )}
-
-      {/* Lịch Hẹn — inline date, autosave next_follow_up_at */}
-      {customer?.id && showFollowUp && (
-        <div className="rounded-md border bg-muted/20 p-2">
-          <label className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
-            <CalendarClock className="h-3 w-3" /> Hẹn follow-up
-          </label>
-          <input
-            type="date"
-            value={customer.next_follow_up_at ? customer.next_follow_up_at.slice(0, 10) : ""}
-            onChange={(e) => {
-              updateMutation.mutate({ next_follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null });
-              setShowFollowUp(false);
-            }}
-            className="w-full mt-1 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-          />
-        </div>
-      )}
-
-      {/* Lead score (Command Center card omits it) */}
-      {customer?.lead_score != null && (
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Lead Score</span>
-          <span className={`text-xs font-bold flex items-center gap-1 ${
-            customer.lead_score >= 70 ? "text-red-500" :
-            customer.lead_score >= 40 ? "text-amber-500" : "text-blue-400"
-          }`}>
-            {customer.lead_temperature === "hot"
-              ? <Flame className="h-3.5 w-3.5 shrink-0" />
-              : customer.lead_temperature === "warm"
-              ? <CloudSun className="h-3.5 w-3.5 shrink-0" />
-              : <Snowflake className="h-3.5 w-3.5 shrink-0" />}
-            {customer.lead_score}/100
-          </span>
-        </div>
       )}
 
       {/* Gemral Data */}
@@ -411,13 +490,34 @@ export function CustomerSidebar({ conversation: conv, onClose, onShowOrderPanel 
         </div>
       )}
 
-      {/* AI Summary */}
-      {customer?.ai_summary && (
+      {/* Tóm tắt AI (tab Tổng quan trang CRM) */}
+      {(f.ai_summary || customer?.ai_summary) && (
         <div>
           <div className="text-[11px] text-muted-foreground font-medium mb-1">Tóm tắt AI</div>
           <p className="text-xs text-foreground/80 leading-relaxed bg-muted/30 rounded-md p-2">
-            {customer.ai_summary}
+            {f.ai_summary || customer?.ai_summary}
           </p>
+        </div>
+      )}
+
+      {/* Hoạt động gần đây (tab Tổng quan trang CRM) — từ crm_interactions */}
+      {((f.interactions as any[]) || []).length > 0 && (
+        <div>
+          <div className="text-[11px] text-muted-foreground font-medium mb-1.5">Hoạt động gần đây</div>
+          <div className="space-y-1.5">
+            {((f.interactions as any[]) || []).slice(0, 8).map((i: any) => (
+              <div key={i.id} className="flex items-start gap-2 text-xs border-b pb-1.5 last:border-0">
+                <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
+                  i.type === "chat" ? "bg-blue-500" : i.type === "order" ? "bg-green-500" : i.type === "ticket" ? "bg-yellow-500" : "bg-muted-foreground"
+                }`} />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium truncate">{i.title || i.type}</p>
+                  {i.content && <p className="text-[11px] text-muted-foreground truncate">{i.content}</p>}
+                  <p className="text-[10px] text-muted-foreground">{timeAgo(i.created_at)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

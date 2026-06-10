@@ -345,7 +345,6 @@ export function UnifiedInbox() {
                 <CustomerSidebar
                   conversation={selected}
                   onClose={() => setRightPanel("none")}
-                  onShowOrderPanel={() => setRightPanel("order")}
                 />
               </div>
             )}
