@@ -25,7 +25,10 @@ export interface CRMCustomer {
   status: string;
   lead_score: number;
   lead_temperature: string;
+  lead_temperature_manual?: string | null;
   ai_summary?: string;
+  next_follow_up_at?: string | null;
+  metadata?: Record<string, any> | null;
   total_orders: number;
   total_revenue: number;
   total_conversations: number;

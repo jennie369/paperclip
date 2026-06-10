@@ -149,14 +149,40 @@ export function CustomerDetailPage() {
           </select>
         </div>
 
-        {/* Nhiệt độ lead — READ-ONLY: cột dẫn xuất do trigger trg_lead_score tự
-            tính từ lead_score (>=80 on_fire, >=60 hot, >=30 warm, else cold). */}
+        {/* Nhiệt độ lead — mặc định auto (tính từ lead_score), cho phép override tay.
+            Ghi vào lead_temperature_manual; '__auto__' = xoá override → quay về auto. */}
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Nhiệt độ lead</label>
-          <div className="w-full rounded-md border border-input bg-muted/30 px-3 py-1.5 text-sm mt-1 flex items-center justify-between">
-            <span className="capitalize">{tempLabel(c.lead_temperature)}</span>
-            <span className="text-xs text-muted-foreground" title="Tự động tính từ điểm lead, không sửa tay">tự động · {c.lead_score ?? 0}đ</span>
+          <label className="text-xs font-medium text-muted-foreground">
+            Nhiệt độ lead {c.lead_temperature_manual ? '· tay' : `· tự động (${c.lead_score ?? 0}đ)`}
+          </label>
+          <select
+            value={c.lead_temperature_manual || '__auto__'}
+            onChange={e => updateMut.mutate({ lead_temperature_manual: e.target.value === '__auto__' ? null : e.target.value })}
+            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
+          >
+            <option value="__auto__">Tự động ({tempLabel(c.lead_temperature)})</option>
+            <option value="cold">Lạnh</option>
+            <option value="warm">Ấm</option>
+            <option value="hot">Nóng</option>
+            <option value="on_fire">Rất nóng</option>
+          </select>
+        </div>
+
+        {/* Nguồn (read-only, từ metadata) + Hẹn follow-up */}
+        {(c.metadata?.source || c.metadata?.lead_source) && (
+          <div className="text-sm">
+            <span className="text-xs font-medium text-muted-foreground">Nguồn</span>
+            <div className="mt-0.5 capitalize">{c.metadata?.source || c.metadata?.lead_source}</div>
           </div>
+        )}
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Hẹn follow-up</label>
+          <input
+            type="date"
+            value={c.next_follow_up_at ? c.next_follow_up_at.slice(0, 10) : ''}
+            onChange={e => updateMut.mutate({ next_follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
+            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
+          />
         </div>
 
         {/* Stats */}
