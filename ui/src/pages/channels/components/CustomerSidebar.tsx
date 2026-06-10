@@ -4,11 +4,22 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake, Pencil, Check } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
+import { crmApi } from "@/api/crm";
 import { getChannelVisual } from "./channelConfig";
 import { CommandCustomer360 } from "@/components/crm-messaging/command-center/CommandCustomer360";
 import { mapCrm } from "@/components/crm-messaging/command-center/adapters";
+
+// SSOT enums (crm_customers) — khớp docs/design_and_architecture/CRM_AND_META_CAPI_SSOT.md
+const STATUS_LABELS: Record<string, string> = {
+  lead_moi: "Lead mới", quan_tam: "Quan tâm", can_follow_up: "Follow up",
+  dang_tu_van: "Tư vấn", cho_thanh_toan: "Chờ TT", da_mua: "Đã mua",
+  khach_vip: "VIP", khach_than_thiet: "Thân thiết", churned: "Churned", blacklist: "Blacklist",
+};
+const TEMP_LABELS: Record<string, string> = {
+  cold: "Lạnh", warm: "Ấm", hot: "Nóng", on_fire: "Rất nóng",
+};
 
 interface RecentOrder {
   id: string;
@@ -38,8 +49,28 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const customer = conv.customer;
   const channelCfg = getChannelVisual(conv.channel_name);
   const displayName = customer?.display_name || conv.sender_name || "Không rõ";
-  // All profile/CRM actions open the full customer record (real, never a dead button).
-  const goProfile = () => { if (customer?.id) navigate(`/crm/customers/${customer.id}`); };
+  // "Xem hồ sơ đầy đủ" + tag/quote (subsystem riêng) mới mở trang CRM full;
+  // name/status/temperature/note đều sửa INLINE tại panel này.
+  const goProfile = () => {
+    if (customer?.id) navigate(`/crm/customers/${customer.id}?from=${encodeURIComponent(window.location.pathname)}`);
+  };
+
+  // ── Inline edit + autosave (PUT /customers/:id qua crmApi — không duplicate route) ──
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const updateMutation = useMutation({
+    mutationFn: (patch: Record<string, any>) =>
+      customer?.id ? crmApi.updateCustomer(customer.id, patch) : Promise.resolve(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
+    },
+  });
+  const saveName = () => {
+    const v = nameDraft.trim();
+    if (v && v !== customer?.display_name) updateMutation.mutate({ display_name: v });
+    setEditingName(false);
+  };
 
   // Sync Gemral data
   const syncMutation = useMutation({
@@ -110,10 +141,38 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           >
             {displayName.charAt(0).toUpperCase()}
           </div>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold truncate">{displayName}</div>
+          <div className="min-w-0 flex-1">
+            {editingName ? (
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onBlur={saveName}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveName();
+                    if (e.key === "Escape") setEditingName(false);
+                  }}
+                  className="w-full text-sm font-semibold px-1.5 py-0.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <button onMouseDown={(e) => e.preventDefault()} onClick={saveName} className="p-1 rounded hover:bg-muted shrink-0" title="Lưu">
+                  <Check className="h-3.5 w-3.5 text-green-600" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setNameDraft(customer?.display_name || displayName); setEditingName(true); }}
+                disabled={!customer?.id}
+                className="group flex items-center gap-1 text-sm font-semibold truncate hover:text-primary disabled:cursor-default disabled:hover:text-foreground"
+                title={customer?.id ? "Bấm để sửa tên" : undefined}
+              >
+                <span className="truncate">{displayName}</span>
+                {customer?.id && <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60 shrink-0" />}
+              </button>
+            )}
             {customer?.status && (
-              <div className="text-[11px] text-muted-foreground capitalize">{customer.status}</div>
+              <div className="text-[11px] text-muted-foreground">{STATUS_LABELS[customer.status] || customer.status}</div>
             )}
           </div>
         </div>
@@ -122,13 +181,41 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </button>
       </div>
 
+      {/* Inline edit: Trạng thái + Nhiệt độ lead — autosave xuống crm_customers thật */}
+      {customer?.id && (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
+            <select
+              value={customer.status || "lead_moi"}
+              onChange={(e) => updateMutation.mutate({ status: e.target.value })}
+              disabled={updateMutation.isPending}
+              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium">Nhiệt độ</label>
+            <select
+              value={customer.lead_temperature || "cold"}
+              onChange={(e) => updateMutation.mutate({ lead_temperature: e.target.value })}
+              disabled={updateMutation.isPending}
+              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {Object.entries(TEMP_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
       {/* Rich Customer 360 card — same component as /crm-inbox Command Center.
           Profile built from real conv.customer via mapCrm; actions wired to real
           handlers (tel: dial, open full CRM record) — no dead/showcase buttons. */}
       {customer && (
         <CommandCustomer360
           crm={mapCrm(conv)}
-          onEdit={goProfile}
+          onEdit={() => { setNameDraft(customer.display_name || displayName); setEditingName(true); }}
           onAddTag={goProfile}
           onCreateQuote={goProfile}
           onQuickAction={(a) => {
