@@ -3,7 +3,7 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
-  Pin, BellOff, ClipboardList, X, Pause, Play,
+  ClipboardList, X, Pause, Play,
 } from "lucide-react";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
@@ -143,9 +143,8 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
                   : <><Pause className="h-3.5 w-3.5" /> Dừng Bot</>}
               </button>
             )}
-            {/* "Tạo đơn" + "Phiếu HT" đã chuyển vào card Customer 360 (panel Hồ sơ). */}
-            <IconBtn icon={<Pin className="h-4 w-4" />} label={conv.is_pinned ? "Bỏ ghim" : "Ghim"} title={conv.is_pinned ? "Bỏ ghim hội thoại" : "Ghim hội thoại lên đầu"} onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))} active={conv.is_pinned} />
-            <IconBtn icon={<BellOff className="h-4 w-4" />} label={conv.is_muted ? "Bật TB" : "Tắt TB"} title={conv.is_muted ? "Bật lại thông báo" : "Tắt thông báo hội thoại"} onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))} active={conv.is_muted} />
+            {/* "Tạo đơn" + "Phiếu HT" đã chuyển vào card Customer 360 (panel Hồ sơ).
+                "Ghim" + "Tắt TB" đã có ở cột danh sách hội thoại → bỏ khỏi header. */}
             <IconBtn icon={<ClipboardList className="h-4 w-4" />} label="Hồ sơ" title="Mở/đóng hồ sơ khách hàng" onClick={onToggleCustomer} />
           </div>
         </div>
