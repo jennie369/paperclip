@@ -168,24 +168,24 @@ router.post('/:key/mute', async (req, res) => {
 });
 
 // ── POST /api/channels/conversations/:key/label — Set label ──
-// Phân loại hội thoại ở cột trái CŨNG đồng bộ xuống crm_customers (SSOT) để
-// trang CRM phản ánh đúng: hot/warm/cold → lead_temperature; vip → status khach_vip.
-// spam = chỉ gắn ở hội thoại (không đổi hồ sơ CRM). null = gỡ nhãn (giữ CRM nguyên).
+// Nhãn là cờ phân loại trên HỘI THOẠI (1 khách có thể nhiều hội thoại). Chỉ
+// 'vip' map xuống hồ sơ CRM (status='khach_vip' — cột thủ công, persist được).
+// hot/warm/cold KHÔNG ghi crm_customers: lead_temperature là cột DẪN XUẤT do
+// trigger trg_lead_score tự tính từ lead_score → ghi tay sẽ bị revert ngay.
+// spam + hot/warm/cold = chỉ ở hội thoại. null = gỡ nhãn (giữ CRM nguyên).
 router.post('/:key/label', async (req, res) => {
   const { label } = req.body; // 'hot' | 'warm' | 'cold' | 'vip' | 'spam' | null
   await supabase.from('channel_sessions')
     .update({ label: label || null }).eq('session_key', req.params.key);
 
-  // Đồng bộ xuống CRM nếu hội thoại đã liên kết khách hàng.
-  const { data: sess } = await supabase.from('channel_sessions')
-    .select('customer_id').eq('session_key', req.params.key).maybeSingle();
-  if (sess?.customer_id) {
-    const patch: Record<string, any> = {};
-    if (label === 'hot' || label === 'warm' || label === 'cold') patch.lead_temperature = label;
-    else if (label === 'vip') patch.status = 'khach_vip';
-    if (Object.keys(patch).length > 0) {
-      patch.updated_at = new Date().toISOString();
-      await supabase.from('crm_customers').update(patch).eq('id', sess.customer_id);
+  if (label === 'vip') {
+    const { data: sess } = await supabase.from('channel_sessions')
+      .select('customer_id').eq('session_key', req.params.key).maybeSingle();
+    if (sess?.customer_id) {
+      const { error: crmErr } = await supabase.from('crm_customers')
+        .update({ status: 'khach_vip', updated_at: new Date().toISOString() })
+        .eq('id', sess.customer_id);
+      if (crmErr) console.error('[label→crm] vip→status failed', sess.customer_id, crmErr.message);
     }
   }
 
