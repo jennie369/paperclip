@@ -3664,6 +3664,39 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
   // Generic — handles HTML output (email/doc) + plain markdown/text (social/forum)
   // wrap markdown trong <pre> với preserve whitespace (Phase A KISS, no markdown parser).
   // Spec: memory/reports/2026-05-17-content-result-panel-global-design.md §5.3
+
+  const autoFormatContent = (text) => {
+    if (typeof text !== 'string') return text;
+    let res = text;
+    
+    // Options A, B, C, D (with or without bold)
+    res = res.replace(/(?:^|\s+)(\*\*[A-D]\.\*\*|\*[A-D]\.\*|[A-D]\.)\s+/g, '\n\n$1 ');
+    
+    // Common markers (added more variations)
+    const markers = [
+      'Đáp án', 'Giải thích', 'Caption', 'Bình luận', 'Hook', 'Body', 'CTA', 'Call to action', 'Action', 'Câu hỏi',
+      'Tiêu đề', 'Mô tả', 'Text trên video', 'Text', 'Hình ảnh', 'Video', 'Hashtags', 'Hashtag', 'Lưu ý', 'Ghi chú', 
+      'Âm thanh', 'Nhạc nền', 'Voice', 'Voice off', 'Kịch bản'
+    ];
+    
+    markers.forEach(marker => {
+      // Match the marker with optional asterisks and a colon, OR just bolded marker without colon
+      const pattern = `(?:^|\\s+)(\\*\\*${marker}\\*\\*:|\\*\\*${marker}:\\*\\*|\\*${marker}\\*:|\\*${marker}:\\*|${marker}:|\\*\\*${marker}\\*\\*)\\s*`;
+      const regex = new RegExp(pattern, 'gi');
+      res = res.replace(regex, '\n\n$1 ');
+    });
+
+    // Prefix with numbers (Câu X, Clip X, Phần X, Video X, Hình X, Ảnh X, Cảnh X, Bài X)
+    const prefixRegex = /(?:^|\s+)(\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*?:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:\*\*?|(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*)\s*/gi;
+    res = res.replace(prefixRegex, '\n\n$1 ');
+    
+    // Bracketed markers like [Text trên màn hình], [Video], 【Caption】, (Voice-over)
+    const bracketRegex = /(?:^|\s+)(\[\w.*?\]|【\w.*?】|\((?:Voice-over|Audio|Visual|Voice|Nhạc nền|Hiệu ứng|Góc máy|Kịch bản|Cười)\))\s*/gi;
+    res = res.replace(bracketRegex, '\n\n$1 ');
+    
+    return res.trim();
+  };
+
   const previewSrcDoc = React.useMemo(() => {
     if (emailSyncingRef.current && emailSrcDocRef.current) return emailSrcDocRef.current;
     if (!output) return '';
@@ -3683,7 +3716,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     
     let workingOutput = cleanOutput;
     if (!hasHtml && cleanOutput) {
-      const parsedHtml = marked.parse(cleanOutput);
+      const formattedContent = autoFormatContent(cleanOutput);
+      const parsedHtml = marked.parse(formattedContent, { breaks: true });
       workingOutput = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
   body {

@@ -49,6 +49,7 @@ import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
 import { MetaSelect, SlugUrlHandle, generateSlug } from './components/ContentMetaShared';
 import { PromptImageCards } from './components/PromptImageCards';
+import { MarkdownBody } from '../../components/MarkdownBody';
 
 // ============================================================================
 // Status Configuration
@@ -360,20 +361,36 @@ function renderJsonStructured(obj) {
   return renderObject(obj);
 }
 
-// --- Parse markdown tables ---
-function parseMarkdownTable(lines, startIdx) {
-  const rows = [];
-  let i = startIdx;
-  while (i < lines.length && lines[i].trim().startsWith('|')) {
-    const cells = lines[i].trim().split('|').filter(Boolean).map(c => c.trim());
-    rows.push(cells);
-    i++;
-  }
-  if (rows.length < 2) return null; // Need at least header + separator
-  // Check if second row is separator (dashes)
-  const isSep = rows[1].every(c => /^[-:]+$/.test(c));
-  if (!isSep) return null;
-  return { headers: rows[0], data: rows.slice(2), endIdx: i };
+function autoFormatContent(text) {
+  if (typeof text !== 'string') return text;
+  let res = text;
+  
+  // Options A, B, C, D (with or without bold)
+  res = res.replace(/(?:^|\s+)(\*\*[A-D]\.\*\*|\*[A-D]\.\*|[A-D]\.)\s+/g, '\n\n$1 ');
+  
+  // Common markers (added more variations)
+  const markers = [
+    'Đáp án', 'Giải thích', 'Caption', 'Bình luận', 'Hook', 'Body', 'CTA', 'Call to action', 'Action', 'Câu hỏi',
+    'Tiêu đề', 'Mô tả', 'Text trên video', 'Text', 'Hình ảnh', 'Video', 'Hashtags', 'Hashtag', 'Lưu ý', 'Ghi chú', 
+    'Âm thanh', 'Nhạc nền', 'Voice', 'Voice off', 'Kịch bản'
+  ];
+  
+  markers.forEach(marker => {
+    // Match the marker with optional asterisks and a colon, OR just bolded marker without colon
+    const pattern = `(?:^|\\s+)(\\*\\*${marker}\\*\\*:|\\*\\*${marker}:\\*\\*|\\*${marker}\\*:|\\*${marker}:\\*|${marker}:|\\*\\*${marker}\\*\\*)\\s*`;
+    const regex = new RegExp(pattern, 'gi');
+    res = res.replace(regex, '\n\n$1 ');
+  });
+
+  // Prefix with numbers (Câu X, Clip X, Phần X, Video X, Hình X, Ảnh X, Cảnh X, Bài X)
+  const prefixRegex = /(?:^|\s+)(\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*?:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:\*\*?|(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*)\s*/gi;
+  res = res.replace(prefixRegex, '\n\n$1 ');
+  
+  // Bracketed markers like [Text trên màn hình], [Video], 【Caption】, (Voice-over)
+  const bracketRegex = /(?:^|\s+)(\[\w.*?\]|【\w.*?】|\((?:Voice-over|Audio|Visual|Voice|Nhạc nền|Hiệu ứng|Góc máy|Kịch bản|Cười)\))\s*/gi;
+  res = res.replace(bracketRegex, '\n\n$1 ');
+  
+  return res.trim();
 }
 
 function renderMarkdownContent(text) {
@@ -383,107 +400,8 @@ function renderMarkdownContent(text) {
     return renderJsonStructured(jsonObj);
   }
 
-  const lines = text.split('\n');
-  const elements = [];
-  let i = 0;
-
-  const renderBold = (t) => {
-    const parts = t.split(/(\*\*.*?\*\*)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={index} className="text-txt font-bold">{part.slice(2, -2)}</strong>;
-      }
-      return <span key={index}>{part}</span>;
-    });
-  };
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // Skip code fences
-    if (trimmed.startsWith('```')) { i++; continue; }
-
-    // Markdown table detection
-    if (trimmed.startsWith('|')) {
-      const table = parseMarkdownTable(lines, i);
-      if (table) {
-        elements.push(
-          <div key={`table-${i}`} className="overflow-x-auto rounded-card border border-border my-3">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-glass-bg/50">
-                  {table.headers.map((h, hi) => (
-                    <th key={hi} className="px-3 py-2.5 text-left text-xs font-bold text-gold uppercase tracking-wider border-b border-border whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {table.data.map((row, ri) => (
-                  <tr key={ri} className={`border-b border-border/20 ${ri % 2 === 0 ? '' : 'bg-glass-bg/20'} hover:bg-gold/5 transition-colors`}>
-                    {row.map((cell, ci) => (
-                      <td key={ci} className="px-3 py-2.5 text-txt-2">
-                        {renderBold(cell)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-        i = table.endIdx;
-        continue;
-      }
-    }
-
-    // Headings
-    if (line.startsWith('## ')) {
-      elements.push(
-        <h2 key={i} className="text-lg font-heading font-bold text-gold mt-6 mb-3">
-          {line.slice(3)}
-        </h2>
-      );
-      i++; continue;
-    }
-    if (line.startsWith('### ')) {
-      elements.push(
-        <h3 key={i} className="text-base font-heading font-semibold text-txt mt-4 mb-2">
-          {line.slice(4)}
-        </h3>
-      );
-      i++; continue;
-    }
-
-    // Bullet list items
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      elements.push(
-        <div key={i} className="flex items-start gap-2 mb-1.5 pl-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-gold mt-2 shrink-0" />
-          <span className="text-sm text-txt-2 leading-relaxed">{renderBold(trimmed.slice(2))}</span>
-        </div>
-      );
-      i++; continue;
-    }
-
-    // Empty line
-    if (trimmed === '') {
-      elements.push(<div key={i} className="h-2" />);
-      i++; continue;
-    }
-
-    // Regular paragraph
-    elements.push(
-      <p key={i} className="text-sm text-txt-2 leading-relaxed mb-3">
-        {renderBold(line)}
-      </p>
-    );
-    i++;
-  }
-
-  return elements;
+  const formattedText = autoFormatContent(text);
+  return <MarkdownBody>{formattedText}</MarkdownBody>;
 }
 
 // ============================================================================
