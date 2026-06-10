@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from "@/components/ui/select";
 import { channelsApi, type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { SimpleModal } from "../../crm/components/SimpleModal";
@@ -135,22 +138,29 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
           <div className="flex items-center gap-1 shrink-0">
             {/* Per-chat agent picker — turn bot ON (pick agent) / OFF (— Không bot —),
                 works even when the channel has no default agent. */}
-            <select
-              value={conv.agent_slug || ""}
+            <Select
+              value={conv.agent_slug || "__none__"}
+              onValueChange={(v) => changeAgentMut.mutate(v === "__none__" ? "" : v)}
               disabled={changeAgentMut.isPending}
-              onChange={(e) => changeAgentMut.mutate(e.target.value)}
-              title="Chọn agent trả lời hội thoại này (bật bot) — hoặc '— Không bot —' để tắt bot riêng chat này"
-              className={`text-[11px] rounded-md border px-1.5 py-1 max-w-[150px] cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 mr-1 ${
-                conv.agent_slug
-                  ? "border-border/60 bg-muted/50 text-foreground"
-                  : "border-dashed border-amber-500/50 bg-amber-500/5 text-amber-600 font-medium"
-              }`}
             >
-              <option value="">— Không bot —</option>
-              {chatAgentOptions.map((a: { slug: string; name: string }) => (
-                <option key={a.slug} value={a.slug}>{a.name}</option>
-              ))}
-            </select>
+              <SelectTrigger
+                size="sm"
+                title="Chọn agent trả lời hội thoại này (bật bot) — hoặc 'Không bot' để tắt bot riêng chat này"
+                className={`h-7 text-[11px] max-w-[170px] mr-1 ${
+                  conv.agent_slug
+                    ? ""
+                    : "border-dashed border-amber-500/50 text-amber-600 [&>svg]:opacity-80"
+                }`}
+              >
+                <SelectValue placeholder="— Không bot —" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— Không bot —</SelectItem>
+                {chatAgentOptions.map((a: { slug: string; name: string }) => (
+                  <SelectItem key={a.slug} value={a.slug}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {conv.agent_slug && (
               <button
                 onClick={() => quickAction(() => channelsApi.setBotPaused(conv.session_key, !botPaused))}
