@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, X, ChevronDown, SmilePlus } from "lucide-react";
+import { Search, X, ChevronDown, SmilePlus, Bot } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
@@ -237,9 +237,11 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
               : null;
             const isSameGroup = prev ? isOutbound === prevIsOutbound && (isOutbound || msg.sender_name === prev.sender_name) : false;
 
-            // D9: Add 🤖 prefix for agent-sent messages
+            // D9: agent-sent messages get a Bot icon (rendered at the sender label,
+            // not baked into the string — keeps reply-quote previews clean).
+            const isAgentMsg = isOutbound && !!msg.sent_by && msg.sent_by !== "manual";
             const senderLabel = isOutbound
-              ? (msg.sent_by && msg.sent_by !== "manual" ? `🤖 ${msg.sent_by}` : "Bạn")
+              ? (isAgentMsg ? (msg.sent_by as string) : "Bạn")
               : (msg.sender_name || "Khách");
 
             const msgId = msg.id || String(i);
@@ -284,7 +286,9 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                         {isOutbound ? (
                           <>
                             <span className="text-xs text-muted-foreground">{formatTime(ts)}</span>
-                            <span className="text-xs font-medium text-violet-500">{senderLabel}</span>
+                            <span className="text-xs font-medium text-violet-500 inline-flex items-center gap-1">
+                              {isAgentMsg && <Bot className="h-3 w-3 shrink-0" />}{senderLabel}
+                            </span>
                           </>
                         ) : (
                           <>

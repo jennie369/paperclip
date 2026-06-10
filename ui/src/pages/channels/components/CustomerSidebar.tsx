@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { getChannelVisual } from "./channelConfig";
 
@@ -134,12 +134,15 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           {customer.lead_score != null && (
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Lead Score</span>
-              <span className={`text-xs font-bold ${
+              <span className={`text-xs font-bold flex items-center gap-1 ${
                 customer.lead_score >= 70 ? "text-red-500" :
                 customer.lead_score >= 40 ? "text-amber-500" : "text-blue-400"
               }`}>
-                {customer.lead_temperature === "hot" ? "🔥" :
-                 customer.lead_temperature === "warm" ? "🌤" : "❄️"}{" "}
+                {customer.lead_temperature === "hot"
+                  ? <Flame className="h-3.5 w-3.5 shrink-0" />
+                  : customer.lead_temperature === "warm"
+                  ? <CloudSun className="h-3.5 w-3.5 shrink-0" />
+                  : <Snowflake className="h-3.5 w-3.5 shrink-0" />}
                 {customer.lead_score}/100
               </span>
             </div>

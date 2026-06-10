@@ -1,6 +1,7 @@
 // Phase 0: Message bubble — inbound (left) / outbound (right)
 // Shows sender name, timestamp, content, media, agent badge
 
+import { Bot } from "lucide-react";
 import { type ConversationMessage } from "@/api/channels";
 import { MessageRenderer } from "./MessageRenderer";
 
@@ -29,8 +30,8 @@ export function MessageBubble({ message: msg }: Props) {
             </span>
           )}
           {isOutbound && msg.handledBy && msg.handledBy !== "manual" && (
-            <span className="text-[11px] font-medium text-violet-500">
-              🤖 {msg.handledBy}
+            <span className="text-[11px] font-medium text-violet-500 inline-flex items-center gap-1">
+              <Bot className="h-3 w-3 shrink-0" /> {msg.handledBy}
             </span>
           )}
           <span className="text-[10px] text-muted-foreground">
