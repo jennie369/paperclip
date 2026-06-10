@@ -91,8 +91,10 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
   return (
     <>
       <div className="border-b px-3 py-1.5">
-        {/* Compact single row: Avatar + Name + Badges + Actions */}
-        <div className="flex items-center justify-between gap-2">
+        {/* Avatar + Name + Badges on the left; actions on the right. Wraps to a
+            second row when the chat panel is narrow (e.g. customer panel open) so
+            the labeled action buttons never overlap or get clipped. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
@@ -132,8 +134,8 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
             </div>
           </div>
 
-          {/* Quick actions inline */}
-          <div className="flex items-center gap-1 shrink-0">
+          {/* Quick actions — wrap as a group below when space is tight */}
+          <div className="flex items-center gap-1 flex-wrap justify-end">
             {/* Per-chat agent picker — turn bot ON (pick agent) / OFF (— Không bot —),
                 works even when the channel has no default agent. */}
             <Select
