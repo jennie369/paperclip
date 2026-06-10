@@ -115,13 +115,35 @@ router.post('/customers/bulk-delete', async (req, res) => {
   }
 });
 
-// PUT /api/channels/crm/customers/:id — cập nhật khách hàng (status, etc.)
+// Cột khách-hàng user được phép sửa qua PUT (whitelist — chống mass-assignment
+// + chống crash khi UI gửi cột rác như "stage" không tồn tại trong schema).
+// Stats (total_revenue, total_orders…), link-IDs (gemral/shopify), timestamps =
+// system-managed, KHÔNG nhận từ client ở đây.
+const CUSTOMER_EDITABLE_COLUMNS = new Set([
+  'display_name', 'phone', 'email', 'avatar_url',
+  'status', 'lead_temperature', 'lead_score',
+  'ai_summary', 'ai_tags', 'internal_notes',
+  'assigned_agent', 'next_follow_up_at',
+]);
+
+// PUT /api/channels/crm/customers/:id — cập nhật khách hàng (status, name, temperature…)
 router.put('/customers/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Chỉ giữ field nằm trong whitelist
+    const patch: Record<string, any> = {};
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (CUSTOMER_EDITABLE_COLUMNS.has(k)) patch[k] = v;
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: 'Không có trường hợp lệ để cập nhật' });
+    }
+    patch.updated_at = new Date().toISOString();
+
     const { data, error } = await supabase
       .from('crm_customers')
-      .update({ ...req.body, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('id', id)
       .select()
       .single();
@@ -153,7 +175,7 @@ router.post('/customers', async (req, res) => {
         message_type: 'info',
         content: `👤 Khách hàng mới: ${name}${data.source ? ` (nguồn: ${data.source})` : ''}`,
         priority: 2,
-      }).catch(() => {});
+      }).then(undefined, () => {});
     }
 
     // Queue CAPI Lead event
@@ -164,24 +186,6 @@ router.post('/customers', async (req, res) => {
     });
 
     res.status(201).json(data);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/channels/crm/customers/:id — update
-router.put('/customers/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { data, error } = await supabase
-      .from('crm_customers')
-      .update({ ...req.body, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) return res.status(400).json({ error: error.message });
-    res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
