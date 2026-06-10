@@ -47,6 +47,15 @@ export function CustomerDetailPage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState('overview');
   const [newNote, setNewNote] = useState('');
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+
+  // Back: ưu tiên ?from= (deep-link/refresh), fallback lịch sử trình duyệt
+  const goBack = () => {
+    const from = new URLSearchParams(window.location.search).get('from');
+    if (from) navigate(from);
+    else navigate(-1);
+  };
 
   const { data: customer, isLoading, error } = useQuery({
     queryKey: ['crm', 'customer', id],
@@ -77,7 +86,7 @@ export function CustomerDetailPage() {
   if (error || !customer) return (
     <div className="p-6 text-center">
       <p className="text-destructive">Không tìm thấy khách hàng</p>
-      <Button variant="outline" className="mt-4" onClick={() => navigate('/crm/customers')}>Quay lại</Button>
+      <Button variant="outline" className="mt-4" onClick={goBack}>Quay lại</Button>
     </div>
   );
 
@@ -88,15 +97,39 @@ export function CustomerDetailPage() {
     <div className="flex h-full">
       {/* LEFT PANEL — Profile */}
       <div className="w-80 shrink-0 border-r p-5 space-y-4 overflow-y-auto">
-        <Button variant="ghost" size="sm" onClick={() => navigate('/crm/customers')}>
-          <ArrowLeft className="mr-1.5 h-4 w-4" /> Danh sách
+        <Button variant="ghost" size="sm" onClick={goBack}>
+          <ArrowLeft className="mr-1.5 h-4 w-4" /> Quay lại
         </Button>
 
         <div className="text-center">
           <div className="mx-auto h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary">
             {(c.display_name || '?')[0]}
           </div>
-          <h2 className="mt-2 text-lg font-bold">{c.display_name}</h2>
+          {editingName ? (
+            <Input
+              autoFocus
+              value={nameDraft}
+              onChange={e => setNameDraft(e.target.value)}
+              onBlur={() => {
+                const v = nameDraft.trim();
+                if (v && v !== c.display_name) updateMut.mutate({ display_name: v });
+                setEditingName(false);
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') setEditingName(false);
+              }}
+              className="mt-2 text-center text-lg font-bold h-9"
+            />
+          ) : (
+            <h2
+              className="mt-2 text-lg font-bold cursor-text rounded px-1 hover:bg-muted/50 inline-block"
+              title="Bấm để sửa tên"
+              onClick={() => { setNameDraft(c.display_name || ''); setEditingName(true); }}
+            >
+              {c.display_name || 'Chưa có tên'}
+            </h2>
+          )}
           <LeadScoreBadge score={c.lead_score} temperature={c.lead_temperature} size="md" />
         </div>
 
@@ -114,20 +147,18 @@ export function CustomerDetailPage() {
           </select>
         </div>
 
-        {/* Giai đoạn */}
+        {/* Nhiệt độ lead */}
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Giai đoạn</label>
+          <label className="text-xs font-medium text-muted-foreground">Nhiệt độ lead</label>
           <select
-            value={(c as any).stage || 'new'}
-            onChange={e => updateMut.mutate({ stage: e.target.value })}
+            value={c.lead_temperature || 'cold'}
+            onChange={e => updateMut.mutate({ lead_temperature: e.target.value })}
             className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
           >
-            <option value="new">Mới</option>
-            <option value="dang_tu_van">Đang tư vấn</option>
-            <option value="cho_chot">Chờ chốt</option>
-            <option value="da_mua">Đã mua</option>
-            <option value="active">Active</option>
-            <option value="loyal">Loyal</option>
+            <option value="cold">Lạnh</option>
+            <option value="warm">Ấm</option>
+            <option value="hot">Nóng</option>
+            <option value="on_fire">Rất nóng</option>
           </select>
         </div>
 
