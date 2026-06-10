@@ -17,6 +17,12 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    // Reconcile on mount: window.innerWidth at init can disagree with the real
+    // media query (DevTools device emulation, scrollbar width, zoom/DPR), and
+    // matchMedia 'change' only fires on a TRANSITION — so a wrong initial value
+    // would otherwise stick forever (body.overflow stuck "hidden" → no scroll).
+    setIsMobile(mql.matches);
+    setSidebarOpen(!mql.matches);
     const onChange = (e: MediaQueryListEvent) => {
       setIsMobile(e.matches);
       setSidebarOpen(!e.matches);
