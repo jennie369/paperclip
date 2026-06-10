@@ -159,6 +159,8 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
     onSuccess: () => {
       setNoteText("");
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      // BẮT BUỘC invalidate full customer → list ghi chú dưới mới refresh
+      if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
     },
   });
 
@@ -543,6 +545,17 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
             +
           </button>
         </div>
+        {/* Danh sách ghi chú (từ crm_notes qua getCustomer) — hiển thị ngay tại panel */}
+        {((f.notes as any[]) || []).length > 0 && (
+          <div className="space-y-1.5 mt-2">
+            {((f.notes as any[]) || []).map((n: any) => (
+              <div key={n.id} className="text-xs bg-muted/20 rounded-md px-2 py-1.5">
+                <p className="text-foreground/90 whitespace-pre-wrap break-words">{n.content}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{n.created_by || "board"} · {timeAgo(n.created_at)}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Link to full CRM profile */}
