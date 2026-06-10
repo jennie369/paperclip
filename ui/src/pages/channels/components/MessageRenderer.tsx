@@ -316,6 +316,16 @@ function CallMsg({ data }: { data: Record<string, unknown> }) {
 }
 
 // ── Link Preview ──
+// new URL() THROWS on empty / scheme-less / relative hrefs. An unguarded call in
+// render crashes the whole message list → white screen. Parse defensively.
+function safeHostname(href: string): string {
+  try {
+    return new URL(href).hostname;
+  } catch {
+    return href.replace(/^https?:\/\//i, "").split("/")[0] || href;
+  }
+}
+
 function LinkMsg({ data }: { data: Record<string, unknown> }) {
   const title = (data?.title || "") as string;
   const desc = (data?.description || "") as string;
@@ -337,7 +347,7 @@ function LinkMsg({ data }: { data: Record<string, unknown> }) {
         {desc && <div className="text-[12px] text-muted-foreground line-clamp-2 mt-0.5">{desc}</div>}
         <div className="text-[11px] text-primary truncate mt-1.5 flex items-center gap-1">
           <Link2 className="h-3 w-3" />
-          {new URL(href).hostname}
+          {safeHostname(href)}
         </div>
       </div>
     </a>
