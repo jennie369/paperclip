@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
 
   let query = supabase
     .from('channel_sessions')
-    .select('*, customer:crm_customers(id, display_name, phone, avatar_url, lead_score, lead_temperature, status)', { count: 'exact' })
+    .select('*, customer:crm_customers(id, display_name, phone, avatar_url, lead_score, lead_temperature, status, total_revenue, next_follow_up_at)', { count: 'exact' })
     .eq('is_deleted', false)
     .order('is_pinned', { ascending: false })
     .order('last_message_at', { ascending: false, nullsFirst: false });
@@ -53,7 +53,7 @@ router.get('/', async (req, res) => {
 router.get('/:key', async (req, res) => {
   const { data, error } = await supabase
     .from('channel_sessions')
-    .select('*, customer:crm_customers(id, display_name, phone, email, avatar_url, lead_score, lead_temperature, status, tags, ai_summary, gemral_data)')
+    .select('*, customer:crm_customers(id, display_name, phone, email, avatar_url, lead_score, lead_temperature, status, tags, ai_summary, gemral_data, total_revenue, next_follow_up_at)')
     .eq('session_key', req.params.key)
     .single();
 
