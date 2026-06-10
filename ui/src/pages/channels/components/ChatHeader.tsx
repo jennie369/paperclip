@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Package, Ticket, User, Pin, BellOff,
-  ClipboardList, X,
+  ClipboardList, X, Pause, Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,10 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
   const channelColor = chInfo?.color || "#6B7280";
   const displayName = conv.customer?.display_name || conv.sender_name || conv.sender_id || "Không rõ";
   const leadScore = conv.customer?.lead_score;
+  // Per-conversation bot pause (metadata.bot_paused). Lets the operator take over
+  // a single thread instantly — agent goes silent for THIS customer only,
+  // messages still arrive. Channel-wide pause lives in Cài đặt kênh.
+  const botPaused = (conv.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true;
 
   // Agent list for ticket assignment (same query as TicketListPage)
   const { data: agents } = useQuery({
@@ -96,6 +100,23 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
 
           {/* Quick actions inline */}
           <div className="flex items-center gap-1 shrink-0">
+            {conv.agent_slug && (
+              <button
+                onClick={() => quickAction(() => channelsApi.setBotPaused(conv.session_key, !botPaused))}
+                title={botPaused
+                  ? "Bot đang TẮT cho hội thoại này — bấm để bật AI trả lời lại"
+                  : "Dừng bot cho hội thoại này để bạn trả tay (tin khách vẫn về)"}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold transition-colors mr-1 ${
+                  botPaused
+                    ? "bg-amber-500/20 text-amber-600 ring-1 ring-amber-500/40 hover:bg-amber-500/30"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                {botPaused
+                  ? <><Play className="h-3.5 w-3.5" /> Bật Bot</>
+                  : <><Pause className="h-3.5 w-3.5" /> Dừng Bot</>}
+              </button>
+            )}
             <IconBtn icon={<Package className="h-3.5 w-3.5" />} title="Tạo đơn" onClick={() => onShowOrderPanel?.()} />
             <IconBtn icon={<Ticket className="h-3.5 w-3.5" />} title="Phiếu HT" onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }} />
             {conv.customer?.id && (
