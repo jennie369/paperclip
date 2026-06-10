@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { useNavigate } from "@/lib/router";
-import { ArrowLeft, RefreshCw, Link2, Phone, Mail, Calendar, User, ShoppingBag, Ticket, MessageSquare, Brain, StickyNote, History, Network } from "lucide-react";
+import { ArrowLeft, RefreshCw, Link2, Phone, Mail, Calendar, User, ShoppingBag, Ticket, MessageSquare, Brain, StickyNote, History, Network, X } from "lucide-react";
 import KGMiniGraph from "@/components/knowledge-graph/KGMiniGraph";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -84,6 +84,17 @@ export function CustomerDetailPage() {
     onSettled: () => { qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }); setNewNote(''); },
   });
 
+  // Tags — gán/gỡ từ bộ tag CRM (crm_tags), nhóm theo category
+  const { data: allTags = [] } = useQuery({ queryKey: ['crm', 'tags'], queryFn: () => crmApi.getTags() });
+  const addTagMut = useMutation({
+    mutationFn: (tagId: string) => crmApi.addTag(id!, tagId),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
+  });
+  const removeTagMut = useMutation({
+    mutationFn: (tagId: string) => crmApi.removeTag(id!, tagId),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
+  });
+
   if (isLoading) return <div className="p-6"><Skeleton className="h-96 w-full" /></div>;
   if (error || !customer) return (
     <div className="p-6 text-center">
@@ -138,6 +149,19 @@ export function CustomerDetailPage() {
         <div className="space-y-2 text-sm">
           {c.phone && <div className="flex items-center gap-2 text-muted-foreground"><Phone className="h-3.5 w-3.5" />{c.phone}</div>}
           {c.email && <div className="flex items-center gap-2 text-muted-foreground"><Mail className="h-3.5 w-3.5" />{c.email}</div>}
+          {c.email && (c as any).email_status && (
+            <div className="flex items-center gap-2 text-xs" title="Trạng thái gửi email. Đăng ký/huỷ newsletter quản lý ở Resend (suppression list), không sửa tại đây.">
+              <span className="text-muted-foreground">Newsletter:</span>
+              <span className={`px-1.5 py-0.5 rounded ${
+                (c as any).email_status === 'active' ? 'bg-green-500/10 text-green-600'
+                : (c as any).email_status === 'unsubscribed' ? 'bg-muted text-muted-foreground'
+                : 'bg-amber-500/10 text-amber-600'
+              }`}>
+                {(c as any).email_status === 'active' ? 'Đang nhận' : (c as any).email_status === 'unsubscribed' ? 'Đã huỷ' : (c as any).email_status}
+              </span>
+              <span className="text-muted-foreground/60">· qua Resend</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 text-muted-foreground"><Calendar className="h-3.5 w-3.5" />Liên hệ: {timeAgo(c.last_contact_at)}</div>
         </div>
 
@@ -183,6 +207,33 @@ export function CustomerDetailPage() {
             onChange={e => updateMut.mutate({ next_follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
             className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
           />
+        </div>
+
+        {/* Tags — gán/gỡ từ bộ tag CRM (crm_tags), inline autosave */}
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Phân loại (Tags)</label>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {((c.tags as any[]) || []).map((t: any) => (
+              <span key={t.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border bg-muted/40">
+                {t.name}
+                <button onClick={() => removeTagMut.mutate(t.id)} className="hover:text-destructive" title="Gỡ tag">
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {((c.tags as any[]) || []).length === 0 && <span className="text-xs text-muted-foreground">Chưa có tag</span>}
+          </div>
+          <select
+            value=""
+            onChange={e => { if (e.target.value) addTagMut.mutate(e.target.value); }}
+            disabled={addTagMut.isPending}
+            className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs mt-1.5"
+          >
+            <option value="">+ Thêm tag...</option>
+            {(allTags as any[])
+              .filter((t: any) => !((c.tags as any[]) || []).some((ct: any) => ct.id === t.id))
+              .map((t: any) => <option key={t.id} value={t.id}>{t.category ? `[${t.category}] ` : ''}{t.name}</option>)}
+          </select>
         </div>
 
         {/* Stats */}

@@ -76,6 +76,10 @@ export const crmApi = {
 
   getPipeline: () => fetchJSON<Record<string, number>>(`${BASE}/pipeline`),
   getTags: () => fetchJSON<any[]>(`${BASE}/tags`),
+  addTag: (customerId: string, tag_id: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags`, { method: 'POST', body: JSON.stringify({ tag_id }) }),
+  removeTag: (customerId: string, tagId: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags/${tagId}`, { method: 'DELETE' }),
 
   // Gemral
   syncGemral: (customerId: string) =>
