@@ -2,7 +2,7 @@
 // Supports: text, markdown, images, stickers, files, calls, links, emojis, system messages
 // Gracefully handles JSON content and mojibake encoding
 
-import { useState } from "react";
+import { Component, useState, type ErrorInfo, type ReactNode } from "react";
 import {
   Phone, FileText, Download, AlertCircle, CheckCircle, Clock, Info, ChevronDown, ChevronUp,
   File, FileSpreadsheet, Presentation, Archive, Music, Video, Paperclip, Image, Link2, Palette
@@ -16,7 +16,18 @@ interface MessageContent {
 
 type MsgType = "text" | "image" | "sticker" | "file" | "call" | "link" | "gif" | "reaction" | "system" | "typing";
 
+// Each message bubble renders inside an ErrorBoundary so one malformed message
+// (bad JSON, invalid URL, unexpected shape) degrades to plain text instead of
+// throwing during render and blanking the entire chat list.
 export function MessageRenderer({ body, content_type, extra_data }: MessageContent) {
+  return (
+    <MessageErrorBoundary body={body}>
+      <MessageBody body={body} content_type={content_type} extra_data={extra_data} />
+    </MessageErrorBoundary>
+  );
+}
+
+function MessageBody({ body, content_type, extra_data }: MessageContent) {
   const type = detectType({ body, content_type, extra_data });
 
   switch (type) {
@@ -40,6 +51,37 @@ export function MessageRenderer({ body, content_type, extra_data }: MessageConte
       return <ReactionMsg data={extra_data || tryParseJson(body)} />;
     default:
       return <TextMsg content={body} />;
+  }
+}
+
+// Per-bubble error boundary. Fallback shows the raw body as plain text so the
+// operator still reads the content, instead of a throw unmounting the whole list.
+type MessageErrorBoundaryProps = { body: string; children: ReactNode };
+type MessageErrorBoundaryState = { hasError: boolean };
+
+class MessageErrorBoundary extends Component<MessageErrorBoundaryProps, MessageErrorBoundaryState> {
+  override state: MessageErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): MessageErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    console.error("MessageRenderer failed — falling back to plain text", {
+      error,
+      info: info.componentStack,
+    });
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground italic">
+          {this.props.body?.trim() || "[Không hiển thị được nội dung tin nhắn]"}
+        </div>
+      );
+    }
+    return this.props.children;
   }
 }
 
