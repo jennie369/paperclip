@@ -405,6 +405,41 @@ router.post('/customers/:id/notes', async (req, res) => {
   }
 });
 
+// ─── Tags (gán/gỡ tag cho khách — crm_customer_tags) ───
+
+// POST /api/channels/crm/customers/:id/tags — gán 1 tag (idempotent)
+router.post('/customers/:id/tags', async (req, res) => {
+  try {
+    const { tag_id, tagged_by } = req.body;
+    if (!tag_id) return res.status(400).json({ error: 'tag_id required' });
+    const { error } = await supabase
+      .from('crm_customer_tags')
+      .upsert(
+        { customer_id: req.params.id, tag_id, tagged_by: tagged_by || 'board' },
+        { onConflict: 'customer_id,tag_id', ignoreDuplicates: true },
+      );
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/channels/crm/customers/:id/tags/:tagId — gỡ tag
+router.delete('/customers/:id/tags/:tagId', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('crm_customer_tags')
+      .delete()
+      .eq('customer_id', req.params.id)
+      .eq('tag_id', req.params.tagId);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Webhook Logs + Replay ───
 
 // GET /api/channels/crm/webhooks/logs — recent webhook events
