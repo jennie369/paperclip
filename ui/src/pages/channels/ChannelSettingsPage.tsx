@@ -13,6 +13,8 @@ import {
   X,
   Loader2,
   RefreshCw,
+  Pause,
+  Play,
 } from "lucide-react";
 import {
   channelsApi,
@@ -416,6 +418,16 @@ function ChannelSettingsList() {
     mutationFn: (name: string) => channelsApi.deleteChannel(name),
     onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
   });
+  // Pause/resume the AI agent on a channel WITHOUT touching the listener
+  // (channel keeps receiving → messages still land in the inbox for a human).
+  // Backend consumer skips auto-reply when channel_instances.enabled=false
+  // (consumer.ts step 2). clearConfigCache on the server makes it take effect
+  // on the very next message — no restart needed.
+  const agentToggleMut = useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      channelsApi.updateChannelSettings(name, { enabled }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
+  });
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
@@ -508,6 +520,29 @@ function ChannelSettingsList() {
               <Badge variant="secondary" className="text-[10px]">
                 {inst.agent_slug || "không có agent"}
               </Badge>
+              {inst.agent_slug && (
+                <Button
+                  size="sm"
+                  variant={inst.enabled === false ? "default" : "outline"}
+                  className={inst.enabled === false ? "" : "text-amber-600 border-amber-500/40 hover:bg-amber-500/10"}
+                  disabled={agentToggleMut.isPending}
+                  title={inst.enabled === false
+                    ? "Bật lại AI agent tự động trả lời kênh này"
+                    : "Dừng AI agent (tin khách vẫn vào hộp thư để bạn trả tay)"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    agentToggleMut.mutate({ name: inst.name, enabled: inst.enabled === false });
+                  }}
+                >
+                  {agentToggleMut.isPending && agentToggleMut.variables?.name === inst.name ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : inst.enabled === false ? (
+                    <><Play className="h-3 w-3 mr-1" /> Bật Agent</>
+                  ) : (
+                    <><Pause className="h-3 w-3 mr-1" /> Dừng Agent</>
+                  )}
+                </Button>
+              )}
               {inst.channel_type === "zalo_personal" && (
                 <>
                   {inst.status === "connected" ? (
