@@ -117,11 +117,13 @@ router.post('/customers/bulk-delete', async (req, res) => {
 
 // Cột khách-hàng user được phép sửa qua PUT (whitelist — chống mass-assignment
 // + chống crash khi UI gửi cột rác như "stage" không tồn tại trong schema).
-// Stats (total_revenue, total_orders…), link-IDs (gemral/shopify), timestamps =
-// system-managed, KHÔNG nhận từ client ở đây.
+// LOẠI TRỪ lead_score & lead_temperature: 2 cột này DẪN XUẤT, bị trigger
+// trg_lead_score (BEFORE UPDATE) recompute từ calculate_lead_score() trên MỌI
+// update → ghi tay vào là futile (no error nhưng revert ngay). Stats, link-IDs
+// (gemral/shopify), timestamps = system-managed, cũng không nhận từ client.
 const CUSTOMER_EDITABLE_COLUMNS = new Set([
   'display_name', 'phone', 'email', 'avatar_url',
-  'status', 'lead_temperature', 'lead_score',
+  'status',
   'ai_summary', 'ai_tags', 'internal_notes',
   'assigned_agent', 'next_follow_up_at',
 ]);
