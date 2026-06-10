@@ -423,6 +423,13 @@ async function runViaClaude(
     '--output-format', 'stream-json',      // streaming (not json)
     '--verbose',
     '--dangerously-skip-permissions',
+    // Force DEFAULT output style for customer-facing agents. The subprocess runs
+    // with cwd=PROJECT_ROOT, which loads crypto-pattern-scanner/.claude/settings.local.json
+    // where outputStyle="Explanatory" (Jennie's dev mode) — that makes the agent
+    // leak "★ Insight ───" educational blocks into customer replies (incident
+    // 2026-06-10: scrub then collapsed them to a lone backtick). CLI --settings
+    // overrides project-local settings, so this neutralizes it at the source.
+    '--settings', '{"outputStyle":"default"}',
   ];
 
   if (sessionId) {
@@ -1676,7 +1683,7 @@ async function postProcessReply(
       priority: 'high',
       summary: 'Bot trả lời lỗi định dạng (rò rỉ output-style nội bộ) — đã chặn gửi, cần người tiếp quản.',
     };
-    return 'Dạ em đã ghi nhận, em kiểm tra lại thông tin và phản hồi anh/chị trong thời gian sớm nhất ạ.';
+    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
   }
 
   // Parse + strip [[ESCALATE: ...]] FIRST and stash the intent on config so the
