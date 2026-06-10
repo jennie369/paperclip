@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, X, ChevronDown, SmilePlus, Bot } from "lucide-react";
+import { Search, X, ChevronDown, SmilePlus, Bot, Reply } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
@@ -276,7 +276,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                     title="Trả lời"
                     onClick={() => !isOutbound && setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel })}
                   >
-                    ↩
+                    <Reply className="h-3.5 w-3.5" />
                   </button>
 
                   <div className={`relative max-w-[70%] ${isOutbound ? "items-end" : "items-start"}`}>
@@ -392,7 +392,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                         }}
                         title="Trả lời"
                       >
-                        ↩
+                        <Reply className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
@@ -406,7 +406,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onShowOrderPan
                     title="Trả lời"
                     onClick={() => isOutbound && setReplyTo({ id: msgId, body: bodyText.substring(0, 100), senderLabel })}
                   >
-                    ↩
+                    <Reply className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
