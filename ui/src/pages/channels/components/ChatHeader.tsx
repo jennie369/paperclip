@@ -14,7 +14,7 @@ import { channelsApi, type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { SimpleModal } from "../../crm/components/SimpleModal";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
-import { ChannelBadge, AgentBadge } from "@/components/ChannelBadge";
+import { AgentBadge } from "@/components/ChannelBadge";
 
 interface Props {
   conversation: ChannelSession;
@@ -102,8 +102,6 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-semibold truncate max-w-[200px]">{displayName}</h3>
-                <ChannelBadge name={channelLabel} size="sm" />
-                {conv.agent_slug && <AgentBadge slug={conv.agent_slug} size="sm" />}
                 {conv.label && (
                   <span className="text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold uppercase bg-red-500/10 text-red-500">
                     {conv.label}
@@ -112,6 +110,23 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
                 {leadScore != null && (
                   <span className="text-[10px] text-muted-foreground tabular-nums">Lead: {leadScore}</span>
                 )}
+              </div>
+              {/* Which connected account this thread belongs to — full name + the
+                  channel's own color so the operator never replies from the wrong
+                  account (e.g. Zalo Personal Jennie vs Zalo Yinyang Gemral). */}
+              <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                <span className="text-[9px] text-muted-foreground shrink-0 uppercase tracking-wider font-medium">
+                  Trả lời từ
+                </span>
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-bold border min-w-0 max-w-[230px]"
+                  style={{ backgroundColor: `${channelColor}1A`, color: channelColor, borderColor: `${channelColor}40` }}
+                  title={channelLabel}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: channelColor }} />
+                  <span className="truncate">{channelLabel}</span>
+                </span>
+                {conv.agent_slug && <AgentBadge slug={conv.agent_slug} size="sm" />}
               </div>
             </div>
           </div>
