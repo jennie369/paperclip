@@ -20,7 +20,7 @@ let _purify: ReturnType<typeof DOMPurify> | null = null;
 function getPurify() {
   if (!_purify) {
     const window = new JSDOM('').window;
-    _purify = DOMPurify(window as unknown as Window);
+    _purify = DOMPurify(window as any);
   }
   return _purify;
 }

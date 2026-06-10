@@ -114,7 +114,7 @@ ${messagesText}`;
         p_id: customerId,
         p_orders: 0,
         p_revenue: 0,
-      }).catch(() => {});
+      }).then(undefined, () => {});
 
       // Increment total_conversations directly
       const { data: cust } = await supabase
