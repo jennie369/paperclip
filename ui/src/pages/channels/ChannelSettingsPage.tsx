@@ -103,7 +103,12 @@ export function ChannelSettingsPage() {
         save_contacts_to_crm: saveContactsToCrm,
       } as any),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["channels", "settings", channelName] });
+      // Invalidate the WHOLE "channels" tree (prefix match) — not just this
+      // channel's settings. Otherwise the channel LIST (["channels","instances"])
+      // keeps showing the stale agent badge for minutes after unassigning the
+      // agent (reported 2026-06-10). config-channels feeds other surfaces too.
+      qc.invalidateQueries({ queryKey: ["channels"] });
+      qc.invalidateQueries({ queryKey: ["config-channels"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     },
@@ -404,6 +409,9 @@ function ChannelSettingsList() {
   const { data: instances = [], isLoading } = useQuery({
     queryKey: ["channels", "instances"],
     queryFn: channelsApi.listInstances,
+    // Always refetch when the list mounts so returning from a channel's detail
+    // page (where agent assignment can change) reflects the true state instantly.
+    refetchOnMount: "always",
   });
 
   const startMut = useMutation({
