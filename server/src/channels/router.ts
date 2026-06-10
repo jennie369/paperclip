@@ -1657,6 +1657,28 @@ async function postProcessReply(
 
   let cleaned = scrubBannedPhrases(reply, config.slug);
 
+  // ── Collapse guard: scrub nuked ALL real content (incident 2026-06-10) ──
+  // When the agent leaks Claude-Code explanatory output (★ Insight blocks, **bold**,
+  // bullets) the defense-in-depth scrub above can strip the ENTIRE reply down to
+  // stray punctuation — observed: a lone backtick `` ` `` reaching the customer for
+  // turn after turn. NEVER send that. Suppress the garbage with a safe handoff line
+  // AND escalate so the session pauses (bot_paused) + a ticket fires + CS is pinged;
+  // otherwise the next customer message re-triggers the same broken agent.
+  const hasLetters = (s: string) => /[\p{L}\p{N}]/u.test(s);
+  if (hasLetters(reply) && !hasLetters(cleaned)) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: scrub COLLAPSED reply to no-content `
+        + `(${reply.length}→${cleaned.trim().length} chars). Suppressing + escalating. `
+        + `Original head: ${JSON.stringify(reply.slice(0, 300))}`,
+    );
+    (config as any)._escalation = {
+      reason: 'agent_output_corrupted',
+      priority: 'high',
+      summary: 'Bot trả lời lỗi định dạng (rò rỉ output-style nội bộ) — đã chặn gửi, cần người tiếp quản.',
+    };
+    return 'Dạ em đã ghi nhận, em kiểm tra lại thông tin và phản hồi anh/chị trong thời gian sớm nhất ạ.';
+  }
+
   // Parse + strip [[ESCALATE: ...]] FIRST and stash the intent on config so the
   // consumer can fire handleEscalation (ticket + bot_paused + CS Telegram ping).
   // Previously this marker was never parsed here → escalation never fired
@@ -1716,6 +1738,7 @@ const ESCALATION_REASON_WHITELIST = new Set([
   'prolonged_frustration',
   'compliance_request',
   'ceo_request',
+  'agent_output_corrupted',
 ]);
 
 /**
@@ -1796,11 +1819,17 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     scrubbed = scrubbed.replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1');
   }
 
-  // Rule 4: Strip "Insight" sections entirely (Claude Code output style leak)
-  if (/Insight/i.test(scrubbed)) {
+  // Rule 4: Strip Claude-Code "★ Insight ───…" fenced blocks (output-style leak).
+  // BOUNDED to the box-drawing/dash fence so a stray word "insight" in normal prose
+  // does NOT nuke everything to end-of-reply (the 2026-06-10 backtick incident: the
+  // old `Insight[\s\S]*$` deleted from the first "Insight" to the very end). Require
+  // a fence of ≥2 rule chars after the header, then lazily stop at the closing fence
+  // / blank line / end. If a leak slips past this, the collapse guard in
+  // postProcessReply catches the all-content-stripped result.
+  const insightBlockRe = /[-★•]?\s*Insight[ \t]*[─━—–=_-]{2,}[\s\S]*?(?:[─━—–=_-]{2,}|\n\s*\n|$)/gi;
+  if (insightBlockRe.test(scrubbed)) {
     violations.push('insight_section');
-    // Remove from "Insight" to end, or just the line
-    scrubbed = scrubbed.replace(/[-★•]?\s*Insight[\s\S]*$/gi, '');
+    scrubbed = scrubbed.replace(insightBlockRe, '');
   }
 
   // Rule 5: Strip internal system mentions (CRM, tracking, database, etc.)
