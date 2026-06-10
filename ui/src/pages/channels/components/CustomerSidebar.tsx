@@ -7,6 +7,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Flame, CloudSun, Snowflake } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { getChannelVisual } from "./channelConfig";
+import { CommandCustomer360 } from "@/components/crm-messaging/command-center/CommandCustomer360";
+import { mapCrm } from "@/components/crm-messaging/command-center/adapters";
 
 interface RecentOrder {
   id: string;
@@ -36,6 +38,8 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const customer = conv.customer;
   const channelCfg = getChannelVisual(conv.channel_name);
   const displayName = customer?.display_name || conv.sender_name || "Không rõ";
+  // All profile/CRM actions open the full customer record (real, never a dead button).
+  const goProfile = () => { if (customer?.id) navigate(`/crm/customers/${customer.id}`); };
 
   // Sync Gemral data
   const syncMutation = useMutation({
@@ -97,70 +101,61 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
 
   return (
     <div className="p-3 space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Khách hàng</h3>
-        <button onClick={onClose} className="p-1 rounded hover:bg-muted">
+      {/* Header: avatar + name + close */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            className="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-sm font-medium text-white"
+            style={{ backgroundColor: channelCfg.color }}
+          >
+            {displayName.charAt(0).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold truncate">{displayName}</div>
+            {customer?.status && (
+              <div className="text-[11px] text-muted-foreground capitalize">{customer.status}</div>
+            )}
+          </div>
+        </div>
+        <button onClick={onClose} className="p-1 rounded hover:bg-muted shrink-0">
           <X className="h-4 w-4 text-muted-foreground" />
         </button>
       </div>
 
-      {/* Profile */}
-      <div className="text-center space-y-2">
-        <div
-          className="w-14 h-14 rounded-full mx-auto flex items-center justify-center text-lg font-medium text-white"
-          style={{ backgroundColor: channelCfg.color }}
-        >
-          {displayName.charAt(0).toUpperCase()}
-        </div>
-        <div>
-          <div className="text-sm font-semibold">{displayName}</div>
-          {customer?.phone && (
-            <div className="text-xs text-muted-foreground">{customer.phone}</div>
-          )}
-          {customer?.email && (
-            <div className="text-xs text-muted-foreground">{customer.email}</div>
-          )}
-        </div>
-      </div>
-
-      {/* Status + Lead */}
+      {/* Rich Customer 360 card — same component as /crm-inbox Command Center.
+          Profile built from real conv.customer via mapCrm; actions wired to real
+          handlers (tel: dial, open full CRM record) — no dead/showcase buttons. */}
       {customer && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">Trạng thái</span>
-            <span className="text-xs font-medium capitalize">{customer.status || "Mới"}</span>
-          </div>
-          {customer.lead_score != null && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Lead Score</span>
-              <span className={`text-xs font-bold flex items-center gap-1 ${
-                customer.lead_score >= 70 ? "text-red-500" :
-                customer.lead_score >= 40 ? "text-amber-500" : "text-blue-400"
-              }`}>
-                {customer.lead_temperature === "hot"
-                  ? <Flame className="h-3.5 w-3.5 shrink-0" />
-                  : customer.lead_temperature === "warm"
-                  ? <CloudSun className="h-3.5 w-3.5 shrink-0" />
-                  : <Snowflake className="h-3.5 w-3.5 shrink-0" />}
-                {customer.lead_score}/100
-              </span>
-            </div>
-          )}
-        </div>
+        <CommandCustomer360
+          crm={mapCrm(conv)}
+          onEdit={goProfile}
+          onAddTag={goProfile}
+          onCreateQuote={goProfile}
+          onQuickAction={(a) => {
+            if (a.icon === "phone" && customer.phone) {
+              window.location.href = `tel:${customer.phone}`;
+            } else {
+              goProfile();
+            }
+          }}
+        />
       )}
 
-      {/* Tags */}
-      {customer?.tags && (customer.tags as string[]).length > 0 && (
-        <div>
-          <div className="text-[11px] text-muted-foreground font-medium mb-1">Tags</div>
-          <div className="flex flex-wrap gap-1">
-            {(customer.tags as string[]).map((tag) => (
-              <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-muted/50 rounded-full">
-                {tag}
-              </span>
-            ))}
-          </div>
+      {/* Lead score (Command Center card omits it) */}
+      {customer?.lead_score != null && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">Lead Score</span>
+          <span className={`text-xs font-bold flex items-center gap-1 ${
+            customer.lead_score >= 70 ? "text-red-500" :
+            customer.lead_score >= 40 ? "text-amber-500" : "text-blue-400"
+          }`}>
+            {customer.lead_temperature === "hot"
+              ? <Flame className="h-3.5 w-3.5 shrink-0" />
+              : customer.lead_temperature === "warm"
+              ? <CloudSun className="h-3.5 w-3.5 shrink-0" />
+              : <Snowflake className="h-3.5 w-3.5 shrink-0" />}
+            {customer.lead_score}/100
+          </span>
         </div>
       )}
 
