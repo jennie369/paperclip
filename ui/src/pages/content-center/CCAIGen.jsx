@@ -5931,8 +5931,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         )}
         <Card variant="glass" padding="md">
           {/* Toolbar */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setResultCollapsed(c => !c)}>
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 cursor-pointer select-none" onClick={() => setResultCollapsed(c => !c)}>
               <h3 className="text-sm font-semibold text-txt">Kết Quả</h3>
               <span className="text-txt-3 text-xs">{resultCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
               {savedId && (
