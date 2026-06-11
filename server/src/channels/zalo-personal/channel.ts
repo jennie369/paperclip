@@ -589,9 +589,14 @@ export class ZaloPersonalChannel {
     msg: any,
     threadType: 'dm' | 'group'
   ): Promise<void> {
-    // Skip self-messages (own UID or echoed messages with uid=0)
-    if (msg.uidFrom === this.session?.uid) return;
+    // uid=0 = echo nội bộ rỗng → bỏ.
     if (msg.uidFrom === '0' || msg.uidFrom === 0) return;
+    // Tin từ CHÍNH tài khoản (chị gõ tay trong app Zalo thật HOẶC echo tin Paperclip vừa gửi):
+    // KHÔNG bỏ — route sang handler dedup-theo-msgId rồi lưu outbound để đồng bộ vào khung chat.
+    if (msg.uidFrom === this.session?.uid) {
+      await this.handleSelfMessage(msg, threadType);
+      return;
+    }
 
     const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
     const threadId = threadType === 'dm' ? msg.uidFrom : msg.idTo;
@@ -668,6 +673,38 @@ export class ZaloPersonalChannel {
         },
       });
     }
+  }
+
+  // Tin tự-gửi (chị reply trực tiếp trong app Zalo, KHÔNG qua Paperclip): listener Zalo
+  // multi-client vẫn nhận → lưu vào channel_sent_messages để đồng bộ vào khung chat Paperclip.
+  // Dedup theo platform_message_id (= msgId) để KHÔNG trùng tin Paperclip đã tự gửi & lưu.
+  private async handleSelfMessage(msg: any, threadType: 'dm' | 'group'): Promise<void> {
+    if (!msg.msgId) return;
+    const msgId = String(msg.msgId);
+    const threadId = msg.idTo; // self-message: người nhận = idTo (DM) / group = idTo
+    if (!threadId) return;
+    // Đã có row (Paperclip gửi & lưu rồi) → skip tránh double.
+    const { data: existing } = await supabase
+      .from('channel_sent_messages')
+      .select('id')
+      .eq('channel_name', this.channelName)
+      .eq('platform_message_id', msgId)
+      .maybeSingle();
+    if (existing) return;
+    const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    const { error } = await supabase.from('channel_sent_messages').insert({
+      channel_name: this.channelName,
+      thread_id: threadId,
+      thread_type: threadType,
+      to_uid: threadId,
+      body,
+      content_type: msg.msgType || 'text',
+      status: 'sent',
+      platform_message_id: msgId,
+      sent_by: 'manual_zalo',
+    });
+    if (error) { console.error(`${this.tag} Self-message store error:`, error); return; }
+    console.log(`${this.tag} 📤 Self (manual Zalo) → stored outbound thread=${threadId}: ${body?.substring(0, 60)}`);
   }
 
   async send(

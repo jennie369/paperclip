@@ -176,6 +176,32 @@ router.post('/:key/link-customer', async (req, res) => {
   res.json({ customer_id, display_name: cust.display_name, message: 'Đã liên kết khách hàng' });
 });
 
+// ── POST /api/channels/conversations/:key/merge-customer — Gộp khách hiện tại của hội thoại vào target (dedup) ──
+router.post('/:key/merge-customer', async (req, res) => {
+  const { customer_id: target } = req.body || {};
+  if (!target) return res.status(400).json({ error: 'Thiếu customer_id' });
+  const { data: tgt } = await supabase
+    .from('crm_customers').select('id, display_name').eq('id', target).maybeSingle();
+  if (!tgt) return res.status(404).json({ error: 'Không tìm thấy khách hàng đích' });
+  // source = khách hiện đang gắn với hội thoại
+  const { data: sess } = await supabase
+    .from('channel_sessions').select('customer_id').eq('session_key', req.params.key).maybeSingle();
+  const source = (sess?.customer_id as string | null) || null;
+  if (source && source !== target) {
+    const { error: mErr } = await supabase.rpc('merge_crm_customers', { p_source: source, p_target: target });
+    if (mErr) return res.status(400).json({ error: mErr.message });
+  }
+  // RPC đã relink theo customer_id; set lại cho chắc (trường hợp source null/unlinked).
+  const { error } = await supabase
+    .from('channel_sessions').update({ customer_id: target }).eq('session_key', req.params.key);
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({
+    customer_id: target, display_name: tgt.display_name,
+    merged: !!(source && source !== target),
+    message: source && source !== target ? 'Đã gộp dữ liệu & liên kết khách hàng' : 'Đã liên kết khách hàng',
+  });
+});
+
 // ── POST /api/channels/conversations/:key/mute — Toggle mute ──
 router.post('/:key/mute', async (req, res) => {
   const { data } = await supabase.from('channel_sessions')

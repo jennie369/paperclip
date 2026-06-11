@@ -210,16 +210,17 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           : c.phone === v
       ));
       if (match) {
-        // 2a) Re-link hội thoại sang record có sẵn (KHÔNG ghi email lên record hiện tại → tránh
-        //     đụng unique-email constraint + để panel hiện đơn/doanh thu của record thật).
-        const r = await fetch(`/api/channels/conversations/${conv.session_key}/link-customer`, {
+        // 2a) GỘP record hiện tại (lead) vào record có sẵn (người mua) — di chuyển interactions/
+        //     notes/tags/đơn + relink hội thoại + backfill field trống (KHÔNG mất timeline như re-link trơ;
+        //     KHÔNG ghi email gây đụng unique-constraint).
+        const r = await fetch(`/api/channels/conversations/${conv.session_key}/merge-customer`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ customer_id: match.id }),
         });
         const jr = await r.json().catch(() => null);
         return r.ok && !jr?.error
-          ? { ok: true, msg: `Đã chuyển hội thoại sang khách "${match.display_name || v}" (đã có trong CRM)` }
-          : { ok: false, msg: `Lỗi liên kết: ${jr?.error || r.status}` };
+          ? { ok: true, msg: `Đã gộp sang khách "${match.display_name || v}" (giữ đủ lịch sử + đơn)` }
+          : { ok: false, msg: `Lỗi gộp: ${jr?.error || r.status}` };
       }
       // 2b) Không có record khác → lưu vào record hiện tại + link Gemral + sync.
       const ures = await fetch(`/api/channels/crm/customers/${customer.id}`, {
