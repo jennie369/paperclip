@@ -435,7 +435,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                         {isOutbound ? (
                           <>
                             <span className="text-xs text-muted-foreground">{formatTime(ts)}</span>
-                            <span className="text-xs font-medium text-violet-500 inline-flex items-center gap-1">
+                            <span className="text-xs font-medium text-foreground/70 inline-flex items-center gap-1">
                               {isAgentMsg && <Bot className="h-3 w-3 shrink-0" />}{senderLabel}
                             </span>
                           </>
@@ -452,7 +452,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                     <div
                       className={`rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
                         isOutbound
-                          ? "bg-violet-500/10 text-foreground rounded-br-sm"
+                          ? "bg-foreground text-background rounded-br-sm"
                           : "bg-muted text-foreground rounded-bl-sm border border-border/40"
                       }`}
                     >
