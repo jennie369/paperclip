@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
@@ -55,6 +55,52 @@ interface RecentTicket {
 interface Props {
   conversation: ChannelSession;
   onClose: () => void;
+}
+
+// Ô liên hệ edit-inline (phone/email) — bấm để sửa, autosave on blur/Enter.
+function EditableField({
+  icon: Icon, value, placeholder, type = "text", onSave,
+}: {
+  icon: typeof Phone;
+  value?: string | null;
+  placeholder: string;
+  type?: string;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const current = value || "";
+  const save = () => {
+    const v = draft.trim();
+    if (v !== current) onSave(v);
+    setEditing(false);
+  };
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      {editing ? (
+        <input
+          autoFocus
+          type={type}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+          className="flex-1 min-w-0 px-1.5 py-0.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => { setDraft(current); setEditing(true); }}
+          className="group flex-1 min-w-0 flex items-center gap-1 text-left hover:text-primary"
+          title="Bấm để sửa"
+        >
+          <span className={`truncate ${current ? "" : "text-muted-foreground italic"}`}>{current || placeholder}</span>
+          <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60 shrink-0" />
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function CustomerSidebar({ conversation: conv, onClose }: Props) {
@@ -143,6 +189,35 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         : Promise.resolve(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
+  // ── Tra & liên kết user từ DB theo phone/email (link Gemral + sync) ──
+  const [lookupVal, setLookupVal] = useState("");
+  const lookupMut = useMutation({
+    mutationFn: async () => {
+      const v = lookupVal.trim();
+      if (!v || !customer?.id) return null;
+      const body = v.includes("@") ? { email: v } : { phone: v };
+      // 1) Lưu phone/email vào crm_customers (whitelist cho phép) để không mất khi chưa match
+      await crmApi.updateCustomer(customer.id, body).catch(() => {});
+      // 2) Tra & liên kết Gemral user theo phone/email
+      const r = await fetch(`/api/channels/crm/customers/${customer.id}/link-gemral`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const linked = await r.json().catch(() => null);
+      // 3) Sync Gemral data nếu liên kết được
+      if (linked && !linked.error) {
+        await fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).catch(() => {});
+      }
+      return linked;
+    },
+    onSuccess: () => {
+      setLookupVal("");
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
     },
   });
 
@@ -331,12 +406,61 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </div>
       )}
 
-      {/* Rich Customer 360 card — contact + LTV + journey + quick actions (Gọi · Phiếu HT).
-          Tags ẩn ở đây (đã có khối tag editable phía trên). Tạo đơn đã bỏ theo yêu cầu. */}
+      {/* ── Liên hệ: phone + email edit inline; địa chỉ read-only từ đơn (SSOT: không lưu cột address);
+              + Tra & liên kết user từ DB theo phone/email (link Gemral + sync) ── */}
+      {customer?.id && (
+        <div className="space-y-2">
+          <label className="text-[11px] text-muted-foreground font-medium">Liên hệ</label>
+          <EditableField icon={Phone} type="tel" value={f.phone ?? customer.phone} placeholder="Thêm số điện thoại…" onSave={(v) => updateMutation.mutate({ phone: v || null })} />
+          <EditableField icon={Mail} type="email" value={f.email ?? customer.email} placeholder="Thêm email…" onSave={(v) => updateMutation.mutate({ email: v || null })} />
+          {(() => {
+            const o = recentOrders[0] as any;
+            const addr = o?.shipping_address
+              ? [o.shipping_address, o.shipping_ward, o.shipping_district, o.shipping_province].filter(Boolean).join(", ")
+              : null;
+            return addr ? (
+              <div className="flex items-start gap-2 text-xs" title="Địa chỉ từ đơn hàng gần nhất (Shopify) — không sửa tại đây">
+                <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                <span className="text-foreground/80">{addr}</span>
+              </div>
+            ) : null;
+          })()}
+          <div className="flex items-center gap-1.5 pt-1">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                value={lookupVal}
+                onChange={(e) => setLookupVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && lookupVal.trim()) lookupMut.mutate(); }}
+                placeholder="SĐT / email tra DB…"
+                className="w-full text-xs pl-7 pr-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+            <button
+              onClick={() => lookupMut.mutate()}
+              disabled={!lookupVal.trim() || lookupMut.isPending}
+              className="shrink-0 text-xs px-2 py-1.5 rounded border bg-primary/10 text-primary font-medium hover:bg-primary hover:text-primary-foreground disabled:opacity-50 transition-colors"
+            >
+              {lookupMut.isPending ? "Đang tra…" : "Tra & liên kết"}
+            </button>
+          </div>
+          {lookupMut.data != null && (
+            <div className="text-[11px] text-muted-foreground">
+              {(lookupMut.data as any)?.error ? `Không liên kết được: ${(lookupMut.data as any).error}` : "Đã liên kết & đồng bộ Gemral ✓"}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Rich Customer 360 card — LTV + journey + quick actions (Gọi · Phiếu HT).
+          phone/email/tags ẩn ở đây (đã có khối Liên hệ + tag editable phía trên — tránh trùng surface). */}
       {customer && (
         <CommandCustomer360
+          hideTitle
           crm={{
             ...mapCrm(conv),
+            phone: "",
+            email: "",
             tags: [],
             quickActions: [
               ...(customer.phone ? [{ label: "Gọi Ngay", icon: "phone", tone: "success" as const }] : []),

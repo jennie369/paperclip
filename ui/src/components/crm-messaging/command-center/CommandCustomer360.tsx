@@ -61,6 +61,7 @@ export function CommandCustomer360({
   onCreateQuote,
   onAddTag,
   onQuickAction,
+  hideTitle = false,
 }: {
   crm: CommandCrmProfile;
   onEdit?: () => void;
@@ -68,6 +69,8 @@ export function CommandCustomer360({
   onCreateQuote?: () => void;
   onAddTag?: () => void;
   onQuickAction?: (action: CommandQuickAction, index: number) => void;
+  /** Ẩn header "Customer 360" khi panel cha đã có tiêu đề riêng (vd CustomerSidebar inbox). */
+  hideTitle?: boolean;
 }) {
   const tags = crm.tags ?? [];
   const quickActions = crm.quickActions ?? [];
@@ -75,14 +78,16 @@ export function CommandCustomer360({
 
   return (
     <>
-      <div className="flex justify-between items-center mb-6">
-        <h3 className="font-bold text-base text-gem-text uppercase tracking-wider">Customer 360</h3>
-        {onEdit && (
-          <button type="button" onClick={onEdit} className="text-gem-primary text-sm font-bold hover:underline">
-            Sửa
-          </button>
-        )}
-      </div>
+      {!hideTitle && (
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="font-bold text-base text-gem-text uppercase tracking-wider">Customer 360</h3>
+          {onEdit && (
+            <button type="button" onClick={onEdit} className="text-gem-primary text-sm font-bold hover:underline">
+              Sửa
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Deep Profile Card */}
       <div className="pcard pcard-static p-4 mb-6" style={{ borderRadius: 16 }}>
