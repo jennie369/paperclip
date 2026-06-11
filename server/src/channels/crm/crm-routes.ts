@@ -139,6 +139,13 @@ router.put('/customers/:id', async (req, res) => {
     for (const [k, v] of Object.entries(req.body || {})) {
       if (CUSTOMER_EDITABLE_COLUMNS.has(k)) patch[k] = v;
     }
+    // metadata: MERGE (không clobber key khác) — dùng cho dữ liệu CRM-native
+    // như địa chỉ manual (SSOT CRM_AND_META_CAPI: KHÔNG thêm cột mirror, lưu metadata.address).
+    const mdIn = (req.body || {}).metadata;
+    if (mdIn && typeof mdIn === 'object' && !Array.isArray(mdIn)) {
+      const { data: cur } = await supabase.from('crm_customers').select('metadata').eq('id', id).maybeSingle();
+      patch.metadata = { ...((cur?.metadata as Record<string, any>) || {}), ...mdIn };
+    }
     if (Object.keys(patch).length === 0) {
       return res.status(400).json({ error: 'Không có trường hợp lệ để cập nhật' });
     }

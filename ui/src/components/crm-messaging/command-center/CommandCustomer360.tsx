@@ -62,6 +62,7 @@ export function CommandCustomer360({
   onAddTag,
   onQuickAction,
   hideTitle = false,
+  hideLtv = false,
 }: {
   crm: CommandCrmProfile;
   onEdit?: () => void;
@@ -71,6 +72,8 @@ export function CommandCustomer360({
   onQuickAction?: (action: CommandQuickAction, index: number) => void;
   /** Ẩn header "Customer 360" khi panel cha đã có tiêu đề riêng (vd CustomerSidebar inbox). */
   hideTitle?: boolean;
+  /** Ẩn block Lifetime Value khi panel cha đã có khối Đơn hàng/Doanh thu riêng. */
+  hideLtv?: boolean;
 }) {
   const tags = crm.tags ?? [];
   const quickActions = crm.quickActions ?? [];
@@ -119,15 +122,17 @@ export function CommandCustomer360({
           </div>
         )}
 
-        <div className="mb-4">
-          <div className="flex justify-between mb-1">
-            <div className="text-[11px] font-bold text-gem-text-muted uppercase tracking-wider">Lifetime Value</div>
-            {crm.ltvDeltaLabel && (
-              <div className="text-gem-success text-[11px] font-bold bg-gem-success/10 px-1.5 py-0.5 rounded border border-gem-success/20">{crm.ltvDeltaLabel}</div>
-            )}
+        {!hideLtv && (
+          <div className="mb-4">
+            <div className="flex justify-between mb-1">
+              <div className="text-[11px] font-bold text-gem-text-muted uppercase tracking-wider">Lifetime Value</div>
+              {crm.ltvDeltaLabel && (
+                <div className="text-gem-success text-[11px] font-bold bg-gem-success/10 px-1.5 py-0.5 rounded border border-gem-success/20">{crm.ltvDeltaLabel}</div>
+              )}
+            </div>
+            <div className="text-2xl font-black text-gem-text">{crm.ltv}</div>
           </div>
-          <div className="text-2xl font-black text-gem-text">{crm.ltv}</div>
-        </div>
+        )}
 
         {crm.dealStages && crm.dealStages.length > 0 && (
           <div className="mb-4 pt-4 border-t border-gem-border/10">

@@ -157,6 +157,25 @@ router.post('/:key/bot', async (req, res) => {
   res.json({ bot_paused: !!paused, message: paused ? 'Đã chuyển Sale trực' : 'Đã bật BOT tự động' });
 });
 
+// ── POST /api/channels/conversations/:key/link-customer — Gán CRM customer cho hội thoại ──
+router.post('/:key/link-customer', async (req, res) => {
+  const { customer_id } = req.body || {};
+  if (!customer_id) return res.status(400).json({ error: 'Thiếu customer_id' });
+  // Verify customer tồn tại (tránh gán id rác → FK fail âm thầm)
+  const { data: cust } = await supabase
+    .from('crm_customers')
+    .select('id, display_name')
+    .eq('id', customer_id)
+    .maybeSingle();
+  if (!cust) return res.status(404).json({ error: 'Không tìm thấy khách hàng' });
+  const { error } = await supabase
+    .from('channel_sessions')
+    .update({ customer_id })
+    .eq('session_key', req.params.key);
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ customer_id, display_name: cust.display_name, message: 'Đã liên kết khách hàng' });
+});
+
 // ── POST /api/channels/conversations/:key/mute — Toggle mute ──
 router.post('/:key/mute', async (req, res) => {
   const { data } = await supabase.from('channel_sessions')

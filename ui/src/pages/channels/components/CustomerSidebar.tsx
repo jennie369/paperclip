@@ -195,29 +195,78 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   // ── Tra & liên kết user từ DB theo phone/email (link Gemral + sync) ──
   const [lookupVal, setLookupVal] = useState("");
   const lookupMut = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<{ ok: boolean; msg: string }> => {
       const v = lookupVal.trim();
-      if (!v || !customer?.id) return null;
-      const body = v.includes("@") ? { email: v } : { phone: v };
-      // 1) Lưu phone/email vào crm_customers (whitelist cho phép) để không mất khi chưa match
-      await crmApi.updateCustomer(customer.id, body).catch(() => {});
-      // 2) Tra & liên kết Gemral user theo phone/email
-      const r = await fetch(`/api/channels/crm/customers/${customer.id}/link-gemral`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const linked = await r.json().catch(() => null);
-      // 3) Sync Gemral data nếu liên kết được
-      if (linked && !linked.error) {
-        await fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).catch(() => {});
+      if (!v || !customer?.id) return { ok: false, msg: "Nhập SĐT hoặc email" };
+      const isEmail = v.includes("@");
+      // 1) Tìm crm_customer KHÁC đã có sẵn theo phone/email (vd record người mua đã có đơn —
+      //    dedup split: lead Zalo không email vs record Shopify có email).
+      const sres = await fetch(`/api/channels/crm/customers?search=${encodeURIComponent(v)}&limit=8`);
+      const sdata = sres.ok ? await sres.json().catch(() => null) : null;
+      const list: any[] = Array.isArray(sdata) ? sdata : (sdata?.customers ?? sdata?.data ?? []);
+      const match = list.find((c) => c.id !== customer.id && (
+        isEmail
+          ? [c.email, c.shopify_customer_email].some((e: string) => e && e.toLowerCase() === v.toLowerCase())
+          : c.phone === v
+      ));
+      if (match) {
+        // 2a) Re-link hội thoại sang record có sẵn (KHÔNG ghi email lên record hiện tại → tránh
+        //     đụng unique-email constraint + để panel hiện đơn/doanh thu của record thật).
+        const r = await fetch(`/api/channels/conversations/${conv.session_key}/link-customer`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customer_id: match.id }),
+        });
+        const jr = await r.json().catch(() => null);
+        return r.ok && !jr?.error
+          ? { ok: true, msg: `Đã chuyển hội thoại sang khách "${match.display_name || v}" (đã có trong CRM)` }
+          : { ok: false, msg: `Lỗi liên kết: ${jr?.error || r.status}` };
       }
-      return linked;
+      // 2b) Không có record khác → lưu vào record hiện tại + link Gemral + sync.
+      const ures = await fetch(`/api/channels/crm/customers/${customer.id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(isEmail ? { email: v } : { phone: v }),
+      });
+      if (!ures.ok) {
+        const ej = await ures.json().catch(() => null);
+        return { ok: false, msg: `Không lưu được: ${ej?.error || ures.status}` };
+      }
+      await fetch(`/api/channels/crm/customers/${customer.id}/link-gemral`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(isEmail ? { email: v } : { phone: v }),
+      }).catch(() => {});
+      await fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).catch(() => {});
+      return { ok: true, msg: "Đã lưu liên hệ & đồng bộ Gemral ✓" };
     },
     onSuccess: () => {
       setLookupVal("");
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
+    },
+  });
+
+  // ── Search & gán CRM customer cho hội thoại CHƯA link khách ──
+  const [custSearch, setCustSearch] = useState("");
+  const { data: custResults = [] } = useQuery({
+    queryKey: ["crm", "customer-search", custSearch],
+    queryFn: async () => {
+      const res = await fetch(`/api/channels/crm/customers?search=${encodeURIComponent(custSearch.trim())}&limit=8`);
+      if (!res.ok) return [];
+      const d = await res.json();
+      return Array.isArray(d) ? d : (d?.customers ?? d?.data ?? []);
+    },
+    enabled: !customer && custSearch.trim().length >= 2,
+    staleTime: 10_000,
+  });
+  const linkCustomerMut = useMutation({
+    mutationFn: (customerId: string) =>
+      fetch(`/api/channels/conversations/${conv.session_key}/link-customer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customer_id: customerId }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      setCustSearch("");
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
   });
 
@@ -413,15 +462,17 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           <label className="text-[11px] text-muted-foreground font-medium">Liên hệ</label>
           <EditableField icon={Phone} type="tel" value={f.phone ?? customer.phone} placeholder="Thêm số điện thoại…" onSave={(v) => updateMutation.mutate({ phone: v || null })} />
           <EditableField icon={Mail} type="email" value={f.email ?? customer.email} placeholder="Thêm email…" onSave={(v) => updateMutation.mutate({ email: v || null })} />
+          {/* Địa chỉ manual — lưu metadata.address (SSOT: không thêm cột address vào crm_customers) */}
+          <EditableField icon={MapPin} value={(f.metadata as any)?.address} placeholder="Thêm địa chỉ…" onSave={(v) => updateMutation.mutate({ metadata: { address: v || null } })} />
           {(() => {
             const o = recentOrders[0] as any;
             const addr = o?.shipping_address
               ? [o.shipping_address, o.shipping_ward, o.shipping_district, o.shipping_province].filter(Boolean).join(", ")
               : null;
             return addr ? (
-              <div className="flex items-start gap-2 text-xs" title="Địa chỉ từ đơn hàng gần nhất (Shopify) — không sửa tại đây">
-                <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                <span className="text-foreground/80">{addr}</span>
+              <div className="flex items-start gap-2 text-[11px] text-muted-foreground" title="Địa chỉ giao hàng từ đơn gần nhất (Shopify)">
+                <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
+                <span>Từ đơn: {addr}</span>
               </div>
             ) : null;
           })()}
@@ -445,8 +496,8 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
             </button>
           </div>
           {lookupMut.data != null && (
-            <div className="text-[11px] text-muted-foreground">
-              {(lookupMut.data as any)?.error ? `Không liên kết được: ${(lookupMut.data as any).error}` : "Đã liên kết & đồng bộ Gemral ✓"}
+            <div className={`text-[11px] ${lookupMut.data.ok ? "text-green-600" : "text-destructive"}`}>
+              {lookupMut.data.msg}
             </div>
           )}
         </div>
@@ -457,6 +508,7 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
       {customer && (
         <CommandCustomer360
           hideTitle
+          hideLtv
           crm={{
             ...mapCrm(conv),
             phone: "",
@@ -657,13 +709,39 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </button>
       )}
 
-      {/* No customer linked */}
+      {/* No customer linked — search & gán CRM customer có sẵn */}
       {!customer && (
-        <div className="text-center py-4">
-          <p className="text-xs text-muted-foreground mb-2">Khách chưa xác định</p>
-          <p className="text-[11px] text-muted-foreground">
-            Khách sẽ tự động liên kết khi có thông tin CRM
-          </p>
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">Hội thoại chưa gắn khách CRM. Tìm & liên kết:</p>
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              value={custSearch}
+              onChange={(e) => setCustSearch(e.target.value)}
+              placeholder="Tìm tên / SĐT / email…"
+              className="w-full text-xs pl-7 pr-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          {custSearch.trim().length >= 2 && (
+            <div className="max-h-48 overflow-auto rounded border divide-y divide-border">
+              {(custResults as any[]).length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-muted-foreground">Không tìm thấy khách</div>
+              ) : (
+                (custResults as any[]).map((c: any) => (
+                  <button
+                    key={c.id}
+                    onClick={() => linkCustomerMut.mutate(c.id)}
+                    disabled={linkCustomerMut.isPending}
+                    className="w-full text-left px-2 py-1.5 hover:bg-muted/50 disabled:opacity-50"
+                  >
+                    <div className="text-xs font-medium truncate">{c.display_name || c.phone || c.email || "Khách"}</div>
+                    <div className="text-[11px] text-muted-foreground truncate">{[c.phone, c.email].filter(Boolean).join(" · ") || "—"}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+          <p className="text-[10px] text-muted-foreground">Hoặc khách sẽ tự liên kết khi có thông tin CRM.</p>
         </div>
       )}
 
