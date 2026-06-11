@@ -1852,6 +1852,27 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     }
   }
 
+  // Rule 6: Strip code fences / stray backticks (2026-06-10 backtick-leak class).
+  // outputStyle:default (--settings) prevents the source, but defense-in-depth at the
+  // router per BUG-022+026 (enforce customer-facing rules at ROUTER, not just prompt —
+  // the small reply model ignores prompt bans). Vietnamese customer chat never uses
+  // backticks, so dropping fences + leftover backticks is safe.
+  if (/`/.test(scrubbed)) {
+    violations.push('code_fence_or_backtick');
+    scrubbed = scrubbed
+      .replace(/```[a-zA-Z0-9]*\n?/g, '') // ```lang opening + ``` closing fences
+      .replace(/`+/g, '');                // any remaining lone/inline backticks
+  }
+
+  // Rule 7: Strip meta-label prefix the LLM sometimes prepends ("Reply gửi chị X:",
+  // "Trả lời:", "Tin nhắn:", "Phản hồi:") — these address the operator, not the
+  // customer, and must never reach the chat (2026-06-11 "Reply gửi chị Trang:" leak).
+  const metaLabelRe = /^\s*(?:reply(?:\s+g[uưử]i[^\n:]*)?|trả\s*lời|tin\s*nhắn|phản\s*hồi|message|response)\s*:\s*/i;
+  if (metaLabelRe.test(scrubbed)) {
+    violations.push('meta_label_prefix');
+    scrubbed = scrubbed.replace(metaLabelRe, '');
+  }
+
   // Cleanup: remove multiple consecutive newlines
   scrubbed = scrubbed.replace(/\n{3,}/g, '\n\n').trim();
 
