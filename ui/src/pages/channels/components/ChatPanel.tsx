@@ -452,7 +452,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                     <div
                       className={`rounded-2xl px-3.5 py-2 text-sm font-medium leading-relaxed ${
                         isOutbound
-                          ? "bg-zinc-700 text-zinc-50 rounded-br-sm"
+                          ? "bg-zinc-800 text-zinc-50 rounded-br-sm"
                           : "bg-muted text-foreground rounded-bl-sm border border-border/40"
                       }`}
                     >
