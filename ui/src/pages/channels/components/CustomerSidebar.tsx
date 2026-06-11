@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
@@ -57,7 +57,7 @@ interface Props {
   onClose: () => void;
 }
 
-// Ô liên hệ edit-inline (phone/email) — bấm để sửa, autosave on blur/Enter.
+// Ô liên hệ edit-inline (phone/email/địa chỉ) — bấm để sửa (autosave on blur/Enter) + nút copy nhanh.
 function EditableField({
   icon: Icon, value, placeholder, type = "text", onSave,
 }: {
@@ -69,14 +69,21 @@ function EditableField({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [copied, setCopied] = useState(false);
   const current = value || "";
   const save = () => {
     const v = draft.trim();
     if (v !== current) onSave(v);
     setEditing(false);
   };
+  const copy = () => {
+    if (!current) return;
+    navigator.clipboard?.writeText(current);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <div className="group/field flex items-center gap-2 text-xs">
       <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       {editing ? (
         <input
@@ -89,15 +96,27 @@ function EditableField({
           className="flex-1 min-w-0 px-1.5 py-0.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
         />
       ) : (
-        <button
-          type="button"
-          onClick={() => { setDraft(current); setEditing(true); }}
-          className="group flex-1 min-w-0 flex items-center gap-1 text-left hover:text-primary"
-          title="Bấm để sửa"
-        >
-          <span className={`truncate ${current ? "" : "text-muted-foreground italic"}`}>{current || placeholder}</span>
-          <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60 shrink-0" />
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => { setDraft(current); setEditing(true); }}
+            className="group flex-1 min-w-0 flex items-center gap-1 text-left hover:text-primary"
+            title="Bấm để sửa"
+          >
+            <span className={`truncate ${current ? "" : "text-muted-foreground italic"}`}>{current || placeholder}</span>
+            <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60 shrink-0" />
+          </button>
+          {current && (
+            <button
+              type="button"
+              onClick={copy}
+              title="Sao chép"
+              className="shrink-0 p-1 rounded hover:bg-muted opacity-0 group-hover/field:opacity-100 transition-opacity"
+            >
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -352,35 +371,93 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </button>
       </div>
 
-      {/* ── Bộ control đầy đủ (parity với cột trái trang CRM detail) ── */}
+      {/* ── Liên hệ + Stats lên ĐẦU (data chính: copy nhanh phone/email/địa chỉ + đơn/doanh thu) ── */}
+      {customer?.id && (
+        <div className="space-y-2">
+          <label className="text-[11px] text-muted-foreground font-medium">Liên hệ</label>
+          <EditableField icon={Phone} type="tel" value={f.phone ?? customer.phone} placeholder="Thêm số điện thoại…" onSave={(v) => updateMutation.mutate({ phone: v || null })} />
+          <EditableField icon={Mail} type="email" value={f.email ?? customer.email} placeholder="Thêm email…" onSave={(v) => updateMutation.mutate({ email: v || null })} />
+          <EditableField icon={MapPin} value={(f.metadata as any)?.address} placeholder="Thêm địa chỉ…" onSave={(v) => updateMutation.mutate({ metadata: { address: v || null } })} />
+          {(() => {
+            const o = recentOrders[0] as any;
+            const addr = o?.shipping_address
+              ? [o.shipping_address, o.shipping_ward, o.shipping_district, o.shipping_province].filter(Boolean).join(", ")
+              : null;
+            return addr ? (
+              <div className="flex items-start gap-2 text-[11px] text-muted-foreground" title="Địa chỉ giao hàng từ đơn gần nhất (Shopify)">
+                <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
+                <span>Từ đơn: {addr}</span>
+              </div>
+            ) : null;
+          })()}
+          <div className="flex items-center gap-1.5 pt-1">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                value={lookupVal}
+                onChange={(e) => setLookupVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && lookupVal.trim()) lookupMut.mutate(); }}
+                placeholder="SĐT / email tra DB…"
+                className="w-full text-xs pl-7 pr-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+            <button
+              onClick={() => lookupMut.mutate()}
+              disabled={!lookupVal.trim() || lookupMut.isPending}
+              className="shrink-0 text-xs px-2 py-1.5 rounded border bg-primary/10 text-primary font-medium hover:bg-primary hover:text-primary-foreground disabled:opacity-50 transition-colors"
+            >
+              {lookupMut.isPending ? "Đang tra…" : "Tra & liên kết"}
+            </button>
+          </div>
+          {lookupMut.data != null && (
+            <div className={`text-[11px] ${lookupMut.data.ok ? "text-green-600" : "text-destructive"}`}>
+              {lookupMut.data.msg}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2 text-center text-xs pt-1">
+            <div className="rounded-md bg-muted/30 p-2">
+              <div className="font-bold text-base">{f.total_orders ?? 0}</div>
+              <div className="text-muted-foreground">Đơn hàng</div>
+            </div>
+            <div className="rounded-md bg-muted/30 p-2">
+              <div className="font-bold text-base">{fmtVND(f.total_revenue)}</div>
+              <div className="text-muted-foreground">Doanh thu</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bộ control (nén gọn): Trạng thái + Nhiệt độ 2 cột, Follow-up, Tags, Segment ── */}
       {customer?.id && (
         <div className="space-y-3">
-          {/* Trạng thái */}
-          <div>
-            <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
-            <select
-              value={f.status || customer.status || "lead_moi"}
-              onChange={(e) => updateMutation.mutate({ status: e.target.value })}
-              disabled={updateMutation.isPending}
-              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {/* Trạng thái */}
+            <div>
+              <label className="text-[11px] text-muted-foreground font-medium">Trạng thái</label>
+              <select
+                value={f.status || customer.status || "lead_moi"}
+                onChange={(e) => updateMutation.mutate({ status: e.target.value })}
+                disabled={updateMutation.isPending}
+                className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
 
-          {/* Nhiệt độ lead — override tay (lead_temperature_manual); __auto__ = về auto */}
-          <div>
-            <label className="text-[11px] text-muted-foreground font-medium">
-              Nhiệt độ {f.lead_temperature_manual ? "· tay" : `· tự động (${f.lead_score ?? customer.lead_score ?? 0}đ)`}
-            </label>
-            <select
-              value={f.lead_temperature_manual || "__auto__"}
-              onChange={(e) => updateMutation.mutate({ lead_temperature_manual: e.target.value === "__auto__" ? null : e.target.value })}
-              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              <option value="__auto__">Tự động ({tempLabel(f.lead_temperature || customer.lead_temperature)})</option>
-              {Object.entries(TEMP_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+            {/* Nhiệt độ lead — override tay (lead_temperature_manual); __auto__ = về auto */}
+            <div>
+              <label className="text-[11px] text-muted-foreground font-medium truncate block" title={f.lead_temperature_manual ? "Đặt tay" : `Tự động (${f.lead_score ?? customer.lead_score ?? 0}đ)`}>
+                Nhiệt độ {f.lead_temperature_manual ? "· tay" : `· auto`}
+              </label>
+              <select
+                value={f.lead_temperature_manual || "__auto__"}
+                onChange={(e) => updateMutation.mutate({ lead_temperature_manual: e.target.value === "__auto__" ? null : e.target.value })}
+                className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="__auto__">Tự động ({tempLabel(f.lead_temperature || customer.lead_temperature)})</option>
+                {Object.entries(TEMP_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
           </div>
 
           {/* Hẹn follow-up */}
@@ -433,17 +510,7 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
             </div>
           )}
 
-          {/* Stats + Newsletter */}
-          <div className="grid grid-cols-2 gap-2 text-center text-xs">
-            <div className="rounded-md bg-muted/30 p-2">
-              <div className="font-bold text-base">{f.total_orders ?? 0}</div>
-              <div className="text-muted-foreground">Đơn hàng</div>
-            </div>
-            <div className="rounded-md bg-muted/30 p-2">
-              <div className="font-bold text-base">{fmtVND(f.total_revenue)}</div>
-              <div className="text-muted-foreground">Doanh thu</div>
-            </div>
-          </div>
+          {/* Newsletter (read-only — quản lý ở Resend) */}
           {f.email_status && customer.email && (
             <div className="flex items-center gap-2 text-[11px]" title="Newsletter quản lý ở Resend (suppression list), không sửa tại đây.">
               <span className="text-muted-foreground">Newsletter:</span>
@@ -451,54 +518,6 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
                 {f.email_status === "active" ? "Đang nhận" : f.email_status === "unsubscribed" ? "Đã huỷ" : f.email_status}
               </span>
               <span className="text-muted-foreground/60">· qua Resend</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Liên hệ: phone + email edit inline; địa chỉ read-only từ đơn (SSOT: không lưu cột address);
-              + Tra & liên kết user từ DB theo phone/email (link Gemral + sync) ── */}
-      {customer?.id && (
-        <div className="space-y-2">
-          <label className="text-[11px] text-muted-foreground font-medium">Liên hệ</label>
-          <EditableField icon={Phone} type="tel" value={f.phone ?? customer.phone} placeholder="Thêm số điện thoại…" onSave={(v) => updateMutation.mutate({ phone: v || null })} />
-          <EditableField icon={Mail} type="email" value={f.email ?? customer.email} placeholder="Thêm email…" onSave={(v) => updateMutation.mutate({ email: v || null })} />
-          {/* Địa chỉ manual — lưu metadata.address (SSOT: không thêm cột address vào crm_customers) */}
-          <EditableField icon={MapPin} value={(f.metadata as any)?.address} placeholder="Thêm địa chỉ…" onSave={(v) => updateMutation.mutate({ metadata: { address: v || null } })} />
-          {(() => {
-            const o = recentOrders[0] as any;
-            const addr = o?.shipping_address
-              ? [o.shipping_address, o.shipping_ward, o.shipping_district, o.shipping_province].filter(Boolean).join(", ")
-              : null;
-            return addr ? (
-              <div className="flex items-start gap-2 text-[11px] text-muted-foreground" title="Địa chỉ giao hàng từ đơn gần nhất (Shopify)">
-                <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
-                <span>Từ đơn: {addr}</span>
-              </div>
-            ) : null;
-          })()}
-          <div className="flex items-center gap-1.5 pt-1">
-            <div className="relative flex-1 min-w-0">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-              <input
-                value={lookupVal}
-                onChange={(e) => setLookupVal(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && lookupVal.trim()) lookupMut.mutate(); }}
-                placeholder="SĐT / email tra DB…"
-                className="w-full text-xs pl-7 pr-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
-            <button
-              onClick={() => lookupMut.mutate()}
-              disabled={!lookupVal.trim() || lookupMut.isPending}
-              className="shrink-0 text-xs px-2 py-1.5 rounded border bg-primary/10 text-primary font-medium hover:bg-primary hover:text-primary-foreground disabled:opacity-50 transition-colors"
-            >
-              {lookupMut.isPending ? "Đang tra…" : "Tra & liên kết"}
-            </button>
-          </div>
-          {lookupMut.data != null && (
-            <div className={`text-[11px] ${lookupMut.data.ok ? "text-green-600" : "text-destructive"}`}>
-              {lookupMut.data.msg}
             </div>
           )}
         </div>
