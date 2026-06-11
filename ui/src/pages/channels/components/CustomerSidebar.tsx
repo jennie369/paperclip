@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy, ChevronDown } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
@@ -263,6 +263,16 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
       if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
     },
   });
+
+  // ── Timeline "Hoạt động gần đây": toggle expand từng card để đọc full nội dung ──
+  const [expandedActs, setExpandedActs] = useState<Set<string>>(new Set());
+  const toggleAct = (id: string) =>
+    setExpandedActs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // ── Search & gán CRM customer cho hội thoại CHƯA link khách ──
   const [custSearch, setCustSearch] = useState("");
@@ -692,14 +702,27 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
               const tone =
                 i.type === "chat" ? "bg-blue-500" : i.type === "order" ? "bg-green-500"
                 : i.type === "ticket" ? "bg-yellow-500" : "bg-primary";
+              const expanded = expandedActs.has(String(i.id));
+              const hasMore = !!i.content || (i.title || "").length > 28;
               return (
                 <div key={i.id} className="relative pl-5 group">
                   <div className={`absolute left-0 top-1 w-2.5 h-2.5 rounded-full border-2 border-background transition-transform group-hover:scale-125 ${tone}`} />
                   <div className="text-[9px] text-muted-foreground font-bold mb-0.5 tracking-wider uppercase">{timeAgo(i.created_at)}</div>
-                  <div className="rounded-lg p-2 border border-border bg-muted/40 hover:bg-muted/70 transition-colors">
-                    <p className="text-xs font-semibold truncate">{i.title || i.type}</p>
-                    {i.content && <p className="text-[11px] text-muted-foreground line-clamp-2">{i.content}</p>}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => hasMore && toggleAct(String(i.id))}
+                    className={`w-full text-left rounded-lg p-2 border border-border bg-muted/40 hover:bg-muted/70 transition-colors ${hasMore ? "cursor-pointer" : "cursor-default"}`}
+                  >
+                    <div className="flex items-start gap-1">
+                      <p className={`text-xs font-semibold flex-1 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>{i.title || i.type}</p>
+                      {hasMore && (
+                        <ChevronDown className={`h-3 w-3 mt-0.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
+                      )}
+                    </div>
+                    {i.content && (
+                      <p className={`text-[11px] text-muted-foreground ${expanded ? "whitespace-pre-wrap break-words mt-1" : "line-clamp-2"}`}>{i.content}</p>
+                    )}
+                  </button>
                 </div>
               );
             })}
