@@ -1846,7 +1846,8 @@ function ScriptDetailContent() {
                 </>
               )}
 
-              {/* ===== Phân Quyền Truy Cập (tier / course gating) ===== */}
+              {/* ===== Phân Quyền Truy Cập (tier / course gating) — chỉ blog/non-social ===== */}
+              {!resolvedIsSocialPost && (
               <div className="col-span-2 md:col-span-4 mt-2 rounded border border-border bg-bg-2 p-4">
                 <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-txt-2">🔒 Phân Quyền Truy Cập</h4>
                 <label className="mb-1 block text-[11px] font-semibold uppercase text-txt-3">Tier tối thiểu</label>
@@ -1885,6 +1886,7 @@ function ScriptDetailContent() {
                 )}
                 <p className="mt-2 text-[11px] text-txt-3">Để trống cả hai = miễn phí. Có tier <strong>hoặc</strong> đã mua 1 khóa bên dưới đều đọc được.</p>
               </div>
+              )}
             </div>
 
             <textarea
