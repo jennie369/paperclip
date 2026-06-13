@@ -575,6 +575,10 @@ router.post('/content-pipeline/scripts', async (req, res) => {
       tags,
       notes,
       metadata,
+      // Content gating — tier tối thiểu + danh sách course được phép đọc.
+      // NULL = không khóa. Cột do migration 20260613120000 thêm vào cc_scripts.
+      required_tier,
+      required_course_ids,
     } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: 'Tiêu đề không được trống' });
     // cc_scripts NOT NULL columns without defaults: title, content_type, track,
@@ -608,6 +612,8 @@ router.post('/content-pipeline/scripts', async (req, res) => {
     if (Array.isArray(tags)) insertRow.tags = tags;
     if (notes !== undefined) insertRow.notes = notes;
     if (metadata !== undefined) insertRow.metadata = metadata;
+    if (required_tier !== undefined) insertRow.required_tier = required_tier;
+    if (required_course_ids !== undefined) insertRow.required_course_ids = required_course_ids;
     const { data, error } = await supabase.from('cc_scripts').insert(insertRow).select('*').single();
     if (error) throw error;
     // Fire-and-forget: create matching Notion page in CONTENT PLANNER 2026 so

@@ -501,6 +501,24 @@ function ScriptDetailContent() {
   const [feedbackSent, setFeedbackSent] = useState(new Set());
   const fileInputRef = useRef(null);
 
+  // --- Content Gating State (tier / course) ---
+  // Tách riêng khỏi metaFields để né validFields whitelist trong handleSave.
+  const [requiredTier, setRequiredTier] = useState('');
+  const [selectedCourseIds, setSelectedCourseIds] = useState([]);
+  const [availableCourses, setAvailableCourses] = useState([]);
+
+  // Load danh sách khóa học đã publish (cho checkbox phân quyền)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { getSupabase } = await import('@gem/services/api/supabase');
+        const sb = getSupabase();
+        const { data } = await sb.from('courses').select('id, title').eq('is_published', true).order('title');
+        if (data) setAvailableCourses(data);
+      } catch { /* ignore — UI vẫn dùng được, chỉ thiếu list course */ }
+    })();
+  }, []);
+
   // --- News Publish State ---
   const [newsPublishing, setNewsPublishing] = useState(false);
   const [newsPublished, setNewsPublished] = useState(null);
@@ -565,6 +583,10 @@ function ScriptDetailContent() {
         tags: extraMeta.tags || [],
         excerpt: initialExcerpt,
       }));
+
+      // Init content-gating từ script (separate state — không qua metaFields whitelist)
+      setRequiredTier(script.required_tier ?? '');
+      setSelectedCourseIds(script.required_course_ids ?? []);
     }
   }, [script, isDirty]);
 
@@ -796,6 +818,8 @@ function ScriptDetailContent() {
             body: body,
             ...validMetaFields,
             metadata: extraMetadataFields,
+            required_tier: requiredTier || null,
+            required_course_ids: selectedCourseIds.length ? selectedCourseIds : null,
             status: 'draft',
           })
         });
@@ -814,7 +838,11 @@ function ScriptDetailContent() {
         const updates = { 
           [fieldName]: body,
           title: editableTitle || script?.title,
-          ...(resolvedIsSocialPost ? {} : validMetaFields),
+          ...(resolvedIsSocialPost ? {} : {
+            ...validMetaFields,
+            required_tier: requiredTier || null,
+            required_course_ids: selectedCourseIds.length ? selectedCourseIds : null,
+          }),
           metadata: {
             ...(script?.metadata || {}),
             ...extraMetadataFields
@@ -834,7 +862,7 @@ function ScriptDetailContent() {
     } finally {
       setIsSaving(false);
     }
-  }, [isNew, scriptId, body, editableTitle, updateMutation, resolvedIsSocialPost, addToast, navigate, metaFields]);
+  }, [isNew, scriptId, body, editableTitle, updateMutation, resolvedIsSocialPost, addToast, navigate, metaFields, requiredTier, selectedCourseIds]);
 
   // ═══ Iterate — Sửa script trong cùng session ═══
   const scriptSessionId = script?.session_id || null;
@@ -1817,6 +1845,46 @@ function ScriptDetailContent() {
                   </div>
                 </>
               )}
+
+              {/* ===== Phân Quyền Truy Cập (tier / course gating) ===== */}
+              <div className="col-span-2 md:col-span-4 mt-2 rounded border border-border bg-bg-2 p-4">
+                <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-txt-2">🔒 Phân Quyền Truy Cập</h4>
+                <label className="mb-1 block text-[11px] font-semibold uppercase text-txt-3">Tier tối thiểu</label>
+                <select
+                  value={requiredTier}
+                  onChange={(e) => { setRequiredTier(e.target.value); setIsDirty(true); }}
+                  className="w-full max-w-xs bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold mb-3"
+                >
+                  <option value="">Không khóa (Free)</option>
+                  <option value="tier1">TIER 1</option>
+                  <option value="tier2">TIER 2</option>
+                  <option value="tier3">TIER 3</option>
+                </select>
+                <label className="mb-1 block text-[11px] font-semibold uppercase text-txt-3">Khóa học cho phép truy cập</label>
+                {availableCourses.length === 0 ? (
+                  <p className="text-[11px] italic text-txt-3">Đang tải khóa học…</p>
+                ) : (
+                  <div className="max-h-44 space-y-1.5 overflow-y-auto rounded border border-border bg-bg-3 p-2">
+                    {availableCourses.map((course) => {
+                      const checked = selectedCourseIds.includes(course.id);
+                      return (
+                        <label key={course.id} className="flex cursor-pointer items-center gap-2 text-xs text-txt-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedCourseIds((prev) => checked ? prev.filter((id) => id !== course.id) : [...prev, course.id]);
+                              setIsDirty(true);
+                            }}
+                          />
+                          {course.title}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="mt-2 text-[11px] text-txt-3">Để trống cả hai = miễn phí. Có tier <strong>hoặc</strong> đã mua 1 khóa bên dưới đều đọc được.</p>
+              </div>
             </div>
 
             <textarea
