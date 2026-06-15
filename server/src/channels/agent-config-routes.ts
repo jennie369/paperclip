@@ -61,6 +61,7 @@ router.get('/', async (_req, res) => {
     history_limit: parseInt(pa.history_limit) || 50,
     session_timeout: parseInt(pa.session_timeout) || 1440,
     enabled: pa.enabled,
+    conversation_id: pa.conversation_id || null,
     created_at: pa.created_at,
     updated_at: pa.updated_at,
   }));
@@ -1307,6 +1308,7 @@ router.get('/:slug', async (req, res) => {
     history_limit: parseInt(pa.history_limit) || 50,
     session_timeout: parseInt(pa.session_timeout) || 1440,
     enabled: pa.enabled,
+    conversation_id: pa.conversation_id || null,
     created_at: pa.created_at,
     updated_at: pa.updated_at,
   });
@@ -1335,6 +1337,7 @@ router.post('/', async (req, res) => {
     history_limit,
     session_timeout,
     enabled,
+    conversation_id,
   } = req.body;
 
   if (!slug || !display_name) {
@@ -1372,6 +1375,7 @@ router.post('/', async (req, res) => {
       history_limit: history_limit ?? 20,
       session_timeout: session_timeout ?? 3600,
       enabled: enabled ?? true,
+      conversation_id: conversation_id || null,
     })
     .select('*')
     .single();
@@ -1553,6 +1557,7 @@ router.patch('/:slug', async (req, res) => {
   if (req.body.effort_mode !== undefined) paUpdates.effort_mode = req.body.effort_mode;
   if (req.body.max_turns !== undefined) paUpdates.max_turns = parseInt(req.body.max_turns);
   if (req.body.enabled !== undefined) paUpdates.enabled = req.body.enabled;
+  if (req.body.conversation_id !== undefined) paUpdates.conversation_id = req.body.conversation_id || null;
 
   const { data, error } = await supabase
     .from('paperclip_agents')

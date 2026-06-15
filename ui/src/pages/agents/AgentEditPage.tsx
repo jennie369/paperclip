@@ -25,7 +25,7 @@ import {
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 
-const PROVIDERS: AgentProvider[] = ["claude", "gemini", "openrouter"];
+const PROVIDERS: AgentProvider[] = ["claude", "gemini", "antigravity", "openrouter"];
 
 export function AgentEditPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -61,6 +61,7 @@ export function AgentEditPage() {
     extra_args: "",
     command: "",
     bootstrap_prompt: "",
+    conversation_id: "",
   });
   const [saved, setSaved] = useState(false);
 
@@ -107,6 +108,7 @@ export function AgentEditPage() {
         extra_args: Array.isArray((agent as any).extra_args) ? (agent as any).extra_args.join(", ") : ((agent as any).extra_args || ""),
         command: (agent as any).command || "",
         bootstrap_prompt: (agent as any).bootstrap_prompt || "",
+        conversation_id: (agent as any).conversation_id || "",
       });
     }
   }, [agent]);
@@ -137,8 +139,13 @@ export function AgentEditPage() {
     const models = PROVIDER_MODELS[provider] || [];
     updateField("provider", provider);
     updateField("model", models[0] || "");
-    // Auto-set command from provider (no need for separate Command field)
-    updateField("command", provider === "gemini" ? "gemini" : provider === "openrouter" ? "" : "claude");
+    // Auto-set command from provider (no need for separate Command field).
+    // antigravity reply provider uses the agy binary internally (full-path
+    // fallback), so the command field stays empty.
+    updateField(
+      "command",
+      provider === "gemini" ? "gemini" : (provider === "openrouter" || provider === "antigravity") ? "" : "claude",
+    );
   }
 
   if (!isCreate && isLoading) {
@@ -331,6 +338,20 @@ export function AgentEditPage() {
             ))}
           </select>
         </Field>
+        {form.provider === "antigravity" && (
+          <Field
+            label="Antigravity brain ID (conversation_id)"
+            hint="agy không tạo brain headless — mồi 1 lần bằng `agy --conversation <id>` (interactive) rồi /exit, sau đó dán id vào đây. Mỗi agent 1 brain riêng."
+          >
+            <input
+              type="text"
+              className="input-field font-mono"
+              value={form.conversation_id}
+              onChange={(e) => updateField("conversation_id", e.target.value)}
+              placeholder="vd: 18dbe41e-5838-44e6-9fcc-57fba1bc573f"
+            />
+          </Field>
+        )}
         <Field label="Max tokens">
           <input
             type="number"

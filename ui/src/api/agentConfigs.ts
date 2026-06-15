@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-export type AgentProvider = "claude" | "gemini" | "openrouter";
+export type AgentProvider = "claude" | "gemini" | "antigravity" | "openrouter";
 
 export interface AgentSession {
   id: string;
@@ -46,6 +46,8 @@ export interface AgentConfig {
   history_limit: number;
   session_timeout: number;
   enabled: boolean;
+  /** Antigravity (agy) only: pre-seeded agy brain id to resume. */
+  conversation_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +63,7 @@ export interface AgentTestResult {
 export const PROVIDER_LABELS: Record<AgentProvider, string> = {
   claude: "Claude (Anthropic)",
   gemini: "Gemini (Google)",
+  antigravity: "Antigravity CLI (agy)",
   openrouter: "OpenRouter",
 };
 
@@ -79,6 +82,16 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "gemini-2.0-flash",
+  ],
+  antigravity: [
+    "Gemini 3.1 Pro (High)",
+    "Gemini 3.1 Pro (Low)",
+    "Gemini 3.5 Flash (High)",
+    "Gemini 3.5 Flash (Medium)",
+    "Gemini 3.5 Flash (Low)",
+    "Claude Sonnet 4.6 (Thinking)",
+    "Claude Opus 4.6 (Thinking)",
+    "GPT-OSS 120B (Medium)",
   ],
   openrouter: [
     "anthropic/claude-opus-4-7",

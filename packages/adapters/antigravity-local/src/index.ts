@@ -6,8 +6,17 @@ export const label = "Antigravity CLI (Gemini 3.1 Pro)";
 // đoán sai tên model Antigravity expose.
 export const DEFAULT_ANTIGRAVITY_MODEL = "Gemini 3.1 Pro (High)";
 
+// Full Antigravity model picker (verified from the agy IDE model dropdown 15/06).
+// Pass the string VERBATIM via `--model "<id>"`. Default = Gemini 3.1 Pro (High).
 export const models = [
-  { id: DEFAULT_ANTIGRAVITY_MODEL, label: "Gemini 3.1 Pro (High)" },
+  { id: "Gemini 3.1 Pro (High)", label: "Gemini 3.1 Pro (High)" },
+  { id: "Gemini 3.1 Pro (Low)", label: "Gemini 3.1 Pro (Low)" },
+  { id: "Gemini 3.5 Flash (High)", label: "Gemini 3.5 Flash (High) — Fast" },
+  { id: "Gemini 3.5 Flash (Medium)", label: "Gemini 3.5 Flash (Medium) — Fast" },
+  { id: "Gemini 3.5 Flash (Low)", label: "Gemini 3.5 Flash (Low) — Fast" },
+  { id: "Claude Sonnet 4.6 (Thinking)", label: "Claude Sonnet 4.6 (Thinking)" },
+  { id: "Claude Opus 4.6 (Thinking)", label: "Claude Opus 4.6 (Thinking)" },
+  { id: "GPT-OSS 120B (Medium)", label: "GPT-OSS 120B (Medium)" },
 ];
 
 export const agentConfigurationDoc = `# antigravity_local agent configuration

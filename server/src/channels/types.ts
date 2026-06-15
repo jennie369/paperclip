@@ -235,6 +235,13 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
   ],
   antigravity: [
     'Gemini 3.1 Pro (High)',
+    'Gemini 3.1 Pro (Low)',
+    'Gemini 3.5 Flash (High)',
+    'Gemini 3.5 Flash (Medium)',
+    'Gemini 3.5 Flash (Low)',
+    'Claude Sonnet 4.6 (Thinking)',
+    'Claude Opus 4.6 (Thinking)',
+    'GPT-OSS 120B (Medium)',
   ],
   openrouter: [
     'anthropic/claude-sonnet-4-6',
