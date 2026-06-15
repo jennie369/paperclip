@@ -1087,12 +1087,14 @@ async function runViaAntigravity(
 ): Promise<string> {
   const model = config.model || 'Gemini 3.1 Pro (High)';
 
-  // REQUIRED: a pre-seeded agy brain id (agy can't create one headless).
-  const conversationId = (config.conversation_id || '').trim();
-  if (!conversationId) {
-    console.error(`[Router] Antigravity ${config.slug}: missing conversation_id (no seeded agy brain) — cannot run. Seed once via \`agy --conversation <id>\` (interactive, then /exit) and set adapterConfig.conversationId.`);
-    return config.fallback_message || 'Xin lỗi, hệ thống đang bảo trì. Vui lòng thử lại sau.';
-  }
+  // Conversation id passed to agy. If a brain with this id exists, agy RESUMES it;
+  // otherwise agy IGNORES it and auto-creates its OWN brain (we then locate the real
+  // brain + reply via the turnMarker below). So a pre-seeded brain is NOT required —
+  // fall back to the per-customer sessionKey for a stable-ish handle. (Full history
+  // is re-injected via the file pointer each turn, so brain-memory continuity is not
+  // critical for correctness.)
+  const conversationId =
+    (config.conversation_id || '').trim() || (sessionKey || '').trim() || `agy-${config.slug}`;
 
   const mediaLib = loadMediaLibrary(config.slug);
   const augmentedSystemPrompt = systemPrompt
