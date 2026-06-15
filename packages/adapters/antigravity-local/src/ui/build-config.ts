@@ -55,6 +55,8 @@ export function buildAntigravityLocalConfig(v: CreateConfigValues): Record<strin
   const ac: Record<string, unknown> = {};
   if (v.cwd) ac.cwd = v.cwd;
   if (v.instructionsFilePath) ac.instructionsFilePath = v.instructionsFilePath;
+  // Pre-seeded agy brain id (agy can't create a brain headless).
+  if (v.conversationId) ac.conversationId = v.conversationId;
   if (v.promptTemplate) ac.promptTemplate = v.promptTemplate;
   if (v.bootstrapPrompt) ac.bootstrapPromptTemplate = v.bootstrapPrompt;
   ac.model = v.model || DEFAULT_ANTIGRAVITY_MODEL;
