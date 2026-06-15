@@ -38,10 +38,11 @@ agy in reply thẳng ra **CONOUT$ (TTY)** → subprocess `stdout` pipe **rỗng*
 `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript.jsonl`.
 Gom mọi `PLANNER_RESPONSE` (source=`MODEL`) **SAU** dòng `USER_INPUT` của ĐÚNG run này. Phân biệt run trong brain dùng-chung bằng **turnMarker** = tên temp-prompt-file unique (`agy_prompt_<runId>.md` / `agy_reply_<slug>_<ts>.md`) nằm trong nội dung USER_INPUT. Poll-retry chờ flush.
 
-### 3.2 Brain KHÔNG tự tạo headless
-agy `-p` headless **từ chối tạo brain cho `--conversation` id lạ** (`conversation not found` → exit 0 rỗng). → Brain **phải mồi sẵn 1 lần** bằng `agy --conversation <id>` **interactive** (mở UI tạo `brain/<id>/`) rồi `/exit`. Adapter chỉ RESUME.
-→ Heartbeat: `config.conversationId` (adapter_config). Reply: `paperclip_agents.conversation_id`. Thiếu → trả fallback.
-→ Per-customer isolation KHÔNG tự động được (không tạo brain động) → cần **pool brain mồi sẵn** (`agy-brain-pool-task.md`) hoặc 1 brain/agent + inject context qua file-pointer.
+### 3.2 Brain — agy TỰ tạo với id RIÊNG (đính chính 2026-06-16)
+`agy -p --conversation <id>`: nếu brain id đó **tồn tại → resume** đúng id; nếu **CHƯA tồn tại → agy BỎ QUA id truyền, TỰ TẠO brain với id auto-gen riêng** và chạy ở đó. → Adapter đọc transcript ở id-mình-truyền = RỖNG (agy ghi vào brain khác).
+→ **Fix (KHÔNG cần mồi tay)**: sau run, `findAntigravityReplyByTurnMarker(turnMarker)` SCAN brain dirs (mới nhất trước), tìm brain có `USER_INPUT` chứa **turnMarker** (tên temp-prompt-file unique) → brain THẬT → reply + **persist id thật** cho resume (continuity cross-heartbeat). Áp dụng cả Part A (execute.ts) lẫn Part B (router.ts).
+→ Resolution: honor `config.conversationId`/`paperclip_agents.conversation_id` **CHỈ khi brain đó tồn tại** (pre-seeded); else persisted-real-id (resume) / runId (lần đầu → auto-create + persist).
+→ **Hệ quả**: per-agent heartbeat tự có brain (auto-create + persist) — KHÔNG cần seed tay. Pool brain mồi sẵn (`agy-brain-pool-task.md`) giờ **tùy chọn** (chỉ khi muốn pre-assign brain cụ thể / per-customer isolation cứng cho Part B).
 
 ---
 
