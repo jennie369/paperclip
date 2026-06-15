@@ -22,6 +22,7 @@ import {
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { DEFAULT_ANTIGRAVITY_MODEL } from "@paperclipai/adapter-antigravity-local";
 import {
   Popover,
   PopoverContent,
@@ -290,6 +291,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     adapterType === "claude_local" ||
     adapterType === "codex_local" ||
     adapterType === "gemini_local" ||
+    adapterType === "antigravity_local" ||
     adapterType === "opencode_local" ||
     adapterType === "ollama" ||
     adapterType === "cursor";
@@ -386,7 +388,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       : adapterType === "opencode_local"
         ? eff("adapterConfig", "variant", String(config.variant ?? ""))
       : eff("adapterConfig", "effort", String(config.effort ?? ""));
-  const showThinkingEffort = adapterType !== "gemini_local";
+  // agy bakes the reasoning level into the model string (e.g. "Gemini 3.1 Pro
+  // (High)"), so a separate thinking-effort selector is redundant for antigravity.
+  const showThinkingEffort = adapterType !== "gemini_local" && adapterType !== "antigravity_local";
   const codexSearchEnabled = adapterType === "codex_local"
     ? (isCreate ? Boolean(val!.search) : eff("adapterConfig", "search", Boolean(config.search)))
     : false;
@@ -536,6 +540,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
                   } else if (t === "gemini_local") {
                     nextValues.model = DEFAULT_GEMINI_LOCAL_MODEL;
+                  } else if (t === "antigravity_local") {
+                    nextValues.model = DEFAULT_ANTIGRAVITY_MODEL;
                   } else if (t === "cursor") {
                     nextValues.model = DEFAULT_CURSOR_LOCAL_MODEL;
                   } else if (t === "opencode_local") {
@@ -554,6 +560,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                           ? DEFAULT_CODEX_LOCAL_MODEL
                           : t === "gemini_local"
                             ? DEFAULT_GEMINI_LOCAL_MODEL
+                          : t === "antigravity_local"
+                            ? DEFAULT_ANTIGRAVITY_MODEL
                           : t === "cursor"
                             ? DEFAULT_CURSOR_LOCAL_MODEL
                           : "",
