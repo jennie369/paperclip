@@ -4,10 +4,13 @@ export { testEnvironment } from "./test.js";
 export {
   parseAntigravityStdout,
   looksLikeSystemPromptLeak,
+  readAntigravityReplyFromTranscript,
   readAntigravityTranscriptUsage,
+  antigravityTranscriptPath,
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
 } from "./parse.js";
+export { defaultAgyCommand } from "./execute.js";
 import type { AdapterSessionCodec } from "@paperclipai/adapter-utils";
 
 function readNonEmptyString(value: unknown): string | null {

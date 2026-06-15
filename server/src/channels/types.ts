@@ -186,7 +186,7 @@ export interface QuotaResult {
 
 // ─── Agent Config (paperclip_agents table) ───
 
-export type AgentProvider = 'claude' | 'gemini' | 'openrouter' | 'ollama' | 'nvidia_nim';
+export type AgentProvider = 'claude' | 'gemini' | 'antigravity' | 'openrouter' | 'ollama' | 'nvidia_nim';
 
 /** Row shape from paperclip_agents table */
 export interface AgentConfig {
@@ -210,6 +210,13 @@ export interface AgentConfig {
   history_limit: number;
   session_timeout: number;
   enabled: boolean;
+  /**
+   * Antigravity (agy) only: id of the pre-seeded agy brain to resume. agy `-p`
+   * headless CANNOT create a brain for an unknown id, so this must point at a
+   * brain created once via `agy --conversation <id>` interactively. Optional for
+   * other providers.
+   */
+  conversation_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -225,6 +232,9 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-2.0-flash',
+  ],
+  antigravity: [
+    'Gemini 3.1 Pro (High)',
   ],
   openrouter: [
     'anthropic/claude-sonnet-4-6',

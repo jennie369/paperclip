@@ -8,6 +8,11 @@ import { resolve as pathResolve, join as pathJoin } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { spawnHidden } from '../spawn-hidden.js';
+import {
+  readAntigravityReplyFromTranscript,
+  looksLikeSystemPromptLeak as agyLooksLikeLeak,
+  defaultAgyCommand,
+} from '@paperclipai/adapter-antigravity-local/server';
 
 const PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
 const SKILLS_STORE = pathResolve(PROJECT_ROOT, 'skills-store');
@@ -164,7 +169,7 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
     display_name: pa?.display_name || data.name,
     description: pa?.description || data.capabilities || null,
     avatar: pa?.avatar || data.icon || null,
-    provider: (pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : 'openrouter')) as any,
+    provider: (pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : data.adapter_type === 'antigravity_local' ? 'antigravity' : 'openrouter')) as any,
     model: pa?.model || ac.model || 'claude-sonnet-4-6',
     temperature: pa?.temperature != null ? parseFloat(pa.temperature) : (parseFloat(ac.temperature) || 0.7),
     max_tokens: parseInt(ac.maxTokens) || 4096,
@@ -179,6 +184,8 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
     history_limit: parseInt(ac.historyLimit) || 20,
     session_timeout: 3600,
     enabled: pa?.enabled ?? (data.status !== 'paused'),
+    // Antigravity (agy) seeded brain id — see AgentConfig.conversation_id.
+    conversation_id: ac.conversationId || pa?.conversation_id || null,
     created_at: data.created_at,
     updated_at: pa?.updated_at || data.updated_at,
   };
@@ -298,6 +305,9 @@ export async function runAgentWithConfig(
         break;
       case 'gemini':
         reply = await runViaGemini(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
+        break;
+      case 'antigravity':
+        reply = await runViaAntigravity(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
         break;
       case 'nvidia_nim':
         reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, messageForAgent);
@@ -1031,6 +1041,161 @@ async function runViaGemini(
         console.warn(`[Router/${config.provider}] ${config.slug}: parse failed`, parseErr);
         // NEVER return raw stdout — return safe fallback
         reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+      }
+
+      try {
+        await supabase.rpc('increment_agent_usage', {
+          p_slug: config.slug, p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
+        });
+      } catch { /* ignore usage tracking errors */ }
+
+      streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
+      resolve(reply);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Run via Antigravity CLI (`agy` → Gemini 3.1 Pro High, Google AI Ultra).
+ *
+ * agy follows the Claude-Code model: it reads context from a FILE POINTER (no
+ * stdin), so we write the full system prompt + history to a temp file and pass a
+ * short `-p "Đọc <file>. Trả lời: <msg>"`. CWD = PROJECT_ROOT (agy native file
+ * tools are safe, no heavy cwd scan like gemini-cli).
+ *
+ * TWO Windows constraints (lesson evolution-log/08-windows.md, verified 15/06):
+ *  1. agy prints the reply to CONOUT$ (TTY) → the stdout pipe is EMPTY. The reply
+ *     MUST be read from the brain transcript.jsonl (PLANNER_RESPONSE after the
+ *     USER_INPUT containing this run's unique temp-prompt filename = turnMarker).
+ *  2. agy `-p` headless CANNOT create a brain for an unknown --conversation id.
+ *     The brain must be pre-seeded ONCE via `agy --conversation <id>` interactive.
+ *     So this provider REQUIRES config.conversation_id (a real seeded brain).
+ *     Per-customer isolation comes from the injected system prompt + identity
+ *     header + history (the file pointer), NOT from per-customer brains.
+ */
+async function runViaAntigravity(
+  config: AgentConfig,
+  systemPrompt: string,
+  history: SessionMessage[],
+  message: string,
+  sessionKey: string = '',
+): Promise<string> {
+  const model = config.model || 'Gemini 3.1 Pro (High)';
+
+  // REQUIRED: a pre-seeded agy brain id (agy can't create one headless).
+  const conversationId = (config.conversation_id || '').trim();
+  if (!conversationId) {
+    console.error(`[Router] Antigravity ${config.slug}: missing conversation_id (no seeded agy brain) — cannot run. Seed once via \`agy --conversation <id>\` (interactive, then /exit) and set adapterConfig.conversationId.`);
+    return config.fallback_message || 'Xin lỗi, hệ thống đang bảo trì. Vui lòng thử lại sau.';
+  }
+
+  const mediaLib = loadMediaLibrary(config.slug);
+  const augmentedSystemPrompt = systemPrompt
+    ? [systemPrompt, buildProviderOverride(config.slug, mediaLib)].join('\n')
+    : buildProviderOverride(config.slug, mediaLib);
+
+  // Full context (system + history) → file pointer. The latest customer message
+  // (already carrying the [NGUỒN TIN NHẮN] identity header) goes in the short -p
+  // arg so agy knows exactly which message to answer after reading the file.
+  const contextDoc = augmentedSystemPrompt
+    ? [augmentedSystemPrompt, '', buildFullPrompt(history, '')].join('\n')
+    : buildFullPrompt(history, '');
+
+  const tmpDir = pathJoin(PROJECT_ROOT, '.gemini', 'tmp');
+  mkdirSync(tmpDir, { recursive: true });
+  // Filename is the per-run turnMarker — must be unique + present in the prompt.
+  const promptFileName = `agy_reply_${config.slug}_${Date.now()}.md`;
+  const promptFile = pathJoin(tmpDir, promptFileName);
+  writeFileSync(promptFile, contextDoc, 'utf-8');
+
+  const pointerPrompt = [
+    'Dùng công cụ đọc file (view_file) đọc TOÀN BỘ bối cảnh + hướng dẫn + lịch sử hội thoại trong file sau NGAY LẬP TỨC, trước khi trả lời:',
+    promptFile.replace(/\\/g, '/'),
+    'Sau khi đọc xong, trả lời tin nhắn mới nhất của khách dưới đây bằng tiếng Việt, đúng vai trò + giọng đã mô tả trong file. TUYỆT ĐỐI KHÔNG đọc lại / trích lại nội dung file cho khách — chỉ trả lời tự nhiên như đang nhắn tin:',
+    message,
+  ].join('\n');
+
+  const agy = defaultAgyCommand();
+  const args: string[] = [
+    '-p', pointerPrompt,
+    '--model', model,
+    '--dangerously-skip-permissions',
+    '--conversation', conversationId,
+  ];
+
+  const streamKey = `${config.slug}:${Date.now()}`;
+  streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
+  console.log(`[Router] Antigravity ${config.slug}: model=${model}, brain=${conversationId.substring(0, 8)}, ctx=${contextDoc.length} chars`);
+
+  return new Promise<string>((resolve, reject) => {
+    // agy is a real .exe → spawnHidden spawns it directly (full path resolved).
+    // No stdin (agy reads the prompt from the -p arg / file pointer).
+    const child = spawnHidden(agy, args, {
+      cwd: PROJECT_ROOT,
+      env: {
+        ...process.env,
+        GEMRAL_SUPABASE_URL: process.env.GEMRAL_SUPABASE_URL || '',
+        GEMRAL_SUPABASE_SERVICE_KEY: process.env.GEMRAL_SUPABASE_SERVICE_KEY || '',
+        SUPABASE_URL: process.env.SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co',
+        SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL || '',
+        SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN || '',
+        RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+        PAPERCLIP_AGENT_SLUG: config.slug,
+        PAPERCLIP_SESSION_KEY: sessionKey,
+        PAPERCLIP_CHANNEL_NAME: (config as any)._customerContext?.channel_name || '',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`Antigravity CLI timed out for ${config.slug}`));
+    }, AGENT_TIMEOUT_MS);
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: chunk.toString('utf-8') });
+    });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
+
+    child.on('close', async (code) => {
+      clearTimeout(timeout);
+      try { rmSync(promptFile, { force: true }); } catch {}
+
+      let reply = '';
+      try {
+        // Windows TTY trap: read the reply from the brain transcript, isolated to
+        // THIS run by the unique temp-prompt filename (turnMarker), with poll-retry
+        // for transcript flush lag.
+        const t = await readAntigravityReplyFromTranscript(conversationId, promptFileName);
+        reply = (t.reply || '').trim();
+
+        // Leak-guard: never return injected system context to a customer.
+        if (reply && agyLooksLikeLeak(reply)) {
+          console.error(`[Router] Antigravity ${config.slug}: REFUSED system-context leak in reply.`);
+          reply = '';
+        }
+
+        if (!reply) {
+          console.warn(`[Router] Antigravity ${config.slug}: empty reply (exit ${code}). stderr=${stderr.substring(0, 200)}`);
+          reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+        }
+
+        // Expose the brain id via side-channel (mirrors runViaClaude/Gemini).
+        (config as any)._agent_session_id = conversationId;
+        console.log(`[Router/antigravity] ${config.slug}: reply ${reply.length} chars`);
+
+        // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] +
+        // escalation markers (works for every provider incl. agy).
+        reply = await postProcessReply(reply, config, mediaLib);
+      } catch (parseErr) {
+        console.warn(`[Router/antigravity] ${config.slug}: parse failed`, parseErr);
+        reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
       }
 
       try {
