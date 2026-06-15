@@ -15,6 +15,7 @@ import {
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
 import { DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
+import { defaultAgyCommand } from "./execute.js";
 import {
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
@@ -46,7 +47,7 @@ export async function testEnvironment(
 ): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
-  const command = asString(config.command, "agy");
+  const command = asString(config.command, defaultAgyCommand());
   const cwd = asString(config.cwd, process.cwd());
 
   try {

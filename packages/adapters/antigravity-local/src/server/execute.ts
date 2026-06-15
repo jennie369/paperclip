@@ -31,7 +31,9 @@ import { DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
 import {
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
+  looksLikeSystemPromptLeak,
   parseAntigravityStdout,
+  readAntigravityReplyFromTranscript,
   readAntigravityTranscriptUsage,
 } from "./parse.js";
 import { firstNonEmptyLine } from "./utils.js";
@@ -49,6 +51,22 @@ function resolveGeminiBillingType(env: Record<string, string>): "api" | "subscri
 }
 
 const IS_WINDOWS_RUNTIME = process.platform === "win32";
+
+// The Paperclip server (PM2/Task-Scheduler context) often does NOT have
+// %LOCALAPPDATA%\agy\bin on PATH, so a bare `agy` fails to resolve
+// ("Command not found in PATH"). Fall back to the full agy.exe path when the
+// bare command is the default and the binary exists there. Mirrors the Windows
+// "absolute path in service contexts" rule. An explicit config.command overrides.
+export function defaultAgyCommand(): string {
+  if (IS_WINDOWS_RUNTIME) {
+    const localAppData = process.env.LOCALAPPDATA || process.env.LocalAppData;
+    if (localAppData) {
+      const full = path.join(localAppData, "agy", "bin", "agy.exe");
+      if (existsSync(full)) return full;
+    }
+  }
+  return "agy";
+}
 
 const PAPERCLIP_SKILL_POINTER_PATH =
   "C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/skills-store/paperclip/1.0.0/SKILL.md";
@@ -462,7 +480,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
   );
-  const command = asString(config.command, "agy");
+  const command = asString(config.command, defaultAgyCommand());
   // Default "Gemini 3.1 Pro (High)" (verified string). No runtime model swap —
   // Ultra quota exhaustion is handled by the operator switching provider via UI.
   const model = asString(config.model, DEFAULT_ANTIGRAVITY_MODEL).trim();
@@ -1016,22 +1034,31 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     }
 
-    // Leak-guard: agy should ACT on the context file, not echo it. If the reply
-    // contains internal system-context markers, surface a warning (the heartbeat
-    // runtime can decide whether the summary is safe to post).
-    if (attempt.parsed.leaked) {
+    const quotaMeta = detectAntigravityQuotaExhausted({
+      stdout: attempt.proc.stdout,
+      stderr: attempt.proc.stderr,
+    });
+    // Usage/cost AND the reply both come from the agy brain transcript — on
+    // Windows the CLI prints to CONOUT$ (TTY) so proc.stdout is blind (empty).
+    // Prefer the stdout summary when present (non-Windows / future builds), else
+    // fall back to the transcript reply. (lesson evolution-log/08-windows.md)
+    const { usage, costUsd } = await readAntigravityTranscriptUsage(conversationId);
+    // turnMarker = this run's unique temp prompt filename (present in the
+    // USER_INPUT) so we read THIS run's reply, not a stale prior turn.
+    const transcriptReply = await readAntigravityReplyFromTranscript(
+      conversationId,
+      path.basename(tempPromptFile),
+    );
+    const summary = attempt.parsed.summary || transcriptReply.reply;
+
+    // Leak-guard on the FINAL summary (whichever source produced it). agy should
+    // ACT on the context file, not echo it.
+    if (looksLikeSystemPromptLeak(summary)) {
       await onLog(
         "stderr",
         "[paperclip] Warning: antigravity reply contains injected system-context markers (possible echo of the context file).\n",
       );
     }
-
-    const quotaMeta = detectAntigravityQuotaExhausted({
-      stdout: attempt.proc.stdout,
-      stderr: attempt.proc.stderr,
-    });
-    // Usage/cost is optional — read from the agy brain transcript (best-effort).
-    const { usage, costUsd } = await readAntigravityTranscriptUsage(conversationId);
 
     const exitOk = (attempt.proc.exitCode ?? 0) === 0;
     const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
@@ -1046,8 +1073,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ? null
         : stderrLine || `Antigravity (agy) exited with code ${attempt.proc.exitCode ?? -1}`;
 
-    // conversation id = our stable session key (agy auto-creates/resumes the
-    // brain). Persist it (+ personaHash) so the next heartbeat resumes the thread.
+    // conversation id = our stable session key. Persist it (+ personaHash) so the
+    // next heartbeat resumes the same agy brain. NOTE: agy does NOT auto-create a
+    // brain for an unknown id (headless) — the brain must already exist (seed via
+    // config.conversationId / a prior interactive run), else the transcript read
+    // returns empty. See the conversation-id resolution below.
     const sessionParams: Record<string, unknown> = {
       sessionId: conversationId,
       cwd,
@@ -1072,20 +1102,29 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       model,
       billingType,
       costUsd,
+      // buildRunSummaryComment (heartbeat) reads the agent's reply from
+      // resultJson.summary — include it here (stdout is blind on Windows TTY).
       resultJson: {
         stdout: attempt.proc.stdout,
         stderr: attempt.proc.stderr,
+        summary,
       },
-      summary: attempt.parsed.summary,
+      summary,
       clearSession: false,
     };
   };
 
-  // Single attempt: agy auto-creates a brain for any --conversation id (no
-  // "unknown session" retry needed), and there is no flash-tier quota fallback —
-  // when the Ultra quota is exhausted the operator switches provider via the UI
-  // (see rollout plan §3). conversation id = resumable runtime session, else runId.
-  const conversationId = canResumeSession ? runtimeSessionId : runId;
+  // Conversation id resolution. agy does NOT auto-create a brain for an unknown
+  // id in headless mode (it silently exits 0 with no output — verified 15/06),
+  // so a fresh random id yields an empty reply. Priority:
+  //   1. config.conversationId — an explicitly seeded, real pre-existing brain.
+  //   2. resumable persisted runtime session (a brain we created earlier).
+  //   3. runId — only valid if the brain already exists; otherwise the run will
+  //      come back empty and surface as such (operator must seed a brain).
+  // No flash-tier quota fallback — Ultra quota exhaustion → switch provider in UI.
+  const configuredConversationId = asString(config.conversationId, "").trim();
+  const conversationId =
+    configuredConversationId || (canResumeSession ? runtimeSessionId : runId);
   const initial = await runAttempt(conversationId);
   return toResult(initial, conversationId);
 }

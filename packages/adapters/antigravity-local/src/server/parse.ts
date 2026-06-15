@@ -93,6 +93,80 @@ export function antigravityTranscriptPath(conversationId: string): string {
   );
 }
 
+// CRITICAL (Windows TTY trap — lesson evolution-log/08-windows.md, 2026-06-15):
+// agy is a TTY-engine CLI; on Windows it prints the reply straight to CONOUT$,
+// BYPASSING the subprocess stdout pipe → proc.stdout is EMPTY. The real reply
+// MUST be read from the brain transcript (PLANNER_RESPONSE from the MODEL).
+//
+// The brain is REUSED across turns, so we must return ONLY this run's answer, not
+// a stale prior turn. We locate the USER_INPUT whose content contains `turnMarker`
+// (the unique per-run temp prompt filename, e.g. agy_prompt_<runId>.md) and gather
+// every non-empty MODEL/PLANNER_RESPONSE AFTER it. If that USER_INPUT is not in the
+// file yet (agy still flushing), found=false → the caller polls/retries.
+function parseReplyOnce(
+  raw: string,
+  turnMarker: string,
+): { reply: string; found: boolean } {
+  const entries: Array<{ type: string; source: string; content: string }> = [];
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const data = parseJson(line);
+    if (!data) continue;
+    entries.push({
+      type: asString(data.type, "").trim(),
+      source: asString(data.source, "").trim(),
+      content: asString(data.content, ""),
+    });
+  }
+
+  // Index of the USER_INPUT that belongs to this run.
+  let startIdx = -1;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.type !== "USER_INPUT") continue;
+    if (turnMarker ? e.content.includes(turnMarker) : true) startIdx = i;
+  }
+  if (startIdx < 0) return { reply: "", found: false };
+
+  const responses: string[] = [];
+  for (let i = startIdx + 1; i < entries.length; i++) {
+    const e = entries[i];
+    // A later USER_INPUT means our turn ended — stop (defensive; shouldn't happen
+    // when turnMarker matches the latest run).
+    if (e.type === "USER_INPUT") break;
+    if (e.source === "MODEL" && e.type === "PLANNER_RESPONSE") {
+      const content = e.content.trim();
+      if (content) responses.push(content);
+    }
+  }
+  return { reply: responses.join("\n\n").trim(), found: responses.length > 0 };
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export async function readAntigravityReplyFromTranscript(
+  conversationId: string,
+  turnMarker: string,
+  opts: { attempts?: number; delayMs?: number } = {},
+): Promise<{ reply: string; found: boolean }> {
+  if (!conversationId) return { reply: "", found: false };
+  const attempts = opts.attempts ?? 8;
+  const delayMs = opts.delayMs ?? 700;
+  const transcriptPath = antigravityTranscriptPath(conversationId);
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const raw = await fs.readFile(transcriptPath, "utf8");
+      const result = parseReplyOnce(raw, turnMarker);
+      if (result.found) return result;
+    } catch {
+      // transcript not written yet — fall through to retry.
+    }
+    if (attempt < attempts - 1) await sleep(delayMs);
+  }
+  return { reply: "", found: false };
+}
+
 export async function readAntigravityTranscriptUsage(
   conversationId: string,
 ): Promise<{ usage: AntigravityUsage; costUsd: number | null }> {
