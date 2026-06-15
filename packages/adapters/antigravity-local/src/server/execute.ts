@@ -1062,16 +1062,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const exitOk = (attempt.proc.exitCode ?? 0) === 0;
     const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
+    // Brain existence — agy `-p` headless CANNOT create a brain for an unknown
+    // --conversation id, it just exits 0 with no output. Detect that so the run
+    // surfaces a clear error instead of a misleading "succeeded" with empty reply.
+    const brainDir = conversationId
+      ? path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", conversationId)
+      : "";
+    const brainExists = brainDir.length > 0 && existsSync(brainDir);
     let errorCode: string | null = null;
+    let errorMessage: string | null = null;
     if (!exitOk && authMeta.requiresAuth) {
       errorCode = "antigravity_auth_required";
+      errorMessage = stderrLine || `Antigravity (agy) exited with code ${attempt.proc.exitCode ?? -1}`;
     } else if (quotaMeta.exhausted) {
       errorCode = "antigravity_quota_exhausted";
+      errorMessage = stderrLine || "Antigravity Ultra quota exhausted.";
+    } else if (!exitOk) {
+      errorMessage = stderrLine || `Antigravity (agy) exited with code ${attempt.proc.exitCode ?? -1}`;
+    } else if (!summary) {
+      // exit 0 but NO reply captured — almost always an un-seeded brain.
+      if (!brainExists) {
+        errorCode = "antigravity_brain_missing";
+        errorMessage =
+          `agy brain "${conversationId}" chưa tồn tại — agy KHÔNG tạo brain headless. ` +
+          `Mồi 1 lần: mở terminal chạy \`agy --conversation ${conversationId}\` (interactive) rồi /exit, ` +
+          `HOẶC set adapterConfig.conversationId trỏ tới 1 brain đã mồi sẵn.`;
+      } else {
+        errorCode = "antigravity_empty_reply";
+        errorMessage = `agy chạy xong nhưng không có reply trong transcript brain "${conversationId}" (timeout/flush?).`;
+      }
     }
-    const errorMessage =
-      exitOk && !quotaMeta.exhausted
-        ? null
-        : stderrLine || `Antigravity (agy) exited with code ${attempt.proc.exitCode ?? -1}`;
 
     // conversation id = our stable session key. Persist it (+ personaHash) so the
     // next heartbeat resumes the same agy brain. NOTE: agy does NOT auto-create a
