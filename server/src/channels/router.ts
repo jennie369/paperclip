@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { spawnHidden } from '../spawn-hidden.js';
 import {
-  readAntigravityReplyFromTranscript,
+  findAntigravityReplyByTurnMarker,
   looksLikeSystemPromptLeak as agyLooksLikeLeak,
   defaultAgyCommand,
 } from '@paperclipai/adapter-antigravity-local/server';
@@ -1169,10 +1169,10 @@ async function runViaAntigravity(
 
       let reply = '';
       try {
-        // Windows TTY trap: read the reply from the brain transcript, isolated to
-        // THIS run by the unique temp-prompt filename (turnMarker), with poll-retry
-        // for transcript flush lag.
-        const t = await readAntigravityReplyFromTranscript(conversationId, promptFileName);
+        // Windows TTY trap + agy auto-brain: agy may IGNORE the --conversation id
+        // and create its own brain, so scan brains by THIS run's turnMarker (unique
+        // temp-prompt filename) to find the real brain + reply (poll-retry for flush).
+        const t = await findAntigravityReplyByTurnMarker(promptFileName);
         reply = (t.reply || '').trim();
 
         // Leak-guard: never return injected system context to a customer.

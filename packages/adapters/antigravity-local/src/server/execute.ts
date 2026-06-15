@@ -31,9 +31,9 @@ import { DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
 import {
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
+  findAntigravityReplyByTurnMarker,
   looksLikeSystemPromptLeak,
   parseAntigravityStdout,
-  readAntigravityReplyFromTranscript,
   readAntigravityTranscriptUsage,
 } from "./parse.js";
 import { firstNonEmptyLine } from "./utils.js";
@@ -1038,18 +1038,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stdout: attempt.proc.stdout,
       stderr: attempt.proc.stderr,
     });
-    // Usage/cost AND the reply both come from the agy brain transcript — on
-    // Windows the CLI prints to CONOUT$ (TTY) so proc.stdout is blind (empty).
-    // Prefer the stdout summary when present (non-Windows / future builds), else
-    // fall back to the transcript reply. (lesson evolution-log/08-windows.md)
-    const { usage, costUsd } = await readAntigravityTranscriptUsage(conversationId);
-    // turnMarker = this run's unique temp prompt filename (present in the
-    // USER_INPUT) so we read THIS run's reply, not a stale prior turn.
-    const transcriptReply = await readAntigravityReplyFromTranscript(
-      conversationId,
-      path.basename(tempPromptFile),
-    );
-    const summary = attempt.parsed.summary || transcriptReply.reply;
+    // agy `-p --conversation <id>` IGNORES the id we pass when that brain does NOT
+    // exist — it auto-creates a brain under ITS OWN id and runs there (verified
+    // 2026-06-16). So reading by the id we passed returns empty. Locate the REAL
+    // brain via this run's turnMarker (unique temp prompt filename, present in the
+    // USER_INPUT), read reply + usage from it, and persist that real id so the next
+    // heartbeat resumes the SAME brain. (On Windows stdout is TTY-blind → always
+    // read from the transcript. Lesson evolution-log/08-windows.md.)
+    const turnMarker = path.basename(tempPromptFile);
+    const detected = await findAntigravityReplyByTurnMarker(turnMarker);
+    const realBrainId = detected.found && detected.brainId ? detected.brainId : conversationId;
+    const { usage, costUsd } = await readAntigravityTranscriptUsage(realBrainId);
+    const summary = attempt.parsed.summary || detected.reply;
+
+    if (detected.found && detected.brainId && detected.brainId !== conversationId) {
+      await onLog(
+        "stdout",
+        `[paperclip] Antigravity used auto-created brain "${detected.brainId}" (passed id "${conversationId}" ignored). Persisting the real id for resume.\n`,
+      );
+    }
 
     // Leak-guard on the FINAL summary (whichever source produced it). agy should
     // ACT on the context file, not echo it.
@@ -1062,13 +1069,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const exitOk = (attempt.proc.exitCode ?? 0) === 0;
     const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
-    // Brain existence — agy `-p` headless CANNOT create a brain for an unknown
-    // --conversation id, it just exits 0 with no output. Detect that so the run
-    // surfaces a clear error instead of a misleading "succeeded" with empty reply.
-    const brainDir = conversationId
-      ? path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", conversationId)
-      : "";
-    const brainExists = brainDir.length > 0 && existsSync(brainDir);
     let errorCode: string | null = null;
     let errorMessage: string | null = null;
     if (!exitOk && authMeta.requiresAuth) {
@@ -1080,26 +1080,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     } else if (!exitOk) {
       errorMessage = stderrLine || `Antigravity (agy) exited with code ${attempt.proc.exitCode ?? -1}`;
     } else if (!summary) {
-      // exit 0 but NO reply captured — almost always an un-seeded brain.
-      if (!brainExists) {
-        errorCode = "antigravity_brain_missing";
-        errorMessage =
-          `agy brain "${conversationId}" chưa tồn tại — agy KHÔNG tạo brain headless. ` +
-          `Mồi 1 lần: mở terminal chạy \`agy --conversation ${conversationId}\` (interactive) rồi /exit, ` +
-          `HOẶC set adapterConfig.conversationId trỏ tới 1 brain đã mồi sẵn.`;
-      } else {
-        errorCode = "antigravity_empty_reply";
-        errorMessage = `agy chạy xong nhưng không có reply trong transcript brain "${conversationId}" (timeout/flush?).`;
-      }
+      // exit 0 but no reply found in ANY brain for this run's turnMarker → genuine
+      // failure (agy timed out / didn't flush / auth or MCP error mid-run).
+      errorCode = "antigravity_empty_reply";
+      errorMessage =
+        `agy chạy xong (exit 0) nhưng không tìm thấy reply cho run này trong brain nào ` +
+        `(turnMarker ${turnMarker}). Nghi agy timeout/chưa flush hoặc lỗi auth/MCP giữa chừng.`;
     }
 
-    // conversation id = our stable session key. Persist it (+ personaHash) so the
-    // next heartbeat resumes the same agy brain. NOTE: agy does NOT auto-create a
-    // brain for an unknown id (headless) — the brain must already exist (seed via
-    // config.conversationId / a prior interactive run), else the transcript read
-    // returns empty. See the conversation-id resolution below.
+    // Persist the REAL brain id (agy's auto-created or resumed id) so the next
+    // heartbeat resumes the SAME brain (+ personaHash for invalidation).
     const sessionParams: Record<string, unknown> = {
-      sessionId: conversationId,
+      sessionId: realBrainId,
       cwd,
       ...(currentPersonaHash ? { personaHash: currentPersonaHash } : {}),
       ...(workspaceId ? { workspaceId } : {}),
@@ -1114,9 +1106,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorMessage,
       errorCode,
       usage,
-      sessionId: conversationId,
+      sessionId: realBrainId,
       sessionParams,
-      sessionDisplayId: conversationId,
+      sessionDisplayId: realBrainId,
       provider: "google",
       biller: "google",
       model,
@@ -1134,17 +1126,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   };
 
-  // Conversation id resolution. agy does NOT auto-create a brain for an unknown
-  // id in headless mode (it silently exits 0 with no output — verified 15/06),
-  // so a fresh random id yields an empty reply. Priority:
-  //   1. config.conversationId — an explicitly seeded, real pre-existing brain.
-  //   2. resumable persisted runtime session (a brain we created earlier).
-  //   3. runId — only valid if the brain already exists; otherwise the run will
-  //      come back empty and surface as such (operator must seed a brain).
+  // Conversation id resolution. agy RESUMES the passed id only if that brain
+  // EXISTS; for an unknown id it IGNORES it and auto-creates its own brain (which
+  // toResult then detects via turnMarker and persists). Priority:
+  //   1. config.conversationId — but ONLY if its brain dir exists (a genuinely
+  //      pre-seeded brain). A configured-but-missing id would otherwise force a
+  //      fresh auto-create EVERY run → no continuity → so we ignore it when absent.
+  //   2. resumable persisted runtime session (the REAL brain id we persisted last
+  //      run) — gives cross-heartbeat continuity.
+  //   3. runId — first run with no brain; agy ignores it + auto-creates; we detect
+  //      and persist the real id so run #2 resumes it.
   // No flash-tier quota fallback — Ultra quota exhaustion → switch provider in UI.
   const configuredConversationId = asString(config.conversationId, "").trim();
+  const configuredBrainExists =
+    configuredConversationId.length > 0 &&
+    existsSync(path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", configuredConversationId));
   const conversationId =
-    configuredConversationId || (canResumeSession ? runtimeSessionId : runId);
+    (configuredBrainExists ? configuredConversationId : "") ||
+    (canResumeSession ? runtimeSessionId : runId);
   const initial = await runAttempt(conversationId);
   return toResult(initial, conversationId);
 }

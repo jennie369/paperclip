@@ -145,6 +145,63 @@ function parseReplyOnce(
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+function antigravityBrainRoot(): string {
+  return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
+}
+
+// CRITICAL (verified 2026-06-16): agy `-p --conversation <id>` does NOT honour the
+// id we pass when that brain does NOT exist — it silently CREATES a brand-new brain
+// with ITS OWN auto-generated id and runs there. So reading the transcript at the
+// id we passed returns empty. Instead we SCAN the brain dirs (newest first) and find
+// the brain whose transcript's USER_INPUT contains THIS run's turnMarker → that is
+// the real brain agy used. Returns the real brain id + the reply so the caller can
+// persist the correct id for the next resume.
+export async function findAntigravityReplyByTurnMarker(
+  turnMarker: string,
+  opts: { attempts?: number; delayMs?: number; scanLimit?: number } = {},
+): Promise<{ brainId: string; reply: string; found: boolean }> {
+  if (!turnMarker) return { brainId: "", reply: "", found: false };
+  const attempts = opts.attempts ?? 8;
+  const delayMs = opts.delayMs ?? 700;
+  const scanLimit = opts.scanLimit ?? 25;
+  const root = antigravityBrainRoot();
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const entries = await fs.readdir(root, { withFileTypes: true });
+      const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+      // sort by transcript mtime desc (newest brains first) — the run that just
+      // finished is almost certainly at/near the top.
+      const withMtime: Array<{ name: string; mtime: number }> = [];
+      for (const name of dirs) {
+        try {
+          const st = await fs.stat(path.join(root, name, ".system_generated", "logs", "transcript.jsonl"));
+          withMtime.push({ name, mtime: st.mtimeMs });
+        } catch {
+          // no transcript — skip
+        }
+      }
+      withMtime.sort((a, b) => b.mtime - a.mtime);
+      for (const { name } of withMtime.slice(0, scanLimit)) {
+        try {
+          const raw = await fs.readFile(
+            path.join(root, name, ".system_generated", "logs", "transcript.jsonl"),
+            "utf8",
+          );
+          const result = parseReplyOnce(raw, turnMarker);
+          if (result.found) return { brainId: name, reply: result.reply, found: true };
+        } catch {
+          // unreadable — skip
+        }
+      }
+    } catch {
+      // brain root missing — fall through to retry
+    }
+    if (attempt < attempts - 1) await sleep(delayMs);
+  }
+  return { brainId: "", reply: "", found: false };
+}
+
 export async function readAntigravityReplyFromTranscript(
   conversationId: string,
   turnMarker: string,

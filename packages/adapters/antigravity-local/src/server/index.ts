@@ -5,6 +5,7 @@ export {
   parseAntigravityStdout,
   looksLikeSystemPromptLeak,
   readAntigravityReplyFromTranscript,
+  findAntigravityReplyByTurnMarker,
   readAntigravityTranscriptUsage,
   antigravityTranscriptPath,
   detectAntigravityAuthRequired,
