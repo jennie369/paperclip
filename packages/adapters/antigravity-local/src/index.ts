@@ -1,0 +1,48 @@
+export const type = "antigravity_local";
+export const label = "Antigravity CLI (Gemini 3.1 Pro)";
+// Verified 15/06/2026: truyền thẳng chuỗi `--model "Gemini 3.1 Pro (High)"` (nguyên văn,
+// có ngoặc trong tên). KHÔNG dùng `agy models` (lệnh hay kẹt mở UI). User có thể nhập
+// chuỗi model khác trong config (freeform) — adapter không hardcode danh sách để tránh
+// đoán sai tên model Antigravity expose.
+export const DEFAULT_ANTIGRAVITY_MODEL = "Gemini 3.1 Pro (High)";
+
+export const models = [
+  { id: DEFAULT_ANTIGRAVITY_MODEL, label: "Gemini 3.1 Pro (High)" },
+];
+
+export const agentConfigurationDoc = `# antigravity_local agent configuration
+
+Adapter: antigravity_local
+
+Use when:
+- You want Paperclip to run the Antigravity CLI (\`agy\`) locally on the host machine
+- You want the Gemini 3.1 Pro (High) engine via Google AI Ultra (OAuth shared with Gemini CLI)
+- You want chat sessions resumed across heartbeats via --conversation
+- You want Paperclip skills injected locally without polluting the global environment
+
+Don't use when:
+- You need webhook-style external invocation (use http or openclaw_gateway)
+- You only need a one-shot script without an AI coding agent loop (use process)
+- Antigravity CLI (\`agy\`) is not installed on the machine that runs Paperclip
+
+Core fields:
+- cwd (string, optional): default absolute working directory fallback for the agent process (created if missing when possible)
+- instructionsFilePath (string, optional): absolute path to a markdown instructions file (AGENTS.md) — its folder is granted via --add-dir so the agent reads its own persona/sop/knowledge
+- promptTemplate (string, optional): run prompt template
+- model (string, optional): Antigravity model id. Defaults to "Gemini 3.1 Pro (High)".
+- command (string, optional): defaults to "agy"
+- extraArgs (string[], optional): additional CLI args (gemini/claude-only flags are filtered out)
+- env (object, optional): KEY=VALUE environment variables
+
+Operational fields:
+- timeoutSec (number, optional): run timeout in seconds
+- graceSec (number, optional): SIGTERM grace period in seconds
+
+Notes:
+- agy follows the Claude Code model: it auto-reads GEMINI.md/AGENTS.md at cwd and reads project files on demand. The adapter writes the full persona/memory/skill-pointer context to a temp file and passes a short \`-p "Đọc <file> rồi thực hiện"\` pointer (no stdin, no argv length limit).
+- CWD = PROJECT_ROOT is safe (agy uses native file tools, no recursive cwd scan/crash).
+- Sessions resume via \`--conversation <id>\`; if the id is new, agy creates a fresh brain at ~/.gemini/antigravity-cli/brain/<id>/. No transcript parsing needed to obtain the session.
+- MCP tools load globally from ~/.gemini (mcp-server-enablement.json). Tool naming uses a SINGLE underscore: mcp_<server>_<tool> (e.g. mcp_supabase_execute_sql).
+- Paperclip auto-injects local skills into \`~/.gemini/skills/\` via symlinks (agy reads them via view_file).
+- Authentication uses the shared Google OAuth login (Ultra) under ~/.gemini.
+`;
