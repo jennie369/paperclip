@@ -6,6 +6,7 @@ export {
   looksLikeSystemPromptLeak,
   readAntigravityReplyFromTranscript,
   findAntigravityReplyByTurnMarker,
+  findAntigravityRunByTurnMarker,
   readAntigravityTranscriptUsage,
   antigravityTranscriptPath,
   detectAntigravityAuthRequired,

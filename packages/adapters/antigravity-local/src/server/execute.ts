@@ -31,7 +31,7 @@ import { DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
 import {
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
-  findAntigravityReplyByTurnMarker,
+  findAntigravityRunByTurnMarker,
   looksLikeSystemPromptLeak,
   parseAntigravityStdout,
   readAntigravityTranscriptUsage,
@@ -1046,7 +1046,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // heartbeat resumes the SAME brain. (On Windows stdout is TTY-blind → always
     // read from the transcript. Lesson evolution-log/08-windows.md.)
     const turnMarker = path.basename(tempPromptFile);
-    const detected = await findAntigravityReplyByTurnMarker(turnMarker);
+    const detected = await findAntigravityRunByTurnMarker(turnMarker);
     const realBrainId = detected.found && detected.brainId ? detected.brainId : conversationId;
     const { usage, costUsd } = await readAntigravityTranscriptUsage(realBrainId);
     const summary = attempt.parsed.summary || detected.reply;
@@ -1059,10 +1059,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     // agy prints to CONOUT$ (TTY) so the run's stdout stream is blind → the UI
-    // "Transcript" panel would stay empty. Emit the reply (read from the brain
-    // transcript) into the run log so it shows up in the Transcript panel.
-    if (summary) {
-      await onLog("stdout", `\n[antigravity reply]\n${summary}\n`);
+    // "Transcript" panel would stay empty. Emit the FULL run as structured JSONL
+    // lines (turns / thinking / tool calls / tool results) — parseAntigravityStdout
+    // Line maps each to a TranscriptEntry so the Nice view renders like gemini/claude.
+    for (const entry of detected.entries) {
+      await onLog("stdout", `${JSON.stringify(entry)}\n`);
     }
 
     // Leak-guard on the FINAL summary (whichever source produced it). agy should

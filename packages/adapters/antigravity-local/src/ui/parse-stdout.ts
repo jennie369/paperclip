@@ -217,6 +217,30 @@ export function parseAntigravityStdoutLine(line: string, ts: string): Transcript
     return [{ kind: "stdout", ts, text: line }];
   }
 
+  // Normalized agy run entries emitted by the server adapter (the real source of
+  // the rich transcript — agy's stdout is TTY-blind). Map agyKind → TranscriptEntry.
+  const agyKind = asString(parsed.agyKind);
+  if (agyKind) {
+    if (agyKind === "user") return [{ kind: "user", ts, text: asString(parsed.text) }];
+    if (agyKind === "thinking") return [{ kind: "thinking", ts, text: asString(parsed.text) }];
+    if (agyKind === "assistant") return [{ kind: "assistant", ts, text: asString(parsed.text) }];
+    if (agyKind === "tool_call") {
+      return [{ kind: "tool_call", ts, name: asString(parsed.name, "tool"), input: parsed.input ?? {} }];
+    }
+    if (agyKind === "tool_result") {
+      const name = asString(parsed.name, "tool");
+      return [{
+        kind: "tool_result",
+        ts,
+        toolUseId: name,
+        toolName: name,
+        content: asString(parsed.content),
+        isError: parsed.isError === true,
+      }];
+    }
+    return [{ kind: "stdout", ts, text: line }];
+  }
+
   const type = asString(parsed.type);
 
   if (type === "system") {

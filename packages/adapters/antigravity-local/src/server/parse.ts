@@ -145,6 +145,124 @@ function parseReplyOnce(
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// ── Full run transcript (turns / thinking / tool calls / tool results) ───────
+// To render a rich transcript like the gemini/claude adapters, we extract EVERY
+// agy brain entry for THIS run (after the turnMarker USER_INPUT) and normalize it
+// into a compact line the UI parser (parseAntigravityStdoutLine) maps to a
+// TranscriptEntry. agy entry types: USER_INPUT · PLANNER_RESPONSE (thinking +
+// tool_calls + optional content) · VIEW_FILE / RUN_COMMAND / CODE_ACTION (tool
+// results) · EPHEMERAL_MESSAGE / SYSTEM_MESSAGE / CONVERSATION_HISTORY (skipped).
+
+export interface AntigravityNormEntry {
+  agyKind: "user" | "thinking" | "tool_call" | "tool_result" | "assistant";
+  text?: string;
+  name?: string;
+  input?: unknown;
+  content?: string;
+  isError?: boolean;
+}
+
+const TRUNC_CONTENT = 4000;
+const TRUNC_THINK = 6000;
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}\n…[+${s.length - n} ký tự bị cắt]` : s;
+}
+
+function parseAntigravityRunEntries(
+  raw: string,
+  turnMarker: string,
+): { entries: AntigravityNormEntry[]; reply: string; found: boolean } {
+  const objs: Array<Record<string, unknown>> = [];
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const d = parseJson(line);
+    if (d) objs.push(d);
+  }
+  let startIdx = -1;
+  for (let i = 0; i < objs.length; i++) {
+    if (asString(objs[i].type, "").trim() === "USER_INPUT" && asString(objs[i].content, "").includes(turnMarker)) {
+      startIdx = i;
+    }
+  }
+  if (startIdx < 0) return { entries: [], reply: "", found: false };
+
+  const entries: AntigravityNormEntry[] = [];
+  const replies: string[] = [];
+  const userText = asString(objs[startIdx].content, "").trim();
+  if (userText) entries.push({ agyKind: "user", text: truncate(userText, TRUNC_CONTENT) });
+
+  for (let i = startIdx + 1; i < objs.length; i++) {
+    const d = objs[i];
+    const type = asString(d.type, "").trim();
+    if (type === "USER_INPUT") break; // our turn ended
+    const source = asString(d.source, "").trim();
+    if (type === "PLANNER_RESPONSE" && source === "MODEL") {
+      const thinking = asString(d.thinking, "").trim();
+      if (thinking) entries.push({ agyKind: "thinking", text: truncate(thinking, TRUNC_THINK) });
+      const tcs = Array.isArray(d.tool_calls) ? d.tool_calls : [];
+      for (const tcRaw of tcs) {
+        const tc = parseObject(tcRaw);
+        entries.push({ agyKind: "tool_call", name: asString(tc.name, "tool"), input: tc.args ?? tc.input ?? {} });
+      }
+      const content = asString(d.content, "").trim();
+      if (content) {
+        entries.push({ agyKind: "assistant", text: content });
+        replies.push(content);
+      }
+    } else if (source === "MODEL" && (type === "VIEW_FILE" || type === "RUN_COMMAND" || type === "CODE_ACTION")) {
+      entries.push({
+        agyKind: "tool_result",
+        name: type.toLowerCase(),
+        content: truncate(asString(d.content, "").trim(), TRUNC_CONTENT),
+        isError: asString(d.status, "").toLowerCase() === "error",
+      });
+    }
+    // EPHEMERAL_MESSAGE / SYSTEM_MESSAGE / CONVERSATION_HISTORY → skip (noise)
+  }
+  return { entries, reply: replies.join("\n\n").trim(), found: true };
+}
+
+// Scan brains (newest first) for the one holding THIS run's turnMarker and return
+// its full normalized run entries + reply + the real brain id.
+export async function findAntigravityRunByTurnMarker(
+  turnMarker: string,
+  opts: { attempts?: number; delayMs?: number; scanLimit?: number } = {},
+): Promise<{ brainId: string; entries: AntigravityNormEntry[]; reply: string; found: boolean }> {
+  if (!turnMarker) return { brainId: "", entries: [], reply: "", found: false };
+  const attempts = opts.attempts ?? 8;
+  const delayMs = opts.delayMs ?? 700;
+  const scanLimit = opts.scanLimit ?? 25;
+  const root = antigravityBrainRoot();
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const dirs = (await fs.readdir(root, { withFileTypes: true }))
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
+      const withMtime: Array<{ name: string; mtime: number }> = [];
+      for (const name of dirs) {
+        try {
+          const st = await fs.stat(path.join(root, name, ".system_generated", "logs", "transcript.jsonl"));
+          withMtime.push({ name, mtime: st.mtimeMs });
+        } catch { /* no transcript */ }
+      }
+      withMtime.sort((a, b) => b.mtime - a.mtime);
+      for (const { name } of withMtime.slice(0, scanLimit)) {
+        try {
+          const raw = await fs.readFile(
+            path.join(root, name, ".system_generated", "logs", "transcript.jsonl"),
+            "utf8",
+          );
+          const r = parseAntigravityRunEntries(raw, turnMarker);
+          if (r.found && r.reply) return { brainId: name, entries: r.entries, reply: r.reply, found: true };
+        } catch { /* skip */ }
+      }
+    } catch { /* brain root missing */ }
+    if (attempt < attempts - 1) await sleep(delayMs);
+  }
+  return { brainId: "", entries: [], reply: "", found: false };
+}
+
 function antigravityBrainRoot(): string {
   return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
 }
