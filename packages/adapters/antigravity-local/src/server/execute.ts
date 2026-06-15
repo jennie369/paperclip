@@ -1058,6 +1058,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
     }
 
+    // agy prints to CONOUT$ (TTY) so the run's stdout stream is blind → the UI
+    // "Transcript" panel would stay empty. Emit the reply (read from the brain
+    // transcript) into the run log so it shows up in the Transcript panel.
+    if (summary) {
+      await onLog("stdout", `\n[antigravity reply]\n${summary}\n`);
+    }
+
     // Leak-guard on the FINAL summary (whichever source produced it). agy should
     // ACT on the context file, not echo it.
     if (looksLikeSystemPromptLeak(summary)) {
