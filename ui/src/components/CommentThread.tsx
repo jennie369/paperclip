@@ -773,6 +773,10 @@ export function CommentThread({
         </div>
       </div>
 
+      {/* Live run card pinned ABOVE the comments/runs list (most prominent — the
+          currently-running heartbeat), regardless of the comment sort order. */}
+      {liveRunSlot}
+
       {timeline.length > 0 || filterKind !== "all" || filterAuthor !== "all" ? (
         <TimelineList
           groupedTimeline={groupedTimeline}
@@ -783,8 +787,6 @@ export function CommentThread({
           onAddAndReassign={handleAddAndReassign}
         />
       ) : null}
-
-      {liveRunSlot}
 
       {queuedComments.length > 0 && (
         <div className="space-y-3">
