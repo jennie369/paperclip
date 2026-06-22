@@ -6,7 +6,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check, X, Calendar, Copy, Trash2, Plus, ChevronDown, ChevronUp,
   Shield, Loader2, ExternalLink, Image, Send, Mail, FileCode, Eye, AlignLeft,
-  Undo, Redo, Settings2, Search, MoreVertical, LayoutGrid, Filter, Bookmark, Clock, History
+  Undo, Redo, Settings2, Search, MoreVertical, LayoutGrid, Filter, Bookmark, Clock, History,
+  List, Columns3
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,9 @@ import { MarkdownBody } from "@/components/MarkdownBody";
 // SSOT shared components — keep ContentTab/CCScriptDetail/CCAIGen UI consistent.
 // Local definitions of MetaSelect/SlugUrlHandle removed 2026-05-17 (refactor commit).
 import { MetaSelect, SlugUrlHandle } from "../../content-center/components";
+// View switcher targets — kanban (GenericKanban SSOT) + calendar for the Nội Dung tab (2026-06-22).
+import { ContentBoardView } from "./ContentBoardView";
+import { ContentCalendarView } from "./ContentCalendarView";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1738,6 +1742,8 @@ export function ContentTab() {
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, scriptId: string } | null>(null);
   const [groupBy, setGroupBy] = useSessionState<string>('contentTab.groupBy', 'none');
+  // View switcher: list (default) | board (kanban) | calendar. Persisted per session.
+  const [viewMode, setViewMode] = useSessionState<'list' | 'board' | 'calendar'>('contentTab.viewMode', 'list');
 
   // "Đã xem" tracking — localStorage: giữ qua đóng browser, reset bằng tay nếu cần
   const [seenIds, setSeenIds] = useLocalState<string[]>('contentTab.seenIds', []);
@@ -2203,19 +2209,50 @@ export function ContentTab() {
         </div>
       )}
 
-      {/* ── Action bar (right side) ─────────────────────────────────── */}
-      <div className="flex gap-2 justify-end">
-        <Button size="sm" variant="outline" asChild>
-          <Link to="/GEM/cc/ai-gen">✨ AI Tạo nội dung</Link>
-        </Button>
-        <Button size="sm" variant="outline" asChild>
-          <Link to="/GEM/cc/scripts">📄 Kịch bản CC</Link>
-        </Button>
-        <Button size="sm" onClick={() => { setCreateForm(defaultCreateForm); setShowCreate(true); }}>
-          <Plus className="h-4 w-4 mr-1" />Tạo nội dung
-        </Button>
+      {/* ── Action bar (view switcher left · actions right) ──────────── */}
+      <div className="flex gap-2 justify-between items-center flex-wrap">
+        {/* View switcher — reuse Issues toggle style (list/board/calendar) */}
+        <div className="flex items-center border border-border rounded-md overflow-hidden">
+          <button
+            className={`p-1.5 transition-colors ${viewMode === 'list' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setViewMode('list')}
+            title="Danh sách"
+          >
+            <List className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className={`p-1.5 transition-colors ${viewMode === 'board' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setViewMode('board')}
+            title="Bảng (Kanban)"
+          >
+            <Columns3 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className={`p-1.5 transition-colors ${viewMode === 'calendar' ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setViewMode('calendar')}
+            title="Lịch"
+          >
+            <Calendar className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/GEM/cc/ai-gen">✨ AI Tạo nội dung</Link>
+          </Button>
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/GEM/cc/scripts">📄 Kịch bản CC</Link>
+          </Button>
+          <Button size="sm" onClick={() => { setCreateForm(defaultCreateForm); setShowCreate(true); }}>
+            <Plus className="h-4 w-4 mr-1" />Tạo nội dung
+          </Button>
+        </div>
       </div>
-      {/* List */}
+      {/* List / Board / Calendar — switched by viewMode */}
+      {viewMode === 'board' ? (
+        <ContentBoardView items={list} />
+      ) : viewMode === 'calendar' ? (
+        <ContentCalendarView items={list} />
+      ) : (
       <Card>
         {isLoading ? (
           <div className="p-4 space-y-3">
@@ -2280,6 +2317,7 @@ export function ContentTab() {
           </div>
         )}
       </Card>
+      )}
 
       {/* Reject modal */}
       <SimpleModal
