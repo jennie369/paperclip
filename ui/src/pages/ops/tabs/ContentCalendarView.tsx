@@ -16,6 +16,29 @@ const STATUS_DOT: Record<string, string> = {
 };
 const WEEKDAYS = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
 
+// posted_account → short platform badge (label + color). Matches cc_scripts.posted_account values.
+const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
+  page_jennie: { label: "FB J", cls: "bg-blue-100 text-blue-700" },
+  page_gemral: { label: "FB G", cls: "bg-violet-100 text-violet-700" },
+  profile_jennie: { label: "Prof", cls: "bg-pink-100 text-pink-700" },
+  page_yinyang: { label: "YY", cls: "bg-amber-100 text-amber-700" },
+  forum: { label: "Forum", cls: "bg-teal-100 text-teal-700" },
+  email: { label: "Email", cls: "bg-gray-100 text-gray-600" },
+  resend: { label: "Email", cls: "bg-gray-100 text-gray-600" },
+  push: { label: "Push", cls: "bg-orange-100 text-orange-700" },
+};
+function platformBadge(acct?: string): { label: string; cls: string } | null {
+  if (!acct) return null;
+  return PLATFORM_BADGE[acct] ?? { label: acct.slice(0, 6), cls: "bg-muted text-muted-foreground" };
+}
+// HH:MM (HCM) from scheduled_at — the planned publish time.
+function hcmTime(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return new Date(d.getTime() + 7 * 3600 * 1000).toISOString().slice(11, 16);
+}
+
 // YYYY-MM-DD in HCM (UTC+7) for an ISO timestamp.
 function hcmDateKey(iso?: string): string | null {
   if (!iso) return null;
@@ -97,26 +120,34 @@ export function ContentCalendarView({ items }: { items: any[] }) {
                   return (
                     <td
                       key={dateKey}
-                      className={`border border-border align-top p-1 h-24 min-w-[110px] ${inMonth ? "" : "bg-muted/20"}`}
+                      className={`border border-border align-top p-1 min-w-[130px] ${inMonth ? "" : "bg-muted/20"}`}
                     >
                       <div className={`mb-1 text-[10px] ${isToday ? "inline-flex h-4 w-4 items-center justify-center rounded-full bg-primary text-primary-foreground" : inMonth ? "text-muted-foreground" : "text-muted-foreground/40"}`}>
                         {dayNum}
                       </div>
-                      <div className="space-y-0.5 max-h-[72px] overflow-y-auto">
-                        {dayItems.slice(0, 4).map((s) => (
-                          <button
-                            key={s.id}
-                            onClick={() => navigate(`/GEM/cc/scripts/${s.id}`)}
-                            className="flex w-full items-center gap-1 rounded bg-muted/40 px-1 py-0.5 text-left hover:bg-accent transition-colors"
-                            title={s.title}
-                          >
-                            <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[s.status] ?? "bg-gray-400"}`} />
-                            <span className="truncate text-[10px] leading-tight">{s.title || "—"}</span>
-                          </button>
-                        ))}
-                        {dayItems.length > 4 && (
-                          <div className="px-1 text-[9px] text-muted-foreground">+{dayItems.length - 4} nữa</div>
-                        )}
+                      {/* Fixed-height list → mọi ô đồng đều bất kể số bài */}
+                      <div className="space-y-1 h-[96px] overflow-y-auto pr-0.5">
+                        {dayItems.map((s) => {
+                          const badge = platformBadge(s.posted_account);
+                          const time = hcmTime(s.scheduled_at);
+                          return (
+                            <button
+                              key={s.id}
+                              onClick={() => navigate(`/GEM/cc/scripts/${s.id}`)}
+                              className="flex h-[34px] w-full items-center gap-1 rounded border border-border/60 bg-muted/40 px-1 text-left hover:bg-accent transition-colors"
+                              title={s.title}
+                            >
+                              <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[s.status] ?? "bg-gray-400"}`} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1 leading-none">
+                                  {badge && <span className={`shrink-0 rounded px-1 py-0.5 text-[8px] font-semibold leading-none ${badge.cls}`}>{badge.label}</span>}
+                                  {time && <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">{time}</span>}
+                                </div>
+                                <div className="truncate text-[10px] leading-tight mt-0.5">{s.title || "—"}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
                     </td>
                   );

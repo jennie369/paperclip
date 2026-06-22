@@ -51,9 +51,18 @@ export function ContentBoardView({ items }: { items: any[] }) {
       items={items}
       columns={columns}
       getId={(s) => s.id}
-      getColumnId={(s) => (CONTENT_STATUS.some((c) => c.id === s.status) ? s.status : "draft")}
+      getColumnId={(s) => {
+        // Map a script → its board column. A scheduled post may carry status='approved'
+        // + scheduled_at (forum-schedule flow) → still belongs in "Đã lên lịch".
+        if (s.status === "published") return "published";
+        if (s.status === "rejected") return "rejected";
+        if (s.status === "scheduled" || (s.scheduled_at && s.status !== "published" && s.status !== "rejected")) return "scheduled";
+        if (s.status === "approved") return "approved";
+        return "draft";
+      }}
       onMove={(id, status) => moveMut.mutate({ id, status })}
       storageKey="contentKanbanColumnOrder"
+      heightClass="h-[calc(100vh-11rem)]"
       renderColumnIcon={(id) => <span className={`inline-block h-2 w-2 rounded-full ${dotById[id] ?? "bg-gray-400"}`} />}
       renderCard={(s, { isOverlay }) => {
         const thumb: string | undefined = (s.image_urls && s.image_urls[0]) || (s.metadata?.images && s.metadata.images[0]);

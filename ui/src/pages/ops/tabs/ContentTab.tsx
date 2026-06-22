@@ -2069,30 +2069,22 @@ export function ContentTab() {
 
       {/* ── Filter row ──────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 flex-wrap">
+        {/* Filters dùng đúng giá trị DB thật (cc_scripts): status / pillar / blog_category / posted_account */}
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
           <option value="">Tất cả trạng thái</option>
-          <option value="draft">Nháp</option>
-          <option value="approved">Đã duyệt</option>
-          <option value="rejected">Từ chối</option>
-          <option value="published">Đã đăng</option>
+          {STATUS_OPTIONS.map(s => <option key={s} value={s}>{statusLabels[s] || s}</option>)}
         </select>
         <select value={pillarFilter} onChange={e => setPillarFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
           <option value="">Tất cả pillar</option>
-          <option value="trading">Trading</option>
-          <option value="spiritual">Spiritual</option>
-          <option value="lifestyle">Lifestyle</option>
+          {PILLAR_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
           <option value="">Tất cả danh mục</option>
-          <option value="trading-mindset">Trading Mindset</option>
-          <option value="personal-finance">Personal Finance</option>
-          <option value="wellness">Wellness</option>
-          <option value="lifestyle">Lifestyle</option>
+          {BLOG_CATEGORY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <select value={accountFilter} onChange={e => setAccountFilter(e.target.value)} className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
           <option value="">Tất cả tài khoản</option>
-          <option value="@jenniechu">@jenniechu</option>
-          <option value="@gemral">@gemral</option>
+          {ACCOUNT_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
         </select>
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" title="Từ ngày" />
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" title="Đến ngày" />
