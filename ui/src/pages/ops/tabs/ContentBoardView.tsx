@@ -62,7 +62,7 @@ export function ContentBoardView({ items }: { items: any[] }) {
       }}
       onMove={(id, status) => moveMut.mutate({ id, status })}
       storageKey="contentKanbanColumnOrder"
-      heightClass="h-[calc(100vh-11rem)]"
+      heightClass="h-[calc(100vh-6rem)]"
       renderColumnIcon={(id) => <span className={`inline-block h-2 w-2 rounded-full ${dotById[id] ?? "bg-gray-400"}`} />}
       renderCard={(s, { isOverlay }) => {
         const thumb: string | undefined = (s.image_urls && s.image_urls[0]) || (s.metadata?.images && s.metadata.images[0]);

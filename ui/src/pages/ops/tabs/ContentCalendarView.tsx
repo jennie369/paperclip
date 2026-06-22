@@ -27,9 +27,26 @@ const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
   resend: { label: "Email", cls: "bg-gray-100 text-gray-600" },
   push: { label: "Push", cls: "bg-orange-100 text-orange-700" },
 };
-function platformBadge(acct?: string): { label: string; cls: string } | null {
-  if (!acct) return null;
-  return PLATFORM_BADGE[acct] ?? { label: acct.slice(0, 6), cls: "bg-muted text-muted-foreground" };
+// Badge from content_type when a script has no posted_account (e.g. blog).
+const CONTENT_TYPE_BADGE: Record<string, { label: string; cls: string }> = {
+  blog_post: { label: "Blog", cls: "bg-indigo-100 text-indigo-700" },
+  blog: { label: "Blog", cls: "bg-indigo-100 text-indigo-700" },
+  social_post: { label: "Social", cls: "bg-teal-100 text-teal-700" },
+  news: { label: "News", cls: "bg-cyan-100 text-cyan-700" },
+  email: { label: "Email", cls: "bg-gray-100 text-gray-600" },
+  newsletter: { label: "Email", cls: "bg-gray-100 text-gray-600" },
+  newsletter_broadcast: { label: "Email", cls: "bg-gray-100 text-gray-600" },
+  short_video: { label: "Video", cls: "bg-rose-100 text-rose-700" },
+  reel: { label: "Video", cls: "bg-rose-100 text-rose-700" },
+  latc: { label: "LATC", cls: "bg-amber-100 text-amber-700" },
+};
+// Badge for a script: prefer platform (posted_account), else content_type (so blog gets a badge too).
+function badgeFor(s: any): { label: string; cls: string } | null {
+  if (s?.posted_account && PLATFORM_BADGE[s.posted_account]) return PLATFORM_BADGE[s.posted_account];
+  if (s?.posted_account) return { label: String(s.posted_account).slice(0, 6), cls: "bg-muted text-muted-foreground" };
+  const ct = s?.content_type as string | undefined;
+  if (ct) return CONTENT_TYPE_BADGE[ct] ?? { label: ct.slice(0, 6), cls: "bg-muted text-muted-foreground" };
+  return null;
 }
 // HH:MM (HCM) from scheduled_at — the planned publish time.
 function hcmTime(iso?: string): string {
@@ -101,7 +118,7 @@ export function ContentCalendarView({ items }: { items: any[] }) {
         <Button size="sm" variant="outline" onClick={nextMonth}><ChevronRight className="h-4 w-4" /></Button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-xs">
+        <table className="w-full table-fixed border-collapse text-xs">
           <thead>
             <tr>
               {WEEKDAYS.map((d) => (
@@ -120,7 +137,7 @@ export function ContentCalendarView({ items }: { items: any[] }) {
                   return (
                     <td
                       key={dateKey}
-                      className={`border border-border align-top p-1 min-w-[130px] ${inMonth ? "" : "bg-muted/20"}`}
+                      className={`border border-border align-top p-1 ${inMonth ? "" : "bg-muted/20"}`}
                     >
                       <div className={`mb-1 text-[10px] ${isToday ? "inline-flex h-4 w-4 items-center justify-center rounded-full bg-primary text-primary-foreground" : inMonth ? "text-muted-foreground" : "text-muted-foreground/40"}`}>
                         {dayNum}
@@ -128,7 +145,7 @@ export function ContentCalendarView({ items }: { items: any[] }) {
                       {/* Fixed-height list → mọi ô đồng đều bất kể số bài */}
                       <div className="space-y-1 h-[96px] overflow-y-auto pr-0.5">
                         {dayItems.map((s) => {
-                          const badge = platformBadge(s.posted_account);
+                          const badge = badgeFor(s);
                           const time = hcmTime(s.scheduled_at);
                           return (
                             <button
