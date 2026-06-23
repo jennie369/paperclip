@@ -456,6 +456,16 @@ async function processMessage(
       return;
     }
 
+    // ── P2 re-check pause (race-guard) ──
+    // Pause được kiểm ở đầu handler (line ~415), nhưng runAgent (LLM) mất ~phút.
+    // Owner có thể bấm "Dừng Bot"/takeover GIỮA CHỪNG → re-check NGAY TRƯỚC publish
+    // để hủy reply in-flight, tránh bot trả lời chồng sau khi đã takeover.
+    if (await isSessionPaused(sessionKey)) {
+      console.warn(`${logPrefix} ⏸ Session bot_paused mid-flight — dropping generated reply (takeover during agent run)`);
+      if (pendingId) await bus.markHandled(pendingId, 'human', 'skipped', 'paused_mid_flight');
+      return;
+    }
+
     // ── Step 10: Publish outbound reply ──
     // Pull outbound media (if any) extracted from [[SEND_MEDIA: id]] markers
     // by the agent's media-library lookup in runViaOllama.

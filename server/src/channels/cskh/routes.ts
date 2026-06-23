@@ -34,8 +34,13 @@ cskhRouter.post('/send', async (req, res) => {
   const metadata = { ...((sess?.metadata as Record<string, unknown>) || {}), bot_paused: true };
   await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
 
-  if (channel === 'cskh-shopify') {
-    await mirrorReplyToVisitor(id, 'human', message, null);
+  if (channel !== 'cskh-internal') {
+    // S-routes: visitor ẩn danh (cskh-shopify / cskh-web) — mirror visitor_id, no push.
+    await mirrorReplyToVisitor(id, 'human', message, null, channel);
+    // P1: email-notif nếu khách offline (edge tự gate offline + debounce; fire-and-forget).
+    const preview = message.length > 80 ? message.slice(0, 80) + '…' : message;
+    supabase.functions.invoke('cskh-notify-offline', { body: { visitor_id: id, channel, preview } })
+      .catch((e: any) => console.error('[cskh] notify-offline failed:', e?.message || e));
   } else {
     await mirrorReplyToCustomer(id, 'human', message, null);
     await pushSupportReply(id, message);

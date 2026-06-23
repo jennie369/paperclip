@@ -49,12 +49,13 @@ export async function mirrorReplyToVisitor(
   visitorId: string,
   role: CskhRole,
   body: string,
-  agentSlug?: string | null,
+  agentSlug: string | null | undefined,
+  channel: string, // S2: 'cskh-shopify' | 'cskh-web' — caller BẮT BUỘC truyền (ghi đúng nhãn kênh)
 ): Promise<void> {
-  const sessionKey = `cskh-shopify:${visitorId}:${visitorId}`;
+  const sessionKey = `${channel}:${visitorId}:${visitorId}`;
   const { error } = await supabase.from('cskh_messages').insert({
     visitor_id: visitorId,
-    channel: 'cskh-shopify',
+    channel,
     session_key: sessionKey,
     role,
     body,

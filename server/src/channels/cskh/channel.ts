@@ -60,9 +60,14 @@ export class CskhChannel implements Channel {
     const sentBy = (msg.metadata?.sentBy as string) || (agentSlug ? `agent:${agentSlug}` : 'agent');
     // Log to channel_sent_messages (Paperclip inbox + Shopify widget poll read this).
     await this.logSentMessage(msg.channel, threadId, msg.content, sentBy);
-    if (msg.channel === 'cskh-shopify') {
-      // Anonymous visitor: mirror by visitor_id; no push (no device token).
-      await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug);
+    if (msg.channel !== 'cskh-internal') {
+      // S1: visitor ẩn danh (cskh-shopify / cskh-web): mirror by visitor_id; no push (no token).
+      await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug, msg.channel);
+      // P1: email-notif nếu khách offline (edge tự gate offline + debounce; fire-and-forget).
+      const preview = msg.content.length > 80 ? msg.content.slice(0, 80) + '…' : msg.content;
+      supabase.functions.invoke('cskh-notify-offline', {
+        body: { visitor_id: threadId, channel: msg.channel, preview },
+      }).catch((e: any) => console.error('[cskh] notify-offline failed:', e?.message || e));
     } else {
       // Authenticated Gemral customer.
       await mirrorReplyToCustomer(threadId, 'assistant', msg.content, agentSlug);
