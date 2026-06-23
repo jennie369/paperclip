@@ -110,7 +110,7 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
             >
               <SelectTrigger
                 size="sm"
-                title="Chọn agent trả lời hội thoại này (bật bot) — hoặc 'Không bot' để tắt bot riêng chat này"
+                title="Đổi/TẮT AGENT xử lý hội thoại này (vĩnh viễn cho chat này). 'Không bot' = không agent nào tự trả lời. Khác nút Dừng Bot (tạm trực, bot vẫn còn agent)."
                 className={`h-7 text-[11px] max-w-[170px] mr-1 ${
                   conv.agent_slug
                     ? ""
@@ -126,12 +126,15 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
                 ))}
               </SelectContent>
             </Select>
+            {conv.agent_slug && botPaused && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 font-semibold">Bạn đang trực</span>
+            )}
             {conv.agent_slug && (
               <button
                 onClick={() => quickAction(() => channelsApi.setBotPaused(conv.session_key, !botPaused))}
                 title={botPaused
-                  ? "Bot đang TẮT cho hội thoại này — bấm để bật AI trả lời lại"
-                  : "Dừng bot cho hội thoại này để bạn trả tay (tin khách vẫn về)"}
+                  ? "Bạn đang TRỰC (bot tạm dừng cho hội thoại này) — bấm để bot tiếp tục tự trả lời"
+                  : "TẠM DỪNG bot để bạn trực tiếp trả lời (takeover). Tin khách vẫn về. Bấm lại để bot tiếp tục. Khác 'Không bot' (bỏ hẳn agent)."}
                 className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold transition-colors mr-1 ${
                   botPaused
                     ? "bg-amber-500/20 text-amber-600 ring-1 ring-amber-500/40 hover:bg-amber-500/30"
