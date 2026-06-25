@@ -57,26 +57,37 @@ describe("scheduleToCron", () => {
     ).toBe("30 14 * * 1");
   });
 
-  it("weeklyDays Tue/Thu/Fri/Sat 14:30", () => {
+  it("weeklyDays Tue/Thu/Fri/Sat single time 14:30", () => {
     expect(
       scheduleToCron({
         preset: "weeklyDays",
         daysOfWeek: [2, 4, 5, 6],
-        hour: 14,
+        hours: [14],
         minute: 30,
       }),
     ).toBe("30 14 * * 2,4,5,6");
   });
 
-  it("weeklyDays sorts + dedups days", () => {
+  it("weeklyDays multiple times per day (09:00,15:00,20:00 on Tue/Thu/Sat)", () => {
+    expect(
+      scheduleToCron({
+        preset: "weeklyDays",
+        daysOfWeek: [2, 4, 6],
+        hours: [9, 15, 20],
+        minute: 0,
+      }),
+    ).toBe("0 9,15,20 * * 2,4,6");
+  });
+
+  it("weeklyDays sorts + dedups days and hours", () => {
     expect(
       scheduleToCron({
         preset: "weeklyDays",
         daysOfWeek: [6, 2, 4, 2],
-        hour: 8,
+        hours: [20, 9, 9, 15],
         minute: 0,
       }),
-    ).toBe("0 8 * * 2,4,6");
+    ).toBe("0 9,15,20 * * 2,4,6");
   });
 
   it("weeklyDays empty days throws", () => {
@@ -84,7 +95,18 @@ describe("scheduleToCron", () => {
       scheduleToCron({
         preset: "weeklyDays",
         daysOfWeek: [],
-        hour: 9,
+        hours: [9],
+        minute: 0,
+      }),
+    ).toThrow();
+  });
+
+  it("weeklyDays empty hours throws", () => {
+    expect(() =>
+      scheduleToCron({
+        preset: "weeklyDays",
+        daysOfWeek: [2],
+        hours: [],
         minute: 0,
       }),
     ).toThrow();
@@ -171,25 +193,43 @@ describe("cronToSchedule", () => {
     });
   });
 
-  it("decodes weeklyDays (specific multiple days)", () => {
+  it("decodes weeklyDays (specific multiple days, single time)", () => {
     expect(cronToSchedule("30 14 * * 2,4,5,6")).toEqual({
       preset: "weeklyDays",
       daysOfWeek: [2, 4, 5, 6],
-      hour: 14,
+      hours: [14],
       minute: 30,
     });
   });
 
-  it("decodes weeklyDays sorts + dedups days", () => {
-    expect(cronToSchedule("0 8 * * 6,2,2,4")).toEqual({
+  it("decodes weeklyDays (multiple times per day)", () => {
+    expect(cronToSchedule("0 9,15,20 * * 2,4,6")).toEqual({
       preset: "weeklyDays",
       daysOfWeek: [2, 4, 6],
-      hour: 8,
+      hours: [9, 15, 20],
       minute: 0,
     });
   });
 
-  it("single day-of-week stays weekly (not weeklyDays)", () => {
+  it("decodes weeklyDays (single day, multiple times)", () => {
+    expect(cronToSchedule("0 9,15 * * 3")).toEqual({
+      preset: "weeklyDays",
+      daysOfWeek: [3],
+      hours: [9, 15],
+      minute: 0,
+    });
+  });
+
+  it("decodes weeklyDays sorts + dedups", () => {
+    expect(cronToSchedule("0 6,2,2,4 * * 6,2,2,4")).toEqual({
+      preset: "weeklyDays",
+      daysOfWeek: [2, 4, 6],
+      hours: [2, 4, 6],
+      minute: 0,
+    });
+  });
+
+  it("single day-of-week + single time stays weekly (not weeklyDays)", () => {
     expect(cronToSchedule("0 9 * * 3")).toEqual({
       preset: "weekly",
       dayOfWeek: 3,
@@ -229,9 +269,12 @@ describe("round-trip (schedule → cron → schedule)", () => {
     { preset: "weekly", dayOfWeek: 6, hour: 23, minute: 59 },
     { preset: "weekly", dayOfWeek: 1, hour: 9, minute: 0 },
     { preset: "weekdays", hour: 9, minute: 0 },
-    { preset: "weeklyDays", daysOfWeek: [2, 4, 5, 6], hour: 14, minute: 30 },
-    { preset: "weeklyDays", daysOfWeek: [0, 6], hour: 7, minute: 15 },
-    { preset: "weeklyDays", daysOfWeek: [1, 2, 3, 4, 5, 6], hour: 0, minute: 0 },
+    { preset: "weeklyDays", daysOfWeek: [2, 4, 5, 6], hours: [14], minute: 30 },
+    { preset: "weeklyDays", daysOfWeek: [0, 6], hours: [7], minute: 15 },
+    { preset: "weeklyDays", daysOfWeek: [1, 2, 3, 4, 5, 6], hours: [0], minute: 0 },
+    { preset: "weeklyDays", daysOfWeek: [2, 4, 6], hours: [9, 15, 20], minute: 0 },
+    { preset: "weeklyDays", daysOfWeek: [3], hours: [9, 15], minute: 0 },
+    { preset: "weeklyDays", daysOfWeek: [1, 5], hours: [8, 12, 18, 22], minute: 30 },
   ];
 
   for (const original of cases) {
@@ -262,9 +305,15 @@ describe("describeCron", () => {
     expect(describeCron("0 14 * * 1")).toBe("Thứ Hai hàng tuần lúc 14:00");
   });
 
-  it("weeklyDays", () => {
+  it("weeklyDays single time", () => {
     expect(describeCron("30 14 * * 2,4,5,6")).toBe(
       "Thứ Ba, Thứ Năm, Thứ Sáu, Thứ Bảy hàng tuần lúc 14:30",
+    );
+  });
+
+  it("weeklyDays multiple times", () => {
+    expect(describeCron("0 9,15,20 * * 2,4,6")).toBe(
+      "Thứ Ba, Thứ Năm, Thứ Bảy hàng tuần lúc 09:00, 15:00, 20:00",
     );
   });
 
