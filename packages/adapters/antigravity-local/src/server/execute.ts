@@ -34,12 +34,17 @@ import {
   findAntigravityRunByTurnMarker,
   looksLikeSystemPromptLeak,
   parseAntigravityStdout,
+  readAntigravityRunEntries,
   readAntigravityTranscriptUsage,
   summarizeAntigravityWork,
 } from "./parse.js";
 import { firstNonEmptyLine } from "./utils.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
+
+// How often the live transcript poller tails the brain while agy runs (ms). agy is
+// TTY-blind so this is the only way to stream the run before it exits.
+const LIVE_POLL_INTERVAL_MS = 1200;
 
 function hasNonEmptyEnvValue(env: Record<string, string>, key: string): boolean {
   const raw = env[key];
@@ -1007,6 +1012,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   };
 
+  // How many normalized run entries the live poller (below) has already streamed via
+  // onLog during the run, so the post-run flush in toResult emits only the remainder
+  // (no duplicates). Shared closure state between the poller and toResult.
+  let streamedEntryCount = 0;
+
   const toResult = async (
     attempt: {
       proc: {
@@ -1065,13 +1075,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
     }
 
-    // agy prints to CONOUT$ (TTY) so the run's stdout stream is blind → the UI
-    // "Transcript" panel would stay empty. Emit the FULL run as structured JSONL
-    // lines (turns / thinking / tool calls / tool results) — parseAntigravityStdout
-    // Line maps each to a TranscriptEntry so the Nice view renders like gemini/claude.
-    for (const entry of detected.entries) {
-      await onLog("stdout", `${JSON.stringify(entry)}\n`);
+    // agy prints to CONOUT$ (TTY) so the run's stdout stream is blind → entries are
+    // emitted as structured JSONL lines (turns / thinking / tool calls / tool results)
+    // that parseAntigravityStdoutLine maps to TranscriptEntry. The live poller already
+    // streamed entries[0..streamedEntryCount) WHILE the run was in flight — here we
+    // flush only the remainder (authoritative final read) so nothing is duplicated.
+    for (let i = streamedEntryCount; i < detected.entries.length; i++) {
+      await onLog("stdout", `${JSON.stringify(detected.entries[i])}\n`);
     }
+    streamedEntryCount = detected.entries.length;
 
     // Leak-guard on the FINAL summary (whichever source produced it). agy should
     // ACT on the context file, not echo it.
@@ -1159,6 +1171,48 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const conversationId =
     (configuredBrainExists ? configuredConversationId : "") ||
     (canResumeSession ? runtimeSessionId : runId);
-  const initial = await runAttempt(conversationId);
+  // Live transcript: agy is TTY-blind, so nothing streams via the process stdout while
+  // it works → the run-detail page (which refetches every ~2s while a run is live) and
+  // the live WS widget would stay empty until the run ends. Match the Claude/Gemini live
+  // experience by tailing the brain transcript WHILE agy runs: each tick locate this
+  // run's brain by turnMarker, parse its entries, and emit any NEW ones via onLog (→
+  // runLogStore.append + publishLiveEvent). streamedEntryCount is shared with toResult so
+  // the post-run flush emits only what the poller didn't already stream. Best-effort: any
+  // read error is swallowed; toResult performs the authoritative final read.
+  const liveTurnMarker = path.basename(tempPromptFile);
+  let liveBrainId = "";
+  let livePolling = true;
+  const pumpLiveTranscript = async () => {
+    try {
+      const r = liveBrainId
+        ? await readAntigravityRunEntries(liveBrainId, liveTurnMarker)
+        : await findAntigravityRunByTurnMarker(liveTurnMarker, { attempts: 1, scanLimit: 30 });
+      if (!liveBrainId && r.found && r.brainId) liveBrainId = r.brainId;
+      if (r.found && r.entries.length > streamedEntryCount) {
+        for (let i = streamedEntryCount; i < r.entries.length; i++) {
+          await onLog("stdout", `${JSON.stringify(r.entries[i])}\n`);
+        }
+        streamedEntryCount = r.entries.length;
+      }
+    } catch {
+      /* best-effort live preview — toResult performs the authoritative read */
+    }
+  };
+  const liveLoop = (async () => {
+    while (livePolling) {
+      await pumpLiveTranscript();
+      if (!livePolling) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, LIVE_POLL_INTERVAL_MS));
+    }
+  })();
+
+  const initial = await (async () => {
+    try {
+      return await runAttempt(conversationId);
+    } finally {
+      livePolling = false;
+      await liveLoop;
+    }
+  })();
   return toResult(initial, conversationId);
 }

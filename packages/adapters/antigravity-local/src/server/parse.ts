@@ -308,6 +308,25 @@ export async function findAntigravityRunByTurnMarker(
   return { brainId: "", entries: [], reply: "", found: false };
 }
 
+// Read + normalize ONE known brain's run entries (used by the live transcript poller
+// once the run's brain id is resolved, so it doesn't rescan every brain each tick).
+export async function readAntigravityRunEntries(
+  brainId: string,
+  turnMarker: string,
+): Promise<{ brainId: string; entries: AntigravityNormEntry[]; reply: string; found: boolean }> {
+  if (!brainId) return { brainId: "", entries: [], reply: "", found: false };
+  try {
+    const raw = await fs.readFile(
+      path.join(antigravityBrainRoot(), brainId, ".system_generated", "logs", "transcript.jsonl"),
+      "utf8",
+    );
+    const r = parseAntigravityRunEntries(raw, turnMarker);
+    return { brainId, entries: r.entries, reply: r.reply, found: r.found };
+  } catch {
+    return { brainId: "", entries: [], reply: "", found: false };
+  }
+}
+
 function antigravityBrainRoot(): string {
   return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
 }
