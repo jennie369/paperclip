@@ -223,6 +223,35 @@ function parseAntigravityRunEntries(
   return { entries, reply: replies.join("\n\n").trim(), found: true };
 }
 
+// Synthesize a concise work-summary for a run that did real work (tool calls /
+// reasoning) but produced NO closing prose PLANNER_RESPONSE.content — common for
+// heartbeat WORK runs that end on a tool action. Returns "" when there is nothing
+// meaningful to report, so a genuinely empty run still surfaces as a failure.
+export function summarizeAntigravityWork(entries: AntigravityNormEntry[]): string {
+  if (!entries || entries.length === 0) return "";
+  const toolCounts = new Map<string, number>();
+  let lastThinking = "";
+  for (const e of entries) {
+    if (e.agyKind === "tool_call") {
+      const name = (e.name ?? "tool").trim() || "tool";
+      toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);
+    } else if (e.agyKind === "thinking" && e.text) {
+      lastThinking = e.text;
+    }
+  }
+  const tally = [...toolCounts.entries()].map(([name, count]) => `${name} ×${count}`).join(", ");
+  if (!tally && !lastThinking) return "";
+  const head = tally
+    ? `⚙️ agy đã hoàn thành phiên làm việc (không có tóm tắt prose). Hành động: ${tally}.`
+    : `⚙️ agy đã chạy nhưng chỉ suy luận, chưa thực thi hành động nào.`;
+  // Only attach the raw reasoning when there are NO tool actions — when a tool tally
+  // exists it already tells the story and the chain-of-thought is just noise.
+  const note = !tally && lastThinking
+    ? `\n\nGhi chú: ${lastThinking.replace(/\s+/g, " ").trim().slice(0, 300)}`
+    : "";
+  return `${head}${note}`;
+}
+
 // Scan brains (newest first) for the one holding THIS run's turnMarker and return
 // its full normalized run entries + reply + the real brain id.
 export async function findAntigravityRunByTurnMarker(
@@ -234,6 +263,13 @@ export async function findAntigravityRunByTurnMarker(
   const delayMs = opts.delayMs ?? 700;
   const scanLimit = opts.scanLimit ?? 25;
   const root = antigravityBrainRoot();
+  // A heartbeat WORK run (e.g. "run the full SOP") frequently ends on a tool action
+  // with NO closing prose PLANNER_RESPONSE.content → r.reply is empty even though the
+  // run did real work. We keep retrying so a prose reply has time to flush, but if it
+  // never appears we must still return the brain we DID match by turnMarker (with its
+  // entries) instead of "not found" — otherwise the caller misreports a successful
+  // work run as an empty-reply failure. Lesson: evolution-log/01-paperclip.md.
+  let matchedNoReply: { brainId: string; entries: AntigravityNormEntry[] } | null = null;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const dirs = (await fs.readdir(root, { withFileTypes: true }))
@@ -255,10 +291,19 @@ export async function findAntigravityRunByTurnMarker(
           );
           const r = parseAntigravityRunEntries(raw, turnMarker);
           if (r.found && r.reply) return { brainId: name, entries: r.entries, reply: r.reply, found: true };
+          // turnMarker matched but no prose yet — remember the freshest entries in case
+          // no prose ever arrives (work run). Overwrite each pass for the fullest set.
+          if (r.found) matchedNoReply = { brainId: name, entries: r.entries };
         } catch { /* skip */ }
       }
     } catch { /* brain root missing */ }
     if (attempt < attempts - 1) await sleep(delayMs);
+  }
+  // No brain ever produced a prose reply. If we DID match the turnMarker (work run
+  // with no prose), return that brain + its entries so the caller can synthesize a
+  // work-summary. Only a never-matched turnMarker is a genuine "not found".
+  if (matchedNoReply) {
+    return { brainId: matchedNoReply.brainId, entries: matchedNoReply.entries, reply: "", found: true };
   }
   return { brainId: "", entries: [], reply: "", found: false };
 }

@@ -35,6 +35,7 @@ import {
   looksLikeSystemPromptLeak,
   parseAntigravityStdout,
   readAntigravityTranscriptUsage,
+  summarizeAntigravityWork,
 } from "./parse.js";
 import { firstNonEmptyLine } from "./utils.js";
 
@@ -1049,7 +1050,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const detected = await findAntigravityRunByTurnMarker(turnMarker);
     const realBrainId = detected.found && detected.brainId ? detected.brainId : conversationId;
     const { usage, costUsd } = await readAntigravityTranscriptUsage(realBrainId);
-    const summary = attempt.parsed.summary || detected.reply;
+    // agy WORK runs (heartbeat) may end with NO prose reply (they finish on a tool
+    // action) → detected.reply is empty even though real work happened. Fall back to a
+    // synthesized work-summary from the run entries so a successful run is NOT
+    // misreported as an empty-reply failure. Only a run that matched no brain at all
+    // (detected.found === false) is a genuine failure. Lesson: evolution-log/01-paperclip.md.
+    const workSummary = detected.found ? summarizeAntigravityWork(detected.entries) : "";
+    const summary = attempt.parsed.summary || detected.reply || workSummary;
 
     if (detected.found && detected.brainId && detected.brainId !== conversationId) {
       await onLog(
