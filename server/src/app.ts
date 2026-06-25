@@ -8,6 +8,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { remoteApiKeyGuard } from "./middleware/remote-api-key-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
@@ -154,6 +155,10 @@ export async function createApp(
   // Mount API routes
   const api = Router();
   api.use(boardMutationGuard());
+  // Require PAPERCLIP_API_KEY for REMOTE (Cloudflare-tunnel) requests so the public
+  // gemops.gemcapitalholding.com hostname cannot reach the control plane unauthenticated.
+  // Local (loopback) requests and self-authenticating webhooks are exempt.
+  api.use(remoteApiKeyGuard(process.env.PAPERCLIP_REMOTE_API_KEY || ""));
   api.use(
     "/health",
     healthRoutes(db, {
