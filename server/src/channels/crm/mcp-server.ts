@@ -692,10 +692,13 @@ export async function handleSearchKnowledge(args: any): Promise<string> {
       });
     }
 
-    // Fallback: search shopify_product_variants
+    // Fallback: search shopify_products (FRESH — daily pg_cron sync). Was
+    // shopify_product_variants (stale Jan-2026 order-webhook mirror, WRONG prices,
+    // and its columns are product_title/price_vnd so this select even errored).
     const { data: products } = await supabase
-      .from('shopify_product_variants')
-      .select('title, price, sku')
+      .from('shopify_products')
+      .select('title, price')
+      .eq('status', 'active')
       .ilike('title', `%${query}%`)
       .limit(limit);
 

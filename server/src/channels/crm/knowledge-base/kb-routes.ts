@@ -142,10 +142,12 @@ router.post('/sync/shopify', async (_req, res) => {
     }
     if (!col) return res.status(500).json({ error: 'Không tạo được bộ sưu tập' });
 
-    // Fetch products from shopify_product_variants table
+    // Fetch products from shopify_products (FRESH daily sync; was stale shopify_product_variants
+    // whose columns are product_title/price_vnd so this select errored anyway).
     const { data: products } = await supabase
-      .from('shopify_product_variants')
-      .select('title, price, sku, product_type, vendor');
+      .from('shopify_products')
+      .select('title, price, product_type')
+      .eq('status', 'active');
 
     if (!products?.length) return res.json({ message: 'Không có sản phẩm nào', count: 0 });
 
@@ -211,13 +213,13 @@ router.post('/sync/courses', async (_req, res) => {
       }
     }
 
-    // Fallback: also check shopify_product_variants table
+    // Fallback: also check shopify_products (FRESH; was stale shopify_product_variants)
     if (products.length === 0) {
-      const { data: variants } = await supabase.from('shopify_product_variants').select('title, price, sku, product_type');
+      const { data: variants } = await supabase.from('shopify_products').select('title, price, product_type').eq('status', 'active');
       products = (variants || []).map(v => ({
         title: v.title,
         body_html: '',
-        variants: [{ price: v.price, sku: v.sku }],
+        variants: [{ price: v.price, sku: null }],
         product_type: v.product_type,
       }));
     }
