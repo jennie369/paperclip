@@ -971,8 +971,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     "Lưu ý: MCP tool naming dùng 1 gạch dưới (mcp_<server>_<tool>); mọi comment/báo cáo PHẢI viết bằng tiếng Việt có dấu đầy đủ.",
   ].join("\n");
 
+  // agy `-p` (print mode) self-terminates after `--print-timeout` (default 5m0s) → a
+  // long heartbeat SOP run ("chạy full flow SOP") gets cut off mid-work with NO final
+  // result (transcript ends abruptly, nothing to report to the issue). Give it a
+  // generous cap. Override via config.printTimeout (Go duration string, e.g. "20m"/"1h").
+  const agyPrintTimeout = asString(config.printTimeout, "30m").trim() || "30m";
+
   const buildArgs = (conversationId: string) => {
     const args: string[] = ["-p", pointerPrompt, "--dangerously-skip-permissions"];
+    args.push("--print-timeout", agyPrintTimeout);
     // model default is a real string ("Gemini 3.1 Pro (High)") → always pass it.
     if (model) args.push("--model", model);
     if (conversationId) args.push("--conversation", conversationId);
