@@ -26,6 +26,7 @@ export type PresetId =
   | "fourTimesDaily"
   | "fiveTimesDaily"
   | "weekdays"
+  | "weeklyDays"
   | "weekly"
   | "monthly"
   | "custom";
@@ -65,6 +66,7 @@ export type Schedule =
       hour5: number; minute5: number;
     }
   | { preset: "weekdays"; hour: number; minute: number }
+  | { preset: "weeklyDays"; daysOfWeek: number[]; hour: number; minute: number }
   | { preset: "weekly"; dayOfWeek: number; hour: number; minute: number }
   | { preset: "monthly"; dayOfMonth: number; hour: number; minute: number }
   | { preset: "custom"; cron: string };
@@ -79,6 +81,7 @@ export const PRESETS: { id: PresetId; label: string }[] = [
   { id: "fourTimesDaily", label: "Hàng ngày 4 lần" },
   { id: "fiveTimesDaily", label: "Hàng ngày 5 lần" },
   { id: "weekdays", label: "Từ thứ 2 - thứ 6" },
+  { id: "weeklyDays", label: "Chọn ngày trong tuần (tùy ý)" },
   { id: "weekly", label: "Hàng tuần" },
   { id: "monthly", label: "Hàng tháng" },
   { id: "custom", label: "Tùy chỉnh (cron)" },
@@ -165,6 +168,18 @@ export function scheduleToCron(s: Schedule): string {
       const h = clampInt(s.hour, 0, 23, "hour");
       const m = clampInt(s.minute, 0, 59, "minute");
       return `${m} ${h} * * 1-5`;
+    }
+
+    case "weeklyDays": {
+      const h = clampInt(s.hour, 0, 23, "hour");
+      const m = clampInt(s.minute, 0, 59, "minute");
+      const days = sortAndDedup(
+        s.daysOfWeek.map((d, i) => clampInt(d, 0, 6, `dayOfWeek[${i}]`)),
+      );
+      if (days.length === 0) {
+        throw new Error("weeklyDays requires at least one day of week");
+      }
+      return `${m} ${h} * * ${days.join(",")}`;
     }
 
     case "weekly": {
@@ -260,6 +275,21 @@ export function cronToSchedule(cron: string): Schedule | null {
     const hour = parseSingleInt(hourStr, 0, 23);
     if (hour !== null) {
       return { preset: "weekdays", hour, minute };
+    }
+    return null;
+  }
+
+  // ---- weeklyDays: M H * * D1,D2,...  (specific multiple days of week, same time)
+  if (/^\d+(,\d+)+$/.test(dowStr) && /^\d+$/.test(hourStr)) {
+    const hour = parseSingleInt(hourStr, 0, 23);
+    const days = dowStr.split(",").map((x) => parseSingleInt(x, 0, 6));
+    if (hour !== null && days.every((x) => x !== null)) {
+      return {
+        preset: "weeklyDays",
+        daysOfWeek: sortAndDedup(days as number[]),
+        hour,
+        minute,
+      };
     }
     return null;
   }
@@ -363,6 +393,8 @@ export function describeCron(cron: string): string {
       return `Hàng ngày lúc ${pad2(s.hour1)}:${pad2(s.minute1)}, ${pad2(s.hour2)}:${pad2(s.minute2)}, ${pad2(s.hour3)}:${pad2(s.minute3)}, ${pad2(s.hour4)}:${pad2(s.minute4)} và ${pad2(s.hour5)}:${pad2(s.minute5)}`;
     case "weekdays":
       return `Từ Thứ 2 đến Thứ 6 lúc ${pad2(s.hour)}:${pad2(s.minute)}`;
+    case "weeklyDays":
+      return `${s.daysOfWeek.map((d) => DAY_OF_WEEK_LABELS[d]).join(", ")} hàng tuần lúc ${pad2(s.hour)}:${pad2(s.minute)}`;
     case "weekly":
       return `${DAY_OF_WEEK_LABELS[s.dayOfWeek]} hàng tuần lúc ${pad2(s.hour)}:${pad2(s.minute)}`;
     case "monthly":

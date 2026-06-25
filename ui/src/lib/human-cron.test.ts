@@ -57,6 +57,39 @@ describe("scheduleToCron", () => {
     ).toBe("30 14 * * 1");
   });
 
+  it("weeklyDays Tue/Thu/Fri/Sat 14:30", () => {
+    expect(
+      scheduleToCron({
+        preset: "weeklyDays",
+        daysOfWeek: [2, 4, 5, 6],
+        hour: 14,
+        minute: 30,
+      }),
+    ).toBe("30 14 * * 2,4,5,6");
+  });
+
+  it("weeklyDays sorts + dedups days", () => {
+    expect(
+      scheduleToCron({
+        preset: "weeklyDays",
+        daysOfWeek: [6, 2, 4, 2],
+        hour: 8,
+        minute: 0,
+      }),
+    ).toBe("0 8 * * 2,4,6");
+  });
+
+  it("weeklyDays empty days throws", () => {
+    expect(() =>
+      scheduleToCron({
+        preset: "weeklyDays",
+        daysOfWeek: [],
+        hour: 9,
+        minute: 0,
+      }),
+    ).toThrow();
+  });
+
   it("custom passes through", () => {
     expect(scheduleToCron({ preset: "custom", cron: "0 9,12,17 * * 1-5" })).toBe(
       "0 9,12,17 * * 1-5",
@@ -118,12 +151,55 @@ describe("cronToSchedule", () => {
     });
   });
 
-  it("rejects complex crons (3+ hours list)", () => {
-    expect(cronToSchedule("0 9,12,17 * * *")).toBeNull();
+  it("decodes thriceDaily (3 hours list)", () => {
+    expect(cronToSchedule("0 9,12,17 * * *")).toEqual({
+      preset: "thriceDaily",
+      hour1: 9,
+      minute1: 0,
+      hour2: 12,
+      minute2: 0,
+      hour3: 17,
+      minute3: 0,
+    });
   });
 
-  it("rejects range syntax", () => {
-    expect(cronToSchedule("0 9 * * 1-5")).toBeNull();
+  it("decodes weekdays (1-5 range)", () => {
+    expect(cronToSchedule("0 9 * * 1-5")).toEqual({
+      preset: "weekdays",
+      hour: 9,
+      minute: 0,
+    });
+  });
+
+  it("decodes weeklyDays (specific multiple days)", () => {
+    expect(cronToSchedule("30 14 * * 2,4,5,6")).toEqual({
+      preset: "weeklyDays",
+      daysOfWeek: [2, 4, 5, 6],
+      hour: 14,
+      minute: 30,
+    });
+  });
+
+  it("decodes weeklyDays sorts + dedups days", () => {
+    expect(cronToSchedule("0 8 * * 6,2,2,4")).toEqual({
+      preset: "weeklyDays",
+      daysOfWeek: [2, 4, 6],
+      hour: 8,
+      minute: 0,
+    });
+  });
+
+  it("single day-of-week stays weekly (not weeklyDays)", () => {
+    expect(cronToSchedule("0 9 * * 3")).toEqual({
+      preset: "weekly",
+      dayOfWeek: 3,
+      hour: 9,
+      minute: 0,
+    });
+  });
+
+  it("rejects unparseable range syntax", () => {
+    expect(cronToSchedule("0 9 * * 1-3")).toBeNull();
   });
 
   it("rejects out-of-range values", () => {
@@ -152,6 +228,10 @@ describe("round-trip (schedule → cron → schedule)", () => {
     { preset: "weekly", dayOfWeek: 0, hour: 0, minute: 0 },
     { preset: "weekly", dayOfWeek: 6, hour: 23, minute: 59 },
     { preset: "weekly", dayOfWeek: 1, hour: 9, minute: 0 },
+    { preset: "weekdays", hour: 9, minute: 0 },
+    { preset: "weeklyDays", daysOfWeek: [2, 4, 5, 6], hour: 14, minute: 30 },
+    { preset: "weeklyDays", daysOfWeek: [0, 6], hour: 7, minute: 15 },
+    { preset: "weeklyDays", daysOfWeek: [1, 2, 3, 4, 5, 6], hour: 0, minute: 0 },
   ];
 
   for (const original of cases) {
@@ -182,11 +262,21 @@ describe("describeCron", () => {
     expect(describeCron("0 14 * * 1")).toBe("Thứ Hai hàng tuần lúc 14:00");
   });
 
+  it("weeklyDays", () => {
+    expect(describeCron("30 14 * * 2,4,5,6")).toBe(
+      "Thứ Ba, Thứ Năm, Thứ Sáu, Thứ Bảy hàng tuần lúc 14:30",
+    );
+  });
+
+  it("weekdays", () => {
+    expect(describeCron("0 9 * * 1-5")).toBe("Từ Thứ 2 đến Thứ 6 lúc 09:00");
+  });
+
   it("minutes", () => {
     expect(describeCron("*/15 * * * *")).toBe("Mỗi 15 phút");
   });
 
   it("unknown falls back to raw", () => {
-    expect(describeCron("0 9 * * 1-5")).toBe("Tùy chỉnh: 0 9 * * 1-5");
+    expect(describeCron("0 9 * * 1-3")).toBe("Tùy chỉnh: 0 9 * * 1-3");
   });
 });

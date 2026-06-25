@@ -27,6 +27,31 @@ const inputClass =
 const smallInputClass =
   "rounded-md border border-border px-2 py-1 bg-transparent outline-none text-sm font-mono w-16";
 
+/** Compact day-of-week labels (0=Sun) for the weeklyDays chip selector. */
+const SHORT_DAY_OF_WEEK_LABELS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+
+function dayChipClass(active: boolean): string {
+  return (
+    "rounded-md border px-2.5 py-1 text-xs font-sans transition-colors " +
+    (active
+      ? "border-primary bg-primary text-primary-foreground"
+      : "border-border text-muted-foreground hover:bg-muted")
+  );
+}
+
+/**
+ * Toggle a day in/out of the selection. Keeps the result sorted ascending and
+ * never returns an empty set (un-checking the last remaining day is a no-op) —
+ * an empty day list would produce an invalid cron.
+ */
+function toggleDay(days: number[], day: number): number[] {
+  if (days.includes(day)) {
+    const next = days.filter((d) => d !== day);
+    return next.length === 0 ? days : next;
+  }
+  return [...days, day].sort((a, b) => a - b);
+}
+
 interface Props {
   /** Current cron expression string (may be empty). */
   value: string;
@@ -259,6 +284,37 @@ export function HeartbeatScheduleBuilder({ value, onChange }: Props) {
         </InlineRow>
       )}
 
+      {schedule.preset === "weeklyDays" && (
+        <div className="space-y-2">
+          <InlineRow label="Vào các thứ">
+            <div className="flex flex-wrap gap-1" data-testid="heartbeat-weeklydays-chips">
+              {SHORT_DAY_OF_WEEK_LABELS.map((label, idx) => {
+                const active = schedule.daysOfWeek.includes(idx);
+                return (
+                  <button
+                    type="button"
+                    key={idx}
+                    aria-pressed={active}
+                    onClick={() => emit({ ...schedule, daysOfWeek: toggleDay(schedule.daysOfWeek, idx) })}
+                    className={dayChipClass(active)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </InlineRow>
+          <InlineRow label="Lúc">
+            <TimePicker
+              hour={schedule.hour}
+              minute={schedule.minute}
+              onChange={(hour, minute) => emit({ ...schedule, hour, minute })}
+            />
+            <TimezoneHint />
+          </InlineRow>
+        </div>
+      )}
+
       {schedule.preset === "monthly" && (
         <InlineRow label="Vào ngày">
           <input
@@ -447,6 +503,15 @@ function defaultScheduleForPreset(
         hour: currentHour ?? 9,
         minute: currentMinute ?? 0,
       };
+    case "weeklyDays":
+      return {
+        preset: "weeklyDays",
+        // Carry over days from the previous schedule when possible (weekly →
+        // its single day, weekdays → Mon–Fri); otherwise a sensible default.
+        daysOfWeek: extractDaysOfWeek(current) ?? [1, 3, 5],
+        hour: currentHour ?? 9,
+        minute: currentMinute ?? 0,
+      };
     case "monthly":
       return {
         preset: "monthly",
@@ -460,14 +525,22 @@ function defaultScheduleForPreset(
 }
 
 function extractHour(s: Schedule): number | null {
-  if (s.preset === "daily" || s.preset === "weekly" || s.preset === "weekdays" || s.preset === "monthly") return s.hour;
+  if (s.preset === "daily" || s.preset === "weekly" || s.preset === "weekdays" || s.preset === "weeklyDays" || s.preset === "monthly") return s.hour;
   if (s.preset === "twiceDaily" || s.preset === "thriceDaily" || s.preset === "fourTimesDaily" || s.preset === "fiveTimesDaily") return s.hour1;
   return null;
 }
 
 function extractMinute(s: Schedule): number | null {
-  if (s.preset === "daily" || s.preset === "weekly" || s.preset === "hourly" || s.preset === "weekdays" || s.preset === "monthly")
+  if (s.preset === "daily" || s.preset === "weekly" || s.preset === "hourly" || s.preset === "weekdays" || s.preset === "weeklyDays" || s.preset === "monthly")
     return s.minute;
   if (s.preset === "twiceDaily" || s.preset === "thriceDaily" || s.preset === "fourTimesDaily" || s.preset === "fiveTimesDaily") return s.minute1;
+  return null;
+}
+
+/** Days-of-week to carry over when switching INTO the weeklyDays preset. */
+function extractDaysOfWeek(s: Schedule): number[] | null {
+  if (s.preset === "weeklyDays") return s.daysOfWeek;
+  if (s.preset === "weekly") return [s.dayOfWeek];
+  if (s.preset === "weekdays") return [1, 2, 3, 4, 5];
   return null;
 }
