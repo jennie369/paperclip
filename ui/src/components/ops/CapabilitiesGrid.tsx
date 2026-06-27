@@ -231,9 +231,9 @@ export function CapabilitiesGrid() {
             `${crmStats?.totalCustomers || 0} khách có thể target`,
           ]}
           actions={[
-            { label: "Xem tệp", icon: Eye, onClick: () => navigate("/crm/audiences") },
+            { label: "Xem tệp", icon: Eye, onClick: () => navigate("/crm/customers") },
           ]}
-          onClick={() => navigate("/crm/audiences")}
+          onClick={() => navigate("/crm/customers")}
         />
 
         {/* 8. Quảng cáo & Attribution */}
@@ -245,9 +245,9 @@ export function CapabilitiesGrid() {
             `${orderStats?.month_orders || 0} conversions tháng này`,
           ]}
           actions={[
-            { label: "Xem báo cáo", icon: BarChart3, onClick: () => navigate("/crm/analytics") },
+            { label: "Xem báo cáo", icon: BarChart3, onClick: () => navigate("/analytics") },
           ]}
-          onClick={() => navigate("/crm/analytics")}
+          onClick={() => navigate("/analytics")}
         />
 
         {/* 9. War Room */}
