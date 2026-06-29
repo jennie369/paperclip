@@ -178,7 +178,7 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
     language: pa?.language || ac.language || 'vi',
     tools: pa?.tools || ac.tools || [],
     can_escalate_to: ac.canEscalateTo || [],
-    fallback_message: ac.fallbackMessage || 'Xin lỗi, tôi không thể xử lý yêu cầu này.',
+    fallback_message: ac.fallbackMessage || 'Xin lỗi, em không thể xử lý yêu cầu này.',
     effort_mode: ac.effortMode || ac.thinkingEffort || 'auto',
     max_turns: pa?.max_turns != null ? parseInt(pa.max_turns) : (parseInt(ac.maxTurns) || 1),
     history_limit: parseInt(ac.historyLimit) || 20,

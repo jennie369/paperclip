@@ -51,7 +51,7 @@ export function AgentEditPage() {
     language: "vi",
     tools: [] as string[],
     can_escalate_to: [] as string[],
-    fallback_message: "Xin lỗi, tôi không thể xử lý yêu cầu này.",
+    fallback_message: "Xin lỗi, em không thể xử lý yêu cầu này.",
     history_limit: 20,
     session_timeout: 3600,
     enabled: true,

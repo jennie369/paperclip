@@ -1371,7 +1371,7 @@ router.post('/', async (req, res) => {
       language: language || 'vi',
       tools: tools || [],
       can_escalate_to: can_escalate_to || [],
-      fallback_message: fallback_message || 'Xin lỗi, tôi không thể xử lý yêu cầu này.',
+      fallback_message: fallback_message || 'Xin lỗi, em không thể xử lý yêu cầu này.',
       history_limit: history_limit ?? 20,
       session_timeout: session_timeout ?? 3600,
       enabled: enabled ?? true,
