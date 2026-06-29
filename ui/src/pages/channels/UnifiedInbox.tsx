@@ -143,6 +143,7 @@ export function UnifiedInbox() {
       switch (activeChannel) {
         case "zalo": return ch.includes("zalo");
         case "facebook": return ch.includes("facebook") || ch.includes("fb");
+        case "gem-master": return ch.includes("gem-master");
         case "telegram": return ch.includes("telegram");
         case "webchat": return ch.includes("webchat") || ch.includes("web");
         case "email": return ch.includes("email");
@@ -416,10 +417,11 @@ function ChannelTabsInline({
   onChannelChange: (channel: string | null) => void;
 }) {
   const counts = useMemo(() => {
-    const c: Record<string, number> = { zalo: 0, facebook: 0 };
+    const c: Record<string, number> = { zalo: 0, facebook: 0, "gem-master": 0 };
     conversations.forEach((conv) => {
       const ch = (conv.channel_name || "").toLowerCase();
-      if (ch.includes("zalo")) c.zalo++;
+      if (ch.includes("gem-master")) c["gem-master"]++;
+      else if (ch.includes("zalo")) c.zalo++;
       else if (ch.includes("facebook") || ch.includes("fb")) c.facebook++;
     });
     return c;
@@ -429,6 +431,7 @@ function ChannelTabsInline({
     { id: null, label: "Tất cả", count: conversations.length },
     { id: "zalo", label: "Zalo", count: counts.zalo },
     { id: "facebook", label: "Facebook", count: counts.facebook },
+    { id: "gem-master", label: "Gem Master", count: counts["gem-master"] },
   ].filter((t) => t.id === null || t.count > 0);
 
   return (
