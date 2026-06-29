@@ -1810,6 +1810,15 @@ function buildProviderOverride(agentSlug: string, mediaLib: MediaLibrary | null)
  *
  * Returns the cleaned reply text (without markers, safe to send to customer).
  */
+// Trailing self-narration / task-completion leak (2026-06-29). Anchors are tokens that
+// NEVER appear in a real Vietnamese customer reply — internal file paths or operator-facing
+// self-report phrasings (the project CLAUDE.md "Task Completion Protocol" leaking through a
+// provider=claude agent). Used BOTH to strip the block (scrubBannedPhrases Rule 8b) and to
+// classify a fully-collapsed reply as benign-silent vs corrupted-escalate (postProcessReply).
+// No `g` flag → safe for repeated `.test()`.
+const SELF_NARRATION_LEAK_RE =
+  /(?:^|\n)[ \t]*[^\n]*?(?:today\.md|docs\/tasksdone|tasksdone|MEMORY\.md|memory\/|evolution-log|active-tasks|CLAUDE\.md|đã đọc xong bối cảnh|soạn (?:lại\s+)?(?:tin nhắn|tin)\s+(?:phản hồi|gửi)|log tiến độ|tạo báo cáo\s+(?:trong|vào))[\s\S]*$/i;
+
 async function postProcessReply(
   reply: string,
   config: AgentConfig,
@@ -1839,6 +1848,23 @@ async function postProcessReply(
   // AND escalate so the session pauses (bot_paused) + a ticket fires + CS is pinged;
   // otherwise the next customer message re-triggers the same broken agent.
   const hasLetters = (s: string) => /[\p{L}\p{N}]/u.test(s);
+
+  // ── Self-narration collapse → SILENT skip (2026-06-29) ──
+  // When the agent's ENTIRE reply was internal task-completion narration (CLAUDE.md
+  // protocol leak: "*** Em đã đọc xong bối cảnh ... log tiến độ vào today.md và tạo báo
+  // cáo trong docs/tasksdone rồi ạ"), Rule 8 strips it to empty. The agent simply had
+  // NOTHING to say to the customer — this is NOT a malfunction needing a human. Send
+  // nothing (return '' → consumer stays silent), do NOT escalate, do NOT send a handoff.
+  // Must run BEFORE the generic collapse guard below (which would otherwise escalate).
+  if (hasLetters(reply) && !hasLetters(cleaned) && SELF_NARRATION_LEAK_RE.test(reply)) {
+    console.warn(
+      `[Router/${config.provider}] ${config.slug}: reply was pure self-narration `
+        + `(${reply.length} chars) — staying SILENT (skipped, no send, no escalation). `
+        + `Head: ${JSON.stringify(reply.slice(0, 200))}`,
+    );
+    return '';
+  }
+
   if (hasLetters(reply) && !hasLetters(cleaned)) {
     console.error(
       `[Router/${config.provider}] ${config.slug}: scrub COLLAPSED reply to no-content `
@@ -2038,6 +2064,28 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
   if (metaLabelRe.test(scrubbed)) {
     violations.push('meta_label_prefix');
     scrubbed = scrubbed.replace(metaLabelRe, '');
+  }
+
+  // Rule 8: Strip agent self-narration / task-completion meta block (2026-06-29).
+  // Provider=claude agents inherit the project CLAUDE.md "Task Completion Protocol"
+  // and sometimes append a self-report to the customer after a *** / --- rule, e.g.:
+  //   "*** Em đã đọc xong bối cảnh, soạn tin nhắn phản hồi chị X... đồng thời log tiến
+  //    độ vào today.md và tạo báo cáo trong docs/tasksdone rồi ạ."
+  // This narrates the agent's OWN dev work and must never reach the customer.
+  // 8a: drop standalone markdown horizontal rules (***, ---, ___ on their own line).
+  if (/^[ \t]*([*_-])\1{2,}[ \t]*$/m.test(scrubbed)) {
+    violations.push('hr_separator');
+    scrubbed = scrubbed.replace(/^[ \t]*([*_-])\1{2,}[ \t]*$/gm, '');
+  }
+  // 8b: cut a trailing self-narration block from the first line carrying an internal
+  // dev-artifact signal to end. Anchors are tokens that NEVER appear in a real Vietnamese
+  // customer reply (file paths today.md/docs/tasksdone/MEMORY.md/memory//evolution-log/
+  // active-tasks/CLAUDE.md) or operator-facing self-report phrasings ("đã đọc xong bối
+  // cảnh", "soạn tin nhắn/lại … phản hồi/gửi", "log tiến độ", "tạo báo cáo trong/vào") →
+  // cut-to-end is safe (unlike the 2026-06-10 generic Insight bug, these anchors ARE the leak).
+  if (SELF_NARRATION_LEAK_RE.test(scrubbed)) {
+    violations.push('self_narration_leak');
+    scrubbed = scrubbed.replace(SELF_NARRATION_LEAK_RE, '');
   }
 
   // Cleanup: remove multiple consecutive newlines
