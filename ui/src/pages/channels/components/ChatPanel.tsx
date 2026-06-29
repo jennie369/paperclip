@@ -478,6 +478,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                           body={bodyText}
                           content_type={msg.content_type}
                           extra_data={msg.extra_data}
+                          onDark={isOutbound}
                         />
                       )}
                     </div>

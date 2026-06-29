@@ -12,6 +12,10 @@ interface MessageContent {
   body: string;
   content_type?: string;
   extra_data?: Record<string, unknown>;
+  // onDark = bubble has a dark background (outbound zinc-800) → inner text elements
+  // (links, URLs, inline code, expand/collapse) must switch to light-on-dark colors.
+  // Default false = light bubble, keep brand `text-primary` accents.
+  onDark?: boolean;
 }
 
 type MsgType = "text" | "image" | "sticker" | "file" | "call" | "link" | "gif" | "reaction" | "system" | "typing";
@@ -19,15 +23,15 @@ type MsgType = "text" | "image" | "sticker" | "file" | "call" | "link" | "gif" |
 // Each message bubble renders inside an ErrorBoundary so one malformed message
 // (bad JSON, invalid URL, unexpected shape) degrades to plain text instead of
 // throwing during render and blanking the entire chat list.
-export function MessageRenderer({ body, content_type, extra_data }: MessageContent) {
+export function MessageRenderer({ body, content_type, extra_data, onDark }: MessageContent) {
   return (
     <MessageErrorBoundary body={body}>
-      <MessageBody body={body} content_type={content_type} extra_data={extra_data} />
+      <MessageBody body={body} content_type={content_type} extra_data={extra_data} onDark={onDark} />
     </MessageErrorBoundary>
   );
 }
 
-function MessageBody({ body, content_type, extra_data }: MessageContent) {
+function MessageBody({ body, content_type, extra_data, onDark }: MessageContent) {
   const type = detectType({ body, content_type, extra_data });
 
   switch (type) {
@@ -50,7 +54,7 @@ function MessageBody({ body, content_type, extra_data }: MessageContent) {
     case "reaction":
       return <ReactionMsg data={extra_data || tryParseJson(body)} />;
     default:
-      return <TextMsg content={body} />;
+      return <TextMsg content={body} onDark={onDark} />;
   }
 }
 
@@ -403,8 +407,20 @@ function ReactionMsg({ data }: { data: Record<string, unknown> }) {
 }
 
 // ── Text with markdown & emoji support ──
-function TextMsg({ content }: { content: string }) {
+function TextMsg({ content, onDark }: { content: string; onDark?: boolean }) {
   let fixed = content;
+
+  // Color variants keyed by bubble background. On a dark bubble (outbound zinc-800)
+  // brand `text-primary` + `bg-muted/50` are too dark to read → switch to light tones.
+  const linkCls = onDark
+    ? "text-sky-300 underline underline-offset-2 hover:text-sky-200"
+    : "text-primary underline underline-offset-2 hover:opacity-80";
+  const codeCls = onDark
+    ? "bg-white/15 text-zinc-50 px-1 py-0.5 rounded text-[13px] font-mono"
+    : "bg-muted/50 px-1 py-0.5 rounded text-[13px] font-mono";
+  const moreCls = onDark
+    ? "flex items-center gap-1 mt-1.5 text-[12px] text-zinc-300 hover:text-white transition-colors"
+    : "flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors";
 
   // Fix mojibake: replacement character U+FFFD (�)
   if (/\uFFFD/.test(fixed)) {
@@ -441,7 +457,7 @@ function TextMsg({ content }: { content: string }) {
       } else if (match[5]) {
         // Code: `code`
         result.push(
-          <code key={keyCounter++} className="bg-muted/50 px-1 py-0.5 rounded text-[13px] font-mono">
+          <code key={keyCounter++} className={codeCls}>
             {match[6]}
           </code>
         );
@@ -453,7 +469,7 @@ function TextMsg({ content }: { content: string }) {
             href={match[9]}
             target="_blank"
             rel="noreferrer"
-            className="text-primary underline underline-offset-2 hover:opacity-80"
+            className={linkCls}
           >
             {match[8]}
           </a>
@@ -466,7 +482,7 @@ function TextMsg({ content }: { content: string }) {
             href={match[10]}
             target="_blank"
             rel="noreferrer"
-            className="text-primary underline underline-offset-2 hover:opacity-80"
+            className={linkCls}
           >
             {match[10]}
           </a>
@@ -503,7 +519,7 @@ function TextMsg({ content }: { content: string }) {
       {isLong && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors"
+          className={moreCls}
         >
           {expanded ? (
             <>
