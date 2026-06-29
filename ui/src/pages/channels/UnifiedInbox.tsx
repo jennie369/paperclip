@@ -432,7 +432,9 @@ function ChannelTabsInline({
     { id: "zalo", label: "Zalo", count: counts.zalo },
     { id: "facebook", label: "Facebook", count: counts.facebook },
     { id: "gem-master", label: "Gem Master", count: counts["gem-master"] },
-  ].filter((t) => t.id === null || t.count > 0);
+    // gem-master tab is ALWAYS shown (monitoring surface) even when empty;
+    // other channel tabs stay data-driven (hide when 0).
+  ].filter((t) => t.id === null || t.id === "gem-master" || t.count > 0);
 
   return (
     <>
