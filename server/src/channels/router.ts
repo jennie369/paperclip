@@ -2094,6 +2094,24 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     scrubbed = scrubbed.replace(SELF_NARRATION_LEAK_RE, '');
   }
 
+  // Rule 9: Strip agentic task-runner execution log leaked as a PREFIX (2026-07-01).
+  // Antigravity/agy (and any tool-running provider) can echo its own task trace BEFORE the
+  // real customer reply, e.g.:
+  //   "Task completed: python -c "import os; ... os.walk('.') ...".
+  //    Task logs:
+  //    .\backups\memory\sops\REF-PRODUCT-CATALOG_stale_...md
+  //    .\memory\sops\REF-PRODUCT-CATALOG.md
+  //
+  //    Dạ set Dạ Kim Tụ ..."   <-- the actual reply follows a blank line.
+  // Unlike Rule 8 (cut-to-END), this leak is a PREFIX with the real reply AFTER it, so we cut
+  // from the "Task completed:"/"Task logs:" header lazily to the FIRST blank line (or end) and
+  // KEEP everything after. Anchors are the runner's own labels, never present in customer prose.
+  const taskLogLeakRe = /(?:^|\n)[ \t]*(?:Task completed:|Task logs:)[\s\S]*?(?:\n[ \t]*\n|$)/gi;
+  if (taskLogLeakRe.test(scrubbed)) {
+    violations.push('task_log_leak');
+    scrubbed = scrubbed.replace(taskLogLeakRe, '\n');
+  }
+
   // Cleanup: remove multiple consecutive newlines
   scrubbed = scrubbed.replace(/\n{3,}/g, '\n\n').trim();
 
@@ -2442,6 +2460,24 @@ async function buildSystemPrompt(
         }
       }
     } catch { /* skip */ }
+  }
+
+  // 3b. Always-inline curated reference files (per-agent manifest agents/<slug>/sop/_INLINE.json).
+  // Ensures key SSOT refs (pricing catalog, crystal-consult, CS cases) are IN-PROMPT so the reply
+  // agent never filesystem-searches (os.walk) to locate them — a search that can surface a STALE
+  // backup copy and quote/leak outdated data. See CSKH_SUPPORT_SYSTEM_SSOT §11 + chatbot-doctor.
+  const inlineManifest = pathResolve(agentsDir, 'sop', '_INLINE.json');
+  if (existsSync(inlineManifest)) {
+    try {
+      const names = JSON.parse(readFileSync(inlineManifest, 'utf-8'));
+      if (Array.isArray(names)) {
+        for (const name of names) {
+          if (typeof name === 'string') {
+            tryLoad(pathResolve(agentsDir, 'sop', name), `SSOT REF: ${name}`);
+          }
+        }
+      }
+    } catch { /* skip malformed manifest */ }
   }
 
   // 4. System prompt from DB (additional instructions)
