@@ -2459,18 +2459,30 @@ async function buildSystemPrompt(
   const projectsFilePath = pathResolve(projectRoot, 'memory', 'projects.md');
   tryLoad(projectsFilePath, 'DỰ ÁN ĐANG CHẠY');
 
-  // 3. Relevant SOPs
+  // 3. Relevant SOPs — walk memory/sops RECURSIVELY. Since the 2026-07 reorg the SOP files
+  // live in categorized subdirs (DOC-HTML/, Other_Docs/, SOP_social_media_and_ads/, …) so the
+  // old top-level-only readdirSync found NOTHING (365 SOPs sit in subdirs, only 5 at top level).
+  // Gate on memory/INDEX.md mentioning the slug (opt-in, avoids over-broad slugKey matches like
+  // "gem"), then inline .md files whose name carries the agent's slug-prefix.
   const sopsDir = pathResolve(projectRoot, 'memory', 'sops');
   if (existsSync(sopsDir)) {
     try {
-      const sopFiles = readFileSync(pathResolve(sopsDir, '..', 'INDEX.md'), 'utf-8');
-      // Only include SOPs if index mentions this agent's slug
-      if (sopFiles.toLowerCase().includes(config.slug)) {
-        for (const f of readdirSync(sopsDir)) {
-          if (f.endsWith('.md') && f.toLowerCase().includes(config.slug.split('-')[0])) {
-            tryLoad(pathResolve(sopsDir, f), `SOP: ${f}`);
+      const sopIndexPath = pathResolve(sopsDir, '..', 'INDEX.md');
+      const sopIndex = existsSync(sopIndexPath)
+        ? readFileSync(sopIndexPath, 'utf-8').toLowerCase()
+        : '';
+      if (sopIndex.includes(config.slug)) {
+        const slugKey = config.slug.split('-')[0].toLowerCase();
+        const walkSops = (dir: string): void => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const full = pathResolve(dir, entry.name);
+            if (entry.isDirectory()) walkSops(full);
+            else if (entry.name.endsWith('.md') && entry.name.toLowerCase().includes(slugKey)) {
+              tryLoad(full, `SOP: ${entry.name}`);
+            }
           }
-        }
+        };
+        walkSops(sopsDir);
       }
     } catch { /* skip */ }
   }
