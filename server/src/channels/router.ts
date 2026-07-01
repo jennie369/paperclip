@@ -2112,6 +2112,19 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     scrubbed = scrubbed.replace(taskLogLeakRe, '\n');
   }
 
+  // Rule 10: Strip English agent-action self-narration leaked as a PREFIX (2026-07-01).
+  // When agy backgrounds a long tool/CLI call it narrates its plan in ENGLISH before the real
+  // Vietnamese reply, e.g. "I will wait for the background search task to complete to check if
+  // there are any ... stored in the project's standard operations procedures (SOPs)." The bot
+  // replies 100% Vietnamese, so a leading English first-person action-narration line is always a
+  // leak. Anchor = English first-person opener (I will/I'm/Let me/…) + a task/search/SOP/project
+  // keyword, cut to the first blank line (or next Vietnamese "Dạ"/capitalised line), keep reply.
+  const enNarrationRe = /(?:^|\n)[ \t]*(?:I(?:['’]ll|['’]m|\s+will|\s+am|\s+need\s+to|\s+have\s+to|\s+should|\s+can)|Let\s+me|Please\s+(?:wait|hold|allow)|Give\s+me\s+a\s+moment|Hold\s+on)\b[^\n]*?(?:background|task|search|SOP|procedure|project|check|look\s*up|wait|complete|stored|retriev|verif|fetch)[^\n]*(?:\n[ \t]*\n|\n(?=D[aạ]\b)|$)/gi;
+  if (enNarrationRe.test(scrubbed)) {
+    violations.push('en_action_narration');
+    scrubbed = scrubbed.replace(enNarrationRe, '\n');
+  }
+
   // Cleanup: remove multiple consecutive newlines
   scrubbed = scrubbed.replace(/\n{3,}/g, '\n\n').trim();
 
