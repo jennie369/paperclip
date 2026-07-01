@@ -97,6 +97,14 @@ export const crmApi = {
   bulkDeleteNotes: (customerId: string, ids: string[]) =>
     fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/notes/bulk-delete`, { method: 'POST', body: JSON.stringify({ ids }) }),
 
+  // Interactions CRUD (timeline "Hoạt động gần đây" — crm_interactions)
+  addInteraction: (customerId: string, data: { title?: string; content?: string }) =>
+    fetchJSON<any>(`${BASE}/customers/${customerId}/interactions`, { method: 'POST', body: JSON.stringify(data) }),
+  updateInteraction: (id: string, data: { title?: string; content?: string }) =>
+    fetchJSON<any>(`${BASE}/interactions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteInteraction: (id: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/interactions/${id}`, { method: 'DELETE' }),
+
   // Gemral
   syncGemral: (customerId: string) =>
     fetchJSON<any>(`${BASE}/customers/${customerId}/sync-gemral`, { method: 'POST' }),

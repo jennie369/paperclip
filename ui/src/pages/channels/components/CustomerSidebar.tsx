@@ -211,6 +211,103 @@ function AddFieldInline({ onAdd }: { onAdd: (label: string, value: string) => vo
   );
 }
 
+// Tóm tắt AI — click để sửa inline (textarea) → lưu crm_customers.ai_summary.
+function EditableSummary({ value, onSave, pending }: { value: string; onSave: (v: string) => void; pending?: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const save = () => { onSave(draft.trim()); setEditing(false); };
+  if (editing) {
+    return (
+      <div className="space-y-1">
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") setEditing(false); }}
+          className="w-full text-xs rounded-md border bg-background p-2 min-h-[72px] focus:outline-none focus:ring-1 focus:ring-ring"
+          placeholder="Nhập tóm tắt AI về khách…"
+        />
+        <div className="flex gap-1 justify-end">
+          <button onClick={() => setEditing(false)} className="text-[11px] px-2 py-0.5 rounded hover:bg-muted">Huỷ</button>
+          <button onMouseDown={(e) => e.preventDefault()} onClick={save} disabled={pending} className="text-[11px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50">Lưu</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => { setDraft(value); setEditing(true); }}
+      title="Bấm để sửa"
+      className="group w-full text-left text-xs text-foreground/80 leading-relaxed bg-muted/30 rounded-md p-2 hover:bg-muted/50 flex items-start gap-1"
+    >
+      <span className={`flex-1 whitespace-pre-wrap break-words ${value ? "" : "italic text-muted-foreground"}`}>{value || "Thêm tóm tắt AI…"}</span>
+      <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60 shrink-0 mt-0.5" />
+    </button>
+  );
+}
+
+// 1 card timeline "Hoạt động gần đây" — view (expand) / edit (title+content) / xoá inline.
+function InteractionItem({
+  it, expanded, onToggle, onSave, onDelete,
+}: {
+  it: any; expanded: boolean; onToggle: () => void;
+  onSave: (patch: { title: string; content: string }) => void; onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const tone = it.type === "chat" ? "bg-blue-500" : it.type === "order" ? "bg-green-500"
+    : it.type === "ticket" ? "bg-yellow-500" : "bg-primary";
+  const hasMore = !!it.content || (it.title || "").length > 28;
+  const startEdit = () => { setTitle(it.title || ""); setContent(it.content || ""); setEditing(true); };
+  const save = () => { onSave({ title: title.trim(), content: content.trim() }); setEditing(false); };
+  return (
+    <div className="relative pl-5 group">
+      <div className={`absolute left-0 top-1 w-2.5 h-2.5 rounded-full border-2 border-background transition-transform group-hover:scale-125 ${tone}`} />
+      <div className="text-[9px] text-muted-foreground font-bold mb-0.5 tracking-wider uppercase flex items-center justify-between">
+        <span>{timeAgo(it.created_at)}</span>
+        {!editing && (
+          <span className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button type="button" onClick={startEdit} title="Sửa"><Pencil className="h-3 w-3 hover:text-primary" /></button>
+            <button type="button" onClick={onDelete} title="Xoá"><X className="h-3 w-3 hover:text-destructive" /></button>
+          </span>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-1 rounded-lg p-2 border border-border bg-muted/40">
+          <input
+            autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Tiêu đề"
+            className="w-full text-xs font-semibold px-1.5 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          <textarea
+            value={content} onChange={(e) => setContent(e.target.value)} placeholder="Nội dung"
+            className="w-full text-[11px] px-1.5 py-1 rounded border bg-background min-h-[54px] focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          <div className="flex gap-1 justify-end">
+            <button onClick={() => setEditing(false)} className="text-[11px] px-2 py-0.5 rounded hover:bg-muted">Huỷ</button>
+            <button onMouseDown={(e) => e.preventDefault()} onClick={save} className="text-[11px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground">Lưu</button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => hasMore && onToggle()}
+          className={`w-full text-left rounded-lg p-2 border border-border bg-muted/40 hover:bg-muted/70 transition-colors ${hasMore ? "cursor-pointer" : "cursor-default"}`}
+        >
+          <div className="flex items-start gap-1">
+            <p className={`text-xs font-semibold flex-1 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>{it.title || it.type}</p>
+            {hasMore && <ChevronDown className={`h-3 w-3 mt-0.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />}
+          </div>
+          {it.content && (
+            <p className={`text-[11px] text-muted-foreground ${expanded ? "whitespace-pre-wrap break-words mt-1" : "line-clamp-2"}`}>{it.content}</p>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -281,6 +378,30 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
     if (n) createTagMut.mutate(n);
   };
   const fmtVND = (n: any) => (n && Number(n) > 0 ? `${Number(n).toLocaleString("vi-VN")}₫` : "0₫");
+
+  // ── Hoạt động gần đây (crm_interactions) CRUD inline ──
+  const invalidateCust = () => queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer?.id] });
+  const updateInteractionMut = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: { title: string; content: string } }) => crmApi.updateInteraction(id, patch),
+    onSettled: invalidateCust,
+  });
+  const deleteInteractionMut = useMutation({
+    mutationFn: (id: string) => crmApi.deleteInteraction(id),
+    onSettled: invalidateCust,
+  });
+  const addInteractionMut = useMutation({
+    mutationFn: (data: { title: string; content: string }) => crmApi.addInteraction(customer!.id, data),
+    onSettled: invalidateCust,
+  });
+  const [addingAct, setAddingAct] = useState(false);
+  const [actTitle, setActTitle] = useState("");
+  const [actContent, setActContent] = useState("");
+  const submitNewAct = () => {
+    const t = actTitle.trim();
+    if (!t && !actContent.trim()) return;
+    addInteractionMut.mutate({ title: t, content: actContent.trim() });
+    setActTitle(""); setActContent(""); setAddingAct(false);
+  };
 
   // ── Phiếu HT: ticket modal (move từ ChatHeader vào card) ──
   const [showTicketModal, setShowTicketModal] = useState(false);
@@ -849,54 +970,57 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         </div>
       )}
 
-      {/* Tóm tắt AI (tab Tổng quan trang CRM) */}
-      {(f.ai_summary || customer?.ai_summary) && (
+      {/* Tóm tắt AI — inline editable (crm_customers.ai_summary, whitelist BE sẵn) */}
+      {customer?.id && (
         <div>
           <div className="text-[11px] text-muted-foreground font-medium mb-1">Tóm tắt AI</div>
-          <p className="text-xs text-foreground/80 leading-relaxed bg-muted/30 rounded-md p-2">
-            {f.ai_summary || customer?.ai_summary}
-          </p>
+          <EditableSummary
+            value={String(f.ai_summary || customer?.ai_summary || "")}
+            pending={updateMutation.isPending}
+            onSave={(v) => updateMutation.mutate({ ai_summary: v || null })}
+          />
         </div>
       )}
 
-      {/* Hoạt động gần đây — timeline style (port từ Gemral WidgetHistoricalTimeline,
-          giữ token paperclip: border/background/muted-foreground thay token gem).
-          Đường dọc nối (before:) + chấm phát sáng hover-scale + card per event. */}
-      {((f.interactions as any[]) || []).length > 0 && (
+      {/* Hoạt động gần đây — timeline edit/xoá/thêm inline (crm_interactions). */}
+      {customer?.id && (
         <div>
-          <div className="text-[11px] text-muted-foreground font-medium mb-2 flex items-center gap-1.5">
-            <History className="h-3.5 w-3.5" /> Hoạt động gần đây
+          <div className="text-[11px] text-muted-foreground font-medium mb-2 flex items-center justify-between">
+            <span className="flex items-center gap-1.5"><History className="h-3.5 w-3.5" /> Hoạt động gần đây</span>
+            {!addingAct && (
+              <button onClick={() => setAddingAct(true)} className="flex items-center gap-0.5 text-[11px] text-primary hover:underline font-normal">
+                <Plus className="h-3 w-3" /> Thêm
+              </button>
+            )}
           </div>
-          <div className="relative space-y-3 before:absolute before:inset-y-1.5 before:left-[5px] before:w-[2px] before:bg-border before:content-['']">
-            {((f.interactions as any[]) || []).slice(0, 8).map((i: any) => {
-              const tone =
-                i.type === "chat" ? "bg-blue-500" : i.type === "order" ? "bg-green-500"
-                : i.type === "ticket" ? "bg-yellow-500" : "bg-primary";
-              const expanded = expandedActs.has(String(i.id));
-              const hasMore = !!i.content || (i.title || "").length > 28;
-              return (
-                <div key={i.id} className="relative pl-5 group">
-                  <div className={`absolute left-0 top-1 w-2.5 h-2.5 rounded-full border-2 border-background transition-transform group-hover:scale-125 ${tone}`} />
-                  <div className="text-[9px] text-muted-foreground font-bold mb-0.5 tracking-wider uppercase">{timeAgo(i.created_at)}</div>
-                  <button
-                    type="button"
-                    onClick={() => hasMore && toggleAct(String(i.id))}
-                    className={`w-full text-left rounded-lg p-2 border border-border bg-muted/40 hover:bg-muted/70 transition-colors ${hasMore ? "cursor-pointer" : "cursor-default"}`}
-                  >
-                    <div className="flex items-start gap-1">
-                      <p className={`text-xs font-semibold flex-1 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>{i.title || i.type}</p>
-                      {hasMore && (
-                        <ChevronDown className={`h-3 w-3 mt-0.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
-                      )}
-                    </div>
-                    {i.content && (
-                      <p className={`text-[11px] text-muted-foreground ${expanded ? "whitespace-pre-wrap break-words mt-1" : "line-clamp-2"}`}>{i.content}</p>
-                    )}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+          {addingAct && (
+            <div className="space-y-1 rounded-lg p-2 border border-border bg-muted/40 mb-2">
+              <input autoFocus value={actTitle} onChange={(e) => setActTitle(e.target.value)} placeholder="Tiêu đề hoạt động"
+                className="w-full text-xs font-semibold px-1.5 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring" />
+              <textarea value={actContent} onChange={(e) => setActContent(e.target.value)} placeholder="Nội dung (tuỳ chọn)"
+                className="w-full text-[11px] px-1.5 py-1 rounded border bg-background min-h-[48px] focus:outline-none focus:ring-1 focus:ring-ring" />
+              <div className="flex gap-1 justify-end">
+                <button onClick={() => { setAddingAct(false); setActTitle(""); setActContent(""); }} className="text-[11px] px-2 py-0.5 rounded hover:bg-muted">Huỷ</button>
+                <button onMouseDown={(e) => e.preventDefault()} onClick={submitNewAct} disabled={addInteractionMut.isPending} className="text-[11px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50">Thêm</button>
+              </div>
+            </div>
+          )}
+          {((f.interactions as any[]) || []).length > 0 ? (
+            <div className="relative space-y-3 before:absolute before:inset-y-1.5 before:left-[5px] before:w-[2px] before:bg-border before:content-['']">
+              {((f.interactions as any[]) || []).slice(0, 8).map((i: any) => (
+                <InteractionItem
+                  key={i.id}
+                  it={i}
+                  expanded={expandedActs.has(String(i.id))}
+                  onToggle={() => toggleAct(String(i.id))}
+                  onSave={(patch) => updateInteractionMut.mutate({ id: String(i.id), patch })}
+                  onDelete={() => { if (window.confirm("Xoá hoạt động này?")) deleteInteractionMut.mutate(String(i.id)); }}
+                />
+              ))}
+            </div>
+          ) : (
+            !addingAct && <p className="text-[11px] text-muted-foreground italic">Chưa có hoạt động.</p>
+          )}
         </div>
       )}
 

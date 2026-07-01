@@ -621,4 +621,62 @@ router.post('/webhooks/replay/:id', async (req, res) => {
   }
 });
 
+// ─── Interactions (timeline "Hoạt động gần đây" — crm_interactions) ───
+// Chỉ title + content editable (type/channel/timestamp/revenue = system-managed).
+const INTERACTION_EDITABLE = new Set(['title', 'content']);
+
+// POST /api/channels/crm/customers/:id/interactions — thêm 1 hoạt động tay
+router.post('/customers/:id/interactions', async (req, res) => {
+  try {
+    const title = String((req.body || {}).title || '').trim();
+    const content = String((req.body || {}).content || '').trim();
+    if (!title && !content) return res.status(400).json({ error: 'Tiêu đề hoặc nội dung bắt buộc' });
+    const { data, error } = await supabase
+      .from('crm_interactions')
+      .insert({
+        customer_id: req.params.id,
+        interaction_type: String((req.body || {}).interaction_type || 'note'),
+        title: title || 'Ghi chú',
+        content: content || null,
+        agent_slug: (req.body || {}).agent_slug || 'manual',
+      })
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/channels/crm/interactions/:id — sửa title/content 1 hoạt động
+router.put('/interactions/:id', async (req, res) => {
+  try {
+    const patch: Record<string, any> = {};
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (INTERACTION_EDITABLE.has(k)) patch[k] = typeof v === 'string' ? (v.trim() || null) : v;
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Không có field hợp lệ' });
+    const { data, error } = await supabase
+      .from('crm_interactions')
+      .update(patch)
+      .eq('id', req.params.id)
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/channels/crm/interactions/:id — xoá 1 hoạt động
+router.delete('/interactions/:id', async (req, res) => {
+  try {
+    const { error } = await supabase.from('crm_interactions').delete().eq('id', req.params.id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
