@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy, ChevronDown } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy, ChevronDown, Tag, Plus } from "lucide-react";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
@@ -122,6 +122,95 @@ function EditableField({
   );
 }
 
+// Ô custom field (metadata.custom_fields[label]=value): label cố định + value edit-inline + xoá.
+function CustomFieldRow({
+  label, value, onSave, onRemove,
+}: {
+  label: string; value: string; onSave: (v: string) => void; onRemove: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const save = () => { onSave(draft.trim()); setEditing(false); };
+  return (
+    <div className="group/cf flex items-center gap-2 text-xs">
+      <Tag className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <span className="text-muted-foreground shrink-0">{label}:</span>
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+          className="flex-1 min-w-0 px-1.5 py-0.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => { setDraft(value); setEditing(true); }}
+          className="flex-1 min-w-0 text-left truncate hover:text-primary"
+          title="Bấm để sửa"
+        >
+          {value || <span className="italic text-muted-foreground">(trống)</span>}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        title="Xoá thông tin này"
+        className="shrink-0 opacity-0 group-hover/cf:opacity-100 hover:text-destructive transition-opacity"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+// Nút "＋ Thêm thông tin" → mở 2 ô (tên field + giá trị) thêm custom field vào metadata.custom_fields.
+function AddFieldInline({ onAdd }: { onAdd: (label: string, value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState("");
+  const [value, setValue] = useState("");
+  const submit = () => {
+    const l = label.trim();
+    if (l) onAdd(l, value.trim());
+    setLabel(""); setValue(""); setOpen(false);
+  };
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+      >
+        <Plus className="h-3 w-3" /> Thêm thông tin
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        autoFocus
+        placeholder="Tên (vd: Ngày sinh)"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}
+        className="w-[42%] min-w-0 text-xs px-1.5 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+      />
+      <input
+        placeholder="Giá trị"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}
+        className="flex-1 min-w-0 text-xs px-1.5 py-1 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+      />
+      <button onMouseDown={(e) => e.preventDefault()} onClick={submit} className="shrink-0 p-1 rounded hover:bg-muted" title="Thêm">
+        <Check className="h-3.5 w-3.5 text-green-600" />
+      </button>
+    </div>
+  );
+}
+
 export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -175,6 +264,22 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
     mutationFn: (tagId: string) => crmApi.removeTag(customer!.id, tagId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer?.id] }),
   });
+  // Tạo tag mới inline (ngoài preset) → dedup BE theo name → auto-gán cho khách.
+  const [creatingTag, setCreatingTag] = useState(false);
+  const [newTag, setNewTag] = useState("");
+  const createTagMut = useMutation({
+    mutationFn: (name: string) => crmApi.createTag(name),
+    onSuccess: (tag: any) => {
+      setCreatingTag(false);
+      setNewTag("");
+      queryClient.invalidateQueries({ queryKey: ["crm", "tags"] });
+      if (tag?.id && customer?.id) addTagMut.mutate(tag.id);
+    },
+  });
+  const submitNewTag = () => {
+    const n = newTag.trim();
+    if (n) createTagMut.mutate(n);
+  };
   const fmtVND = (n: any) => (n && Number(n) > 0 ? `${Number(n).toLocaleString("vi-VN")}₫` : "0₫");
 
   // ── Phiếu HT: ticket modal (move từ ChatHeader vào card) ──
@@ -388,6 +493,32 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           <EditableField icon={Phone} type="tel" value={f.phone ?? customer.phone} placeholder="Thêm số điện thoại…" onSave={(v) => updateMutation.mutate({ phone: v || null })} />
           <EditableField icon={Mail} type="email" value={f.email ?? customer.email} placeholder="Thêm email…" onSave={(v) => updateMutation.mutate({ email: v || null })} />
           <EditableField icon={MapPin} value={(f.metadata as any)?.address} placeholder="Thêm địa chỉ…" onSave={(v) => updateMutation.mutate({ metadata: { address: v || null } })} />
+          {/* Custom fields (metadata.custom_fields) — thêm thông tin tuỳ ý ngoài phone/email/địa chỉ.
+              PUT merge metadata nông → gửi CẢ object custom_fields mỗi lần (đọc hiện tại + sửa + gửi trọn). */}
+          {Object.entries(((f.metadata as any)?.custom_fields as Record<string, any>) || {}).map(([k, v]) => (
+            <CustomFieldRow
+              key={k}
+              label={k}
+              value={v == null ? "" : String(v)}
+              onSave={(nv) => {
+                const cur = { ...(((f.metadata as any)?.custom_fields as Record<string, any>) || {}) };
+                cur[k] = nv;
+                updateMutation.mutate({ metadata: { custom_fields: cur } });
+              }}
+              onRemove={() => {
+                const cur = { ...(((f.metadata as any)?.custom_fields as Record<string, any>) || {}) };
+                delete cur[k];
+                updateMutation.mutate({ metadata: { custom_fields: cur } });
+              }}
+            />
+          ))}
+          <AddFieldInline
+            onAdd={(fieldLabel, fieldValue) => {
+              const cur = { ...(((f.metadata as any)?.custom_fields as Record<string, any>) || {}) };
+              cur[fieldLabel] = fieldValue;
+              updateMutation.mutate({ metadata: { custom_fields: cur } });
+            }}
+          />
           {(() => {
             const o = recentOrders[0] as any;
             const addr = o?.shipping_address
@@ -511,17 +642,40 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
               ))}
               {((f.tags as any[]) || []).length === 0 && <span className="text-[11px] text-muted-foreground">Chưa có tag</span>}
             </div>
-            <select
-              value=""
-              onChange={(e) => { if (e.target.value) addTagMut.mutate(e.target.value); }}
-              disabled={addTagMut.isPending}
-              className="w-full mt-1 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              <option value="">+ Thêm tag...</option>
-              {(allTags as any[])
-                .filter((t: any) => !((f.tags as any[]) || []).some((ct: any) => ct.id === t.id))
-                .map((t: any) => <option key={t.id} value={t.id}>{t.category ? `[${t.category}] ` : ""}{t.name}</option>)}
-            </select>
+            {creatingTag ? (
+              <div className="flex items-center gap-1 mt-1">
+                <input
+                  autoFocus
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitNewTag(); if (e.key === "Escape") { setCreatingTag(false); setNewTag(""); } }}
+                  placeholder="Tên tag mới…"
+                  className="flex-1 min-w-0 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <button onMouseDown={(e) => e.preventDefault()} onClick={submitNewTag} disabled={!newTag.trim() || createTagMut.isPending} className="shrink-0 p-1.5 rounded hover:bg-muted disabled:opacity-50" title="Tạo & gán tag">
+                  <Check className="h-3.5 w-3.5 text-green-600" />
+                </button>
+                <button onClick={() => { setCreatingTag(false); setNewTag(""); }} className="shrink-0 p-1.5 rounded hover:bg-muted" title="Huỷ">
+                  <X className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              </div>
+            ) : (
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value === "__new__") setCreatingTag(true);
+                  else if (e.target.value) addTagMut.mutate(e.target.value);
+                }}
+                disabled={addTagMut.isPending}
+                className="w-full mt-1 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">+ Thêm tag...</option>
+                {(allTags as any[])
+                  .filter((t: any) => !((f.tags as any[]) || []).some((ct: any) => ct.id === t.id))
+                  .map((t: any) => <option key={t.id} value={t.id}>{t.category ? `[${t.category}] ` : ""}{t.name}</option>)}
+                <option value="__new__">➕ Tạo tag mới…</option>
+              </select>
+            )}
           </div>
 
           {/* Segment (read-only — audience động theo rule) */}

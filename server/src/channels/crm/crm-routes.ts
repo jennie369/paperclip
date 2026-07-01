@@ -272,6 +272,25 @@ router.get('/tags', async (_req, res) => {
   }
 });
 
+// POST /api/channels/crm/tags — tạo tag mới (dedup case-insensitive theo name → trả tag cũ nếu trùng).
+// Cho phép CS tự thêm tag ngoài preset, KHÔNG trùng lặp DB.
+router.post('/tags', async (req, res) => {
+  try {
+    const name = String((req.body || {}).name || '').trim();
+    const category = String((req.body || {}).category || 'custom').trim() || 'custom';
+    if (!name) return res.status(400).json({ error: 'Thiếu tên tag' });
+    // Dedup trong JS (bảng nhỏ) — tránh bẫy wildcard `_`/`%` của ilike với tag snake_case.
+    const { data: all } = await supabase.from('crm_tags').select('*');
+    const dup = (all || []).find((t: any) => String(t.name || '').trim().toLowerCase() === name.toLowerCase());
+    if (dup) return res.json(dup);
+    const { data, error } = await supabase.from('crm_tags').insert({ name, category }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/channels/crm/customers/:id/sync-gemral — Force re-sync Gemral data
 router.post('/customers/:id/sync-gemral', async (req, res) => {
   try {

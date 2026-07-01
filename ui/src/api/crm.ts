@@ -76,6 +76,11 @@ export const crmApi = {
 
   getPipeline: () => fetchJSON<Record<string, number>>(`${BASE}/pipeline`),
   getTags: () => fetchJSON<any[]>(`${BASE}/tags`),
+  createTag: (name: string, category?: string) =>
+    fetchJSON<{ id: string; name: string; category?: string }>(`${BASE}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ name, category }),
+    }),
   addTag: (customerId: string, tag_id: string) =>
     fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags`, { method: 'POST', body: JSON.stringify({ tag_id }) }),
   removeTag: (customerId: string, tagId: string) =>
