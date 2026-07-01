@@ -541,6 +541,8 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
       <ChatInput
         onSend={handleSend}
         channelName={conv.channel_name}
+        threadId={conv.session_key.split(":")[1] || conv.chat_id}
+        threadType={conv.peer_kind}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
       />

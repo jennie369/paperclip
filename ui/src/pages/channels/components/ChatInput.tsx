@@ -71,12 +71,15 @@ function saveCustomTemplates(t: string[]) {
 interface Props {
   onSend: (text: string, replyToId?: string) => Promise<void>;
   channelName: string | null;
+  threadId?: string | null;
+  threadType?: string;
   replyTo?: ReplyToInfo | null;
   onCancelReply?: () => void;
 }
 
-export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props) {
+export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, onCancelReply }: Props) {
   const [text, setText] = useState("");
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -167,11 +170,23 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !channelName) return;
+    // BUG-fix 2026-07-01: trước đây truyền threadId="" → route /upload trả 400 rồi
+    // catch{} NUỐT lỗi im lặng → chị bấm gửi ảnh không thấy gì. Truyền threadId thật
+    // + surface lỗi (route + protocol Zalo trả {success,error}).
+    if (!threadId) {
+      setUploadError("Không xác định được cuộc trò chuyện để gửi ảnh.");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
     setUploading(true);
+    setUploadError(null);
     try {
-      await channelsApi.uploadImage(channelName, "", file);
-    } catch {
-      // Silent — toast would be better
+      const result = await channelsApi.uploadImage(channelName, threadId, file, threadType || "dm");
+      if (!result?.success) {
+        setUploadError(result?.error || "Gửi ảnh thất bại (kênh chưa kết nối hoặc lỗi Zalo).");
+      }
+    } catch (err: any) {
+      setUploadError(err?.message || "Gửi ảnh thất bại.");
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -180,6 +195,13 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
 
   return (
     <div className="border-t px-3 py-2">
+      {/* Upload error banner — không còn nuốt lỗi im lặng khi gửi ảnh/file thất bại */}
+      {uploadError && (
+        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-[11px]">
+          <span className="flex-1 min-w-0">⚠️ {uploadError}</span>
+          <button onClick={() => setUploadError(null)} className="shrink-0 hover:opacity-70" title="Đóng">✕</button>
+        </div>
+      )}
       {/* FIX 3: Reply-to preview bar */}
       {replyTo && (
         <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-muted/50 border border-border/60">
