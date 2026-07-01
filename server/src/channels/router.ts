@@ -1641,6 +1641,63 @@ export interface MessageChunk {
   media?: MediaFile[];
 }
 
+/** Strip Vietnamese accents + lowercase for fuzzy product-name matching. */
+function stripAccentsLower(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/đ/gi, 'd').toLowerCase();
+}
+
+// Tag values that are generic (không phải danh tính sản phẩm) — bỏ qua khi auto-match.
+const GENERIC_MEDIA_TAGS = new Set([
+  'image', 'crystal', 'set', 'pdf', 'video', 'vi', 'stone', 'course', 'trading',
+  'feng_shui', 'yinyang_masters', 'starter', 'tier0', 'tier1', 'tier2', 'tier3',
+  'wealth', 'love', 'purple', 'pink', 'yellow', 'guide', 'infographic', 'brand',
+  'logo', 'demo', 'tool', 'ritual', 'spiritual', 'wellness', 'healing', 'mixed',
+  'tien_tai', 'binh_an', 'tinh_yeu', 'bao_ve', 'jennie', 'profile', 'founder',
+  'chart', 'education', 'banner', 'promo', 'sale', 'catalog', 'overview',
+]);
+
+/**
+ * FALLBACK auto-media (2026-07-01): agy/Gemini Flash hay HỨA gửi ảnh trong prose
+ * ("Em gửi bạn xem hình ảnh…") mà KHÔNG emit `[[SEND_MEDIA: id]]` → khách không
+ * nhận ảnh, agent tưởng đã gửi (silent). Khi reply hứa media + 0 marker → match
+ * media theo TÊN sản phẩm/set (tag danh-tính) xuất hiện trong reply → đính kèm.
+ * Precise: chỉ match tag ≥6 ký tự, không generic; cap 3 để tránh nhồi.
+ */
+function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaFile[] {
+  if (!lib?.items?.length || !text) return [];
+  const PROMISE_RE = /(g[uử]i|xem|đính\s*kèm|k[eè]m)[\s\S]{0,30}(h[ìi]nh|ảnh|photo|catalog|b[ải]ng\s*gi[áa]|file)/i;
+  if (!PROMISE_RE.test(text)) return [];
+
+  const norm = stripAccentsLower(text);
+  const scored: { item: MediaLibrary['items'][number]; keyLen: number }[] = [];
+  for (const it of lib.items) {
+    let best = 0;
+    for (const tag of it.tags || []) {
+      if (GENERIC_MEDIA_TAGS.has(tag)) continue;
+      const phrase = stripAccentsLower(tag.replace(/_/g, ' ').trim());
+      if (phrase.length >= 6 && norm.includes(phrase)) best = Math.max(best, phrase.length);
+    }
+    if (best > 0) scored.push({ item: it, keyLen: best });
+  }
+  scored.sort((a, b) => b.keyLen - a.keyLen); // ưu tiên khớp cụ thể nhất
+  const picked: MediaFile[] = [];
+  const seen = new Set<string>();
+  for (const s of scored) {
+    if (seen.has(s.item.id)) continue;
+    seen.add(s.item.id);
+    picked.push({
+      url: s.item.url || undefined,
+      path: s.item.path || undefined,
+      mimeType: s.item.mimeType,
+      filename: s.item.name,
+      caption: s.item.description,
+    });
+    if (picked.length >= 3) break;
+  }
+  return picked;
+}
+
 async function parseMediaMarkers(
   text: string,
   lib: MediaLibrary | null,
@@ -1757,6 +1814,21 @@ async function parseMediaMarkers(
   // return at least one empty chunk so consumer.ts has something to send.
   if (chunks.length === 0) {
     chunks.push({ text: '' });
+  }
+
+  // ── FALLBACK auto-media: agent hứa gửi ảnh trong prose nhưng KHÔNG emit marker
+  // (agy/Gemini Flash hay quên) → match media theo tên sản phẩm/set → đính kèm.
+  // Logged (KHÔNG silent) để verify được. Chỉ chạy khi 0 marker nào resolve.
+  if (allMedia.length === 0) {
+    const auto = autoMatchMediaFromReply(text, lib);
+    if (auto.length > 0) {
+      console.log(
+        `[Router/media] FALLBACK auto-attached ${auto.length} media (agent hứa ảnh nhưng KHÔNG emit marker): ${auto.map((m) => m.filename).join(', ')}`,
+      );
+      for (const m of auto) allMedia.push(m);
+      const lastChunk = [...chunks].reverse().find((c) => c.text) || chunks[chunks.length - 1];
+      if (lastChunk) lastChunk.media = [...(lastChunk.media || []), ...auto];
+    }
   }
 
   // Backward-compat: cleanedText is the chunks joined by double newlines.
