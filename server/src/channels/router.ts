@@ -2466,6 +2466,8 @@ async function buildSystemPrompt(
   // Ensures key SSOT refs (pricing catalog, crystal-consult, CS cases) are IN-PROMPT so the reply
   // agent never filesystem-searches (os.walk) to locate them — a search that can surface a STALE
   // backup copy and quote/leak outdated data. See CSKH_SUPPORT_SYSTEM_SSOT §11 + chatbot-doctor.
+  // Paths are PROJECT_ROOT-relative to the REAL files (NOT the agents/<slug>/sop/ symlinks —
+  // those MSYS-style symlinks are unreadable by Node's fs on Windows: realpathSync → ENOENT).
   const inlineManifest = pathResolve(agentsDir, 'sop', '_INLINE.json');
   if (existsSync(inlineManifest)) {
     try {
@@ -2473,7 +2475,7 @@ async function buildSystemPrompt(
       if (Array.isArray(names)) {
         for (const name of names) {
           if (typeof name === 'string') {
-            tryLoad(pathResolve(agentsDir, 'sop', name), `SSOT REF: ${name}`);
+            tryLoad(pathResolve(projectRoot, name), `SSOT REF: ${name.split('/').pop()}`);
           }
         }
       }
