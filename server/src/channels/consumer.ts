@@ -382,7 +382,7 @@ async function processMessage(
     try {
       const { data: crmCustomer } = await supabase
         .from('crm_customers')
-        .select('display_name, status, lead_score, lead_temperature, total_orders, total_revenue')
+        .select('display_name, status, lead_score, lead_temperature, total_orders, total_revenue, metadata')
         .eq('id', customerId)
         .single();
       if (crmCustomer) {
@@ -390,6 +390,7 @@ async function processMessage(
           name: crmCustomer.display_name,
           stage: crmCustomer.status || 'new',
           total_orders: crmCustomer.total_orders,
+          gender: (crmCustomer.metadata as any)?.gender || null,  // structured metadata.gender → identity header giới_tính (agy gender-aware xưng hô)
           channel_name: merged.channel,
           sender_id: merged.senderId || null,
           customer_id: customerId,  // CRM UUID — required by create_ticket/get_customer_info/etc.

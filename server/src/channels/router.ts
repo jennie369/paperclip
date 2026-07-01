@@ -736,7 +736,13 @@ function buildIdentityHeader(ctx: any): string {
   if (!ctx) return '';
   const id = ctx.sender_id || ctx.account_id || '?';
   const name = ctx.name || ctx.sender_name || 'Chưa rõ';
-  const gender = ctx.gender || 'chưa rõ — tự suy luận theo cách khách xưng hô';
+  const GENDER_LABELS: Record<string, string> = {
+    nam: 'Nam (khách nam → xưng hô phù hợp: gọi khách là "anh")',
+    nu: 'Nữ (khách nữ → xưng hô phù hợp: gọi khách là "chị")',
+  };
+  const gender = ctx.gender
+    ? (GENDER_LABELS[ctx.gender] || ctx.gender)
+    : 'chưa rõ — tự suy luận theo cách khách xưng hô';
   const channel = ctx.channel_name || 'Zalo';
   const crmId = ctx.customer_id || null;
   const lines = [

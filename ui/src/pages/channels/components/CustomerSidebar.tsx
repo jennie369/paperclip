@@ -470,6 +470,22 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
             </div>
           </div>
 
+          {/* Giới tính — structured metadata.gender (SSOT: KHÔNG cột mirror).
+              → identity header "giới_tính=…" (buildIdentityHeader) → agy gender-aware xưng hô. */}
+          <div>
+            <label className="text-[11px] text-muted-foreground font-medium">Giới tính</label>
+            <select
+              value={(f.metadata as any)?.gender || ""}
+              onChange={(e) => updateMutation.mutate({ metadata: { gender: e.target.value || null } })}
+              disabled={updateMutation.isPending}
+              className="w-full mt-0.5 text-xs px-2 py-1.5 rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="">Chưa rõ</option>
+              <option value="nam">Nam</option>
+              <option value="nu">Nữ</option>
+            </select>
+          </div>
+
           {/* Hẹn follow-up */}
           <div>
             <label className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
