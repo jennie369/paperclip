@@ -470,16 +470,20 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                           ))}
                         </div>
                       )}
-                      {/* Smart content render — with search highlight */}
-                      {searchQuery ? (
-                        <span className="text-sm leading-relaxed">{highlightText(bodyText, searchQuery)}</span>
-                      ) : (
-                        <MessageRenderer
-                          body={bodyText}
-                          content_type={msg.content_type}
-                          extra_data={msg.extra_data}
-                          onDark={isOutbound}
-                        />
+                      {/* Smart content render — with search highlight.
+                          Bỏ qua khi tin ẢNH đã render qua media[] (tránh double: ảnh + placeholder
+                          "[Hình ảnh]" của MessageRenderer khi content_type=image không có extra_data). */}
+                      {msg.content_type === "image" && Array.isArray(msg.media) && msg.media.length > 0 ? null : (
+                        searchQuery ? (
+                          <span className="text-sm leading-relaxed">{highlightText(bodyText, searchQuery)}</span>
+                        ) : (
+                          <MessageRenderer
+                            body={bodyText}
+                            content_type={msg.content_type}
+                            extra_data={msg.extra_data}
+                            onDark={isOutbound}
+                          />
+                        )
                       )}
                     </div>
 

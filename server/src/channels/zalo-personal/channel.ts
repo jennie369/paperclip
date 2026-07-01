@@ -11,7 +11,7 @@ import type { OutboundMessage, MediaFile } from '../types.js';
 import https from 'https';
 import http from 'http';
 import { writeFileSync, mkdtempSync, rmSync, existsSync, statSync } from 'fs';
-import { join as pathJoin, basename as pathBasename, extname as pathExtname, isAbsolute as pathIsAbsolute, resolve as pathResolve } from 'path';
+import { join as pathJoin, basename as pathBasename, extname as pathExtname, isAbsolute as pathIsAbsolute, resolve as pathResolve, relative as pathRelative } from 'path';
 import { tmpdir } from 'os';
 
 // Project root used to resolve relative media paths from agents/*/media-library.json.
@@ -23,6 +23,29 @@ const MEDIA_PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desk
 // We check client-side so we can log a clear warning instead of the opaque
 // "File too large: N > 26214400" error bubbling up from the protocol layer.
 const ZALO_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
+
+// Roots cho phép serve ảnh outbound (giữ ĐỒNG BỘ với routes.ts ALLOWED_MEDIA_ROOTS).
+// media-library.json trỏ path hỗn hợp: project-relative + absolute content vault (D:).
+const ALLOWED_MEDIA_ROOTS = [
+  process.env.PROJECT_ROOT || MEDIA_PROJECT_ROOT,
+  process.env.CONTENT_LIBRARY_ROOT || 'D:/Claude Projects/App Content Jennie',
+].map((r) => pathResolve(r));
+
+/**
+ * Build a browser-servable URL cho ảnh outbound (media-library) để inbox hiển thị.
+ * Ảnh gửi khách = file LOCAL trên đĩa → browser không load path đĩa → trỏ qua
+ * endpoint `/api/channels/zalo-personal/media?path=<abs>`. Trả null nếu file NẰM
+ * NGOÀI mọi allowed root (vd temp upload /tmp) — endpoint chỉ serve trong whitelist.
+ */
+function buildOutboundMediaUrl(filePath: string): string | null {
+  const abs = pathIsAbsolute(filePath) ? filePath : pathResolve(MEDIA_PROJECT_ROOT, filePath);
+  const servable = ALLOWED_MEDIA_ROOTS.some((root) => {
+    const rel = pathRelative(root, abs);
+    return !!rel && !rel.startsWith('..') && !pathIsAbsolute(rel);
+  });
+  if (!servable) return null;
+  return `/api/channels/zalo-personal/media?path=${encodeURIComponent(abs.split('\\').join('/'))}`;
+}
 
 const MASTER_KEY = process.env.ZALO_ENCRYPTION_KEY || 'gemral-zalo-default-key-change-me';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8782931741:AAF6v6ju5N5qF2EWFIKZg_5HTNr9yOnsiQ0';
@@ -756,6 +779,8 @@ export class ZaloPersonalChannel {
       ? await sendGroupImage(this.session, threadId, filePath, caption)
       : await sendDMImage(this.session, threadId, filePath, caption);
 
+    // Lưu URL servable vào `media` → inbox hiển thị ảnh THẬT (không placeholder).
+    const mediaUrl = result.success ? buildOutboundMediaUrl(filePath) : null;
     await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,
       thread_id: threadId,
@@ -763,6 +788,7 @@ export class ZaloPersonalChannel {
       to_uid: threadId,
       body: caption || '[Hình ảnh]',
       content_type: 'image',
+      media: mediaUrl ? [mediaUrl] : null,
       status: result.success ? 'sent' : 'failed',
       error_message: result.error,
       platform_message_id: result.messageId,

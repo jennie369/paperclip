@@ -27,6 +27,42 @@ const router = Router();
 // Active channels in memory
 const activeChannels = new Map<string, ZaloPersonalChannel>();
 
+// ── Media serve (ảnh outbound media-library) ────────────────────────────────
+// Roots cho phép serve: media-library.json trỏ path HỖN HỢP — project-relative
+// (memory/agents/…) + absolute content vault (D:/Claude Projects/App Content Jennie/…).
+// SSOT list này = ALLOWED_MEDIA_ROOTS trong channel.ts (giữ đồng bộ).
+const ALLOWED_MEDIA_ROOTS = [
+  process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner',
+  process.env.CONTENT_LIBRARY_ROOT || 'D:/Claude Projects/App Content Jennie',
+].map((r) => path.resolve(r));
+const MEDIA_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.bmp': 'image/bmp', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
+};
+function isWithinAllowedRoot(abs: string): boolean {
+  return ALLOWED_MEDIA_ROOTS.some((root) => {
+    const rel = path.relative(root, abs);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
+}
+
+/**
+ * GET /api/channels/zalo-personal/media?path=<absolute path within allowed roots>
+ * Serve media-library / marketing-kit asset để inbox HIỂN THỊ ảnh outbound.
+ * Ảnh agent gửi khách = file LOCAL trên đĩa (không phải URL) → browser không load
+ * được path đĩa → proxy qua endpoint này. Guard: chỉ serve trong ALLOWED_MEDIA_ROOTS.
+ */
+router.get('/media', (req, res) => {
+  const p = String(req.query.path || '');
+  if (!p) return res.status(400).json({ error: 'path required' });
+  const abs = path.resolve(p);
+  if (!isWithinAllowedRoot(abs)) return res.status(403).json({ error: 'forbidden' });
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return res.status(404).json({ error: 'not found' });
+  res.setHeader('Content-Type', MEDIA_MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  fs.createReadStream(abs).pipe(res);
+});
+
 /**
  * GET /api/channels/zalo-personal
  * List all Zalo personal channels
