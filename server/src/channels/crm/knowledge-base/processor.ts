@@ -98,22 +98,22 @@ export class DocumentProcessor {
     return chunks;
   }
 
+  // ⚠ 2026-07-04: repoint OpenAI text-embedding-3-small (1536) → bge-m3 LOCAL service (1024)
+  // để KHỚP kb_chunks vector(1024). Fail-fast khi service down (KHÔNG zero-vector 1536 → dim
+  // mismatch CÂM với cột 1024). PHẢI đồng bộ với mcp-server.ts getEmbedding (query-time).
   private async getEmbedding(text: string): Promise<number[]> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      // Return zero vector if no API key (development)
-      console.warn('[KB] OPENAI_API_KEY not set — using zero vector');
-      return new Array(1536).fill(0);
+    const url = process.env.EMBED_SERVICE_URL;
+    if (!url) {
+      throw new Error('[KB] EMBED_SERVICE_URL chưa set — bge-m3 embed service (scripts/embed_service.py) phải chạy. KHÔNG fallback zero-vector (dim mismatch câm với kb_chunks vector(1024)).');
     }
-
-    const res = await fetch('https://api.openai.com/v1/embeddings', {
+    const key = process.env.EMBED_SERVICE_KEY || '';
+    const res = await fetch(`${url.replace(/\/$/, '')}/embed`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: [text.slice(0, 8000)] }),
+      headers: { 'Content-Type': 'application/json', ...(key ? { 'x-embed-key': key } : {}) },
+      body: JSON.stringify({ texts: [text.slice(0, 8000)] }),
     });
-
-    if (!res.ok) throw new Error(`OpenAI Embedding error: ${res.status}`);
-    const data = await res.json() as { data: Array<{ embedding: number[] }> };
-    return data.data[0].embedding;
+    if (!res.ok) throw new Error(`bge-m3 embed error: ${res.status}`);
+    const data = await res.json() as { vectors: number[][] };
+    return data.vectors[0];
   }
 }
