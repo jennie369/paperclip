@@ -758,7 +758,7 @@ const COURSE_OPTIONS = [
   { value: 'starter', label: 'Gói Khởi Đầu Trading (299K)' },
   { value: 'tier_1', label: 'Gói Chuyên Nghiệp TIER 1 (11tr)' },
   { value: 'tier_2', label: 'Gói Nâng Cao TIER 2 (21tr)' },
-  { value: 'tier_3', label: 'Gói Cao Cấp TIER 3 (68tr)' },
+  { value: 'tier_3', label: 'Gói Cao Cấp TIER 3 (30tr)' },
 ];
 
 const CLIP_CTA_OPTIONS = [
