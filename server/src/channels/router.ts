@@ -320,6 +320,17 @@ export async function runAgentWithConfig(
         reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
     }
 
+    // ── HOISTED customer-facing contract (Reply Gateway P1) ──
+    // Single chokepoint: scrub banned phrases + parse [[SEND_MEDIA]]/[[ESCALATE]]
+    // markers + collapse-guard runs here for EVERY provider — not inside each
+    // runVia*. This closes the gap where nvidia_nim/openrouter returned RAW
+    // (never scrubbed). The 3 CLI providers no longer call postProcessReply
+    // internally; they return the raw model reply and this is the only place it
+    // is cleaned. Side-channels (_escalation/_outboundMedia) are set on `config`
+    // (same object the consumer reads after runAgent returns).
+    const mediaLib = loadMediaLibrary(config.slug);
+    reply = await postProcessReply(reply, config, mediaLib);
+
     return reply.trim();  // empty → consumer stays silent (no fallback)
   } catch (err: any) {
     console.error(`[Router] Provider ${config.provider} failed for ${config.slug}:`, err.message);
@@ -619,8 +630,9 @@ async function runViaClaude(
 
         console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars, session=${newSessionId?.substring(0, 8) || 'none'}`);
 
-        // ── Provider-agnostic post-processing: scrub + parse media markers ──
-        reply = await postProcessReply(reply, config, mediaLib);
+        // NOTE: customer-facing post-processing (scrub + media/escalation markers)
+        // is HOISTED to runAgentWithConfig (Reply Gateway P1) — the single chokepoint
+        // for every provider. This returns the RAW model reply; do NOT scrub here.
 
         // Track usage via RPC
         try {
@@ -1041,8 +1053,8 @@ async function runViaGemini(
 
         console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars`);
 
-        // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] markers
-        reply = await postProcessReply(reply, config, mediaLib);
+        // NOTE: post-processing (scrub + markers) HOISTED to runAgentWithConfig
+        // (Reply Gateway P1) — returns RAW reply here, do NOT scrub in this fn.
       } catch (parseErr) {
         console.warn(`[Router/${config.provider}] ${config.slug}: parse failed`, parseErr);
         // NEVER return raw stdout — return safe fallback
@@ -1232,9 +1244,9 @@ async function runViaAntigravity(
         (config as any)._agent_session_id = conversationId;
         console.log(`[Router/antigravity] ${config.slug}: reply ${reply.length} chars`);
 
-        // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] +
-        // escalation markers (works for every provider incl. agy).
-        reply = await postProcessReply(reply, config, mediaLib);
+        // NOTE: post-processing (scrub + [[SEND_MEDIA]]/[[ESCALATE]] markers)
+        // HOISTED to runAgentWithConfig (Reply Gateway P1) — returns RAW reply
+        // here, do NOT scrub in this fn.
       } catch (parseErr) {
         console.warn(`[Router/antigravity] ${config.slug}: parse failed`, parseErr);
         reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
