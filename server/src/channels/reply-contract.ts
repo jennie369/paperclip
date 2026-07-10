@@ -67,3 +67,23 @@ export function isUniqueViolation(err: unknown): boolean {
   const msg = typeof e.message === 'string' ? e.message : '';
   return /duplicate key|unique constraint|idx_csm_dedupe|idx_cpm_dedupe/i.test(msg);
 }
+
+/**
+ * Normalize a channel send result into throw-on-failure (Codex F2). Every
+ * protocol send in this codebase returns `{ success: false, error }` instead of
+ * throwing, and CSKH mirror only console.errors. `deliverReplyOnce` decides
+ * sent-vs-failed by whether the deliverFn THREW, so a deliverFn MUST call this
+ * (or throw itself) — otherwise a failed send is silently marked 'sent' and the
+ * customer never receives the reply while the dedupe key stays claimed.
+ *
+ * Returns the platform message id (best-effort, from any of the common field
+ * names) so the caller can stamp channel_sent_messages.platform_message_id.
+ */
+export function assertSent(
+  result: { success?: boolean; error?: string; messageId?: string; id?: string; commentId?: string } | null | undefined,
+): { platformMessageId: string | null } {
+  if (!result || result.success !== true) {
+    throw new Error(result?.error || 'channel send failed (success!==true)');
+  }
+  return { platformMessageId: result.messageId ?? result.id ?? result.commentId ?? null };
+}

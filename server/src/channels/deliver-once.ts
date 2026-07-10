@@ -52,6 +52,12 @@ export interface DeliverResult {
  *   - resolves → UPDATE status='sent' (+ platform_message_id) → 'sent'.
  *   - throws   → UPDATE status='failed' (+ error_message) → 'failed' (no retry).
  *
+ * ⚠️ CONTRACT (Codex F2): deliverFn MUST THROW on a failed send. Every channel
+ * protocol here returns `{ success: false, error }` instead of throwing, and CSKH
+ * mirror only console.errors — so a deliverFn that just `await`s the send would
+ * resolve on failure and be wrongly marked 'sent'. Wrap the send with
+ * `assertSent(result)` (reply-contract.ts) or throw explicitly.
+ *
  * `dedupeKey` empty/undefined → caller has no key (manual/human path); we just run
  * deliverFn once with no claim (back-compat, no idempotency). Bot paths always
  * pass a key.

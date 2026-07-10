@@ -21,6 +21,7 @@ import {
   buildReplyDedupeKey,
   detectPriceLeak,
   isUniqueViolation,
+  assertSent,
 } from "../channels/reply-contract.js";
 
 // Minimal config stub — postProcessReply only reads slug/provider and writes
@@ -245,5 +246,17 @@ describe("reply-contract golden-set (P0 baseline)", () => {
     expect(isUniqueViolation({ code: "23503", message: "foreign key" })).toBe(false);
     expect(isUniqueViolation(null)).toBe(false);
     expect(isUniqueViolation("boom")).toBe(false);
+  });
+
+  // ── assertSent — throw on !success, else return platform id (Codex F2) ──
+  it("assertSent throws on failed send, returns platform id on success", () => {
+    expect(() => assertSent({ success: false, error: "zalo timeout" })).toThrow(/zalo timeout/);
+    expect(() => assertSent({ success: false })).toThrow(/success!==true/);
+    expect(() => assertSent(null)).toThrow();
+    expect(() => assertSent(undefined)).toThrow();
+    expect(assertSent({ success: true, messageId: "m1" })).toEqual({ platformMessageId: "m1" });
+    expect(assertSent({ success: true, id: "d1" })).toEqual({ platformMessageId: "d1" });
+    expect(assertSent({ success: true, commentId: "c1" })).toEqual({ platformMessageId: "c1" });
+    expect(assertSent({ success: true })).toEqual({ platformMessageId: null });
   });
 });

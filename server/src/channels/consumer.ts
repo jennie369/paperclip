@@ -689,12 +689,22 @@ async function processResolved(
       // router.saveHistory() (single writer). Removed duplicate appendMessage
       // that caused BUG-047.
 
+      // Outbound media extracted from [[SEND_MEDIA: id]] markers (router populates
+      // config._outboundMedia in postProcessReply). Read it BEFORE the empty-reply
+      // guard so a MEDIA-ONLY reply (agent sends an image with no text) is NOT
+      // dropped as "empty" (Codex F4 — this was a latent bug: the guard ran before
+      // media was read, silently swallowing image-only replies).
+      const outboundMedia = (merged as any)._outboundMedia as
+        | { url?: string; path?: string; mimeType: string; filename?: string; caption?: string }[]
+        | undefined;
+
       // ── Empty reply = stay SILENT (no fallback). ──
       // The router returns '' when the agent is disabled / unknown / errors / the
       // provider fails. We NEVER send a canned fallback message — leave the
       // customer message in the inbox for a human, publish nothing.
       const hasChunks = Array.isArray((merged as any)._messageChunks) && (merged as any)._messageChunks.length > 0;
-      if ((!replyText || !replyText.trim()) && !hasChunks) {
+      const hasMedia = Array.isArray(outboundMedia) && outboundMedia.length > 0;
+      if ((!replyText || !replyText.trim()) && !hasChunks && !hasMedia) {
         console.log(`${logPrefix} Agent produced empty reply — staying silent (no fallback), left in inbox`);
         await markBatch('agent', 'skipped', 'agent_silent');
         if (customerId && merged.peerKind !== 'group') aiSummarizer.scheduleSummary(sessionKey, customerId);
@@ -712,11 +722,7 @@ async function processResolved(
       }
 
       // ── Step 10: Publish outbound reply ──
-      // Pull outbound media (if any) extracted from [[SEND_MEDIA: id]] markers
-      // by the agent's media-library lookup in runViaOllama.
-      const outboundMedia = (merged as any)._outboundMedia as
-        | { url?: string; path?: string; mimeType: string; filename?: string; caption?: string }[]
-        | undefined;
+      // (outboundMedia was read above, before the empty-reply guard — Codex F4.)
 
       // Multi-message reply: if router split the reply into chunks via
       // [[MSG_BREAK]], send each chunk as a separate outbound message with a
