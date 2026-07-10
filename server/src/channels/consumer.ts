@@ -8,6 +8,7 @@ import * as policy from './policy.js';
 import * as quota from './quota.js';
 import * as session from './session.js';
 import * as router from './router.js';
+import { buildBatchId, buildReplyDedupeKey } from './reply-contract.js';
 import { supabase } from './zalo-personal/supabase.js';
 import { CustomerResolver } from './crm/customer-resolver.js';
 import { ContextBuilder } from './crm/context-builder.js';
@@ -760,6 +761,12 @@ async function processResolved(
           }
         }
       } else {
+        // Reply Gateway Contract (P2): deterministic dedupe key for this reply.
+        // batchId = min uuid of the claimed pending rows (order-independent) →
+        // a duplicate emit for the SAME burst collapses to one key (23505 → the
+        // adapter's deliverReplyOnce skips the send). Media-only replies still
+        // carry the key so the ONE claim gates text + attachments together.
+        const dedupeKey = buildReplyDedupeKey(sessionKey, buildBatchId(claimedIds));
         const outbound: OutboundMessage = {
           channel: merged.channel,
           chatId: merged.chatId,
@@ -767,6 +774,8 @@ async function processResolved(
           contentType: outboundMedia && outboundMedia.length > 0 ? 'image' : 'text',
           media: outboundMedia && outboundMedia.length > 0 ? outboundMedia : undefined,
           replyToMessageId: merged.id,
+          sessionKey,
+          dedupeKey,
           metadata: {
             agentSlug,
             sessionKey,

@@ -43,6 +43,14 @@ export interface OutboundMessage {
   media?: MediaFile[];
   replyToMessageId?: string;
   metadata?: Record<string, any>;
+  // Reply Gateway Contract (P2). Deterministic idempotency key for a bot reply
+  // (`reply:<sessionKey>:<batchId>`). Set ONLY on gated bot-reply paths (via
+  // emitReply); manual/human outbound leaves it undefined → adapter sends as
+  // before (no claim). When present, the channel adapter routes the send through
+  // deliverReplyOnce so a duplicate emit (listener leak / restart overlap) is a
+  // 23505 → skip. `sessionKey` carried for logging/trace.
+  dedupeKey?: string | null;
+  sessionKey?: string;
 }
 
 export interface MediaFile {
