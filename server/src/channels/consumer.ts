@@ -42,6 +42,86 @@ const CONFIG_CACHE_TTL = 30_000; // 30 seconds
 // blocking anything (dead code — never enforced).
 const sessionInFlight = new Map<string, Promise<void>>();
 
+// ── Quiet-window + coalesce (2026-07-10 fix, Codex-reviewed) ──
+// Root cause of the RESIDUAL double-reply bug: customers type in bursts (several
+// messages 9-29s apart). The 5s debounce didn't merge them, and the
+// sessionInFlight lock only SERIALIZED runs (not coalesced) → each message got
+// its own reply + a 2-3min backlog where the bot answered already-superseded
+// messages. Fix: wait until the customer stops typing for QUIET_WINDOW_MS, then
+// DRAIN every still-pending message for the thread from the DB, COALESCE into a
+// single prompt, and reply ONCE. See
+// docs/plans_reports/2026-07-10-CSKH-DOUBLE-REPLY-QUIETWINDOW-COALESCE-TYPING_ARCHITECTURE_PLAN.md
+const quietTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; ctx: BatchCtx }>();
+const QUIET_WINDOW_MS = 12_000;   // wait for customer to stop typing before replying
+const TYPING_TTL_MS = 45_000;     // typing indicator lifespan (covers quiet-window + agent latency)
+const MAX_COALESCE = 20;          // cap messages merged into one reply
+
+// Routing context captured when a quiet-window is scheduled; the timer callback
+// re-derives everything else from the DB-claimed rows.
+interface BatchCtx {
+  channel: string;
+  channelType: InboundMessage['channelType'];
+  threadId: string;
+  senderId: string;
+  senderName?: string;
+  peerKind: InboundMessage['peerKind'];
+  groupName?: string;
+  channelConfig: ChannelInstanceRow;
+}
+
+/** Mark the agent as "typing" for a session so customer clients can show an indicator. */
+async function setAgentTyping(sessionKey: string): Promise<void> {
+  const until = new Date(Date.now() + TYPING_TTL_MS).toISOString();
+  try {
+    // metadata jsonb merge is shallow at the DB level; we only touch typing_until.
+    const { data } = await supabase
+      .from('channel_sessions')
+      .select('metadata')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+    const metadata = { ...((data?.metadata as Record<string, any>) || {}), typing_until: until };
+    await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
+  } catch { /* best-effort — typing is cosmetic */ }
+}
+
+/** Clear the typing indicator for a session. */
+async function clearAgentTyping(sessionKey: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('channel_sessions')
+      .select('metadata')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+    if (!data) return;
+    const metadata = { ...((data.metadata as Record<string, any>) || {}) };
+    delete metadata.typing_until;
+    await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Schedule (or extend) the quiet-window for a session. Each new message resets
+ * the timer; when the customer stops sending for QUIET_WINDOW_MS the timer fires
+ * and runs the coalesced batch. INVARIANT (Codex): every source (realtime,
+ * startup reschedule) only ever CREATES/EXTENDS a timer — the real processing
+ * authority lives solely in the bounded atomic claim inside runSessionBatch, so
+ * a double-schedule can never produce a double reply.
+ */
+function scheduleQuietWindow(sessionKey: string, ctx: BatchCtx, delayMs: number = QUIET_WINDOW_MS): void {
+  const existing = quietTimers.get(sessionKey);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    quietTimers.delete(sessionKey);   // delete BEFORE await so later messages create a fresh timer
+    runSessionBatch(sessionKey, ctx).catch((err) => {
+      console.error(`[Consumer] runSessionBatch error for ${sessionKey}:`, err?.message || err);
+    });
+  }, delayMs);
+  quietTimers.set(sessionKey, { timer, ctx });
+  if (quietTimers.size > 5000) {
+    console.warn(`[Consumer] quietTimers size unexpectedly large: ${quietTimers.size}`);
+  }
+}
+
 /**
  * Start the consumer: listen for inbound messages on the bus and process them.
  */
@@ -73,27 +153,74 @@ export function startConsumer(): void {
 
   console.log('[Consumer] Started — listening for inbound messages');
 
-  // On startup: mark old stuck pending messages as skipped (DON'T reprocess — would re-send to customers)
+  // On startup: RESCHEDULE unanswered customer messages (Codex R#3 — restart-safety).
+  // The quiet-window timers live in memory, so a restart between a message arriving
+  // and its window firing would leave the row 'pending' with no realtime event to
+  // re-trigger it → the customer never gets a reply. So we scan every still-pending
+  // customer inbound (regardless of age) and reschedule a short quiet-window per
+  // thread; the bounded atomic claim inside runSessionBatch dedupes against any
+  // concurrent realtime schedule. We only STALE-SKIP rows genuinely stuck in
+  // 'processing' from an agent that died mid-run (>1h) — never fresh customer
+  // inbound. (Replaces the old cleanup that marked ALL pending >5min as stale,
+  // which silently swallowed unanswered customer questions.)
   setTimeout(async () => {
     try {
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      // (a) Reschedule unanswered customer inbound.
+      const { data: pend } = await supabase
+        .from('channel_pending_messages')
+        .select('channel_name, thread_id, from_uid, sender_name, peer_kind, metadata')
+        .eq('status', 'pending')
+        .is('handled_by', null)
+        .order('created_at', { ascending: true })
+        .limit(500);
+
+      if (pend && pend.length > 0) {
+        // One quiet-window per (channel, thread) — dedupe groups.
+        const seen = new Set<string>();
+        let scheduled = 0;
+        for (const row of pend as any[]) {
+          const ch = row.channel_name as string;
+          const tid = row.thread_id as string;
+          if (!ch || !tid) continue;
+          const isGroup = row.peer_kind === 'group';
+          const sessionKey = isGroup ? `${ch}:${tid}:group` : `${ch}:${tid}:${row.from_uid}`;
+          if (seen.has(sessionKey)) continue;
+          seen.add(sessionKey);
+          const cfg = await getChannelConfig(ch);
+          if (!cfg || !cfg.enabled) continue;
+          scheduleQuietWindow(sessionKey, {
+            channel: ch,
+            channelType: 'zalo_personal', // re-resolved from row inside runSessionBatch is not needed; routing uses channel
+            threadId: tid,
+            senderId: row.from_uid,
+            senderName: row.sender_name || undefined,
+            peerKind: (row.peer_kind || 'direct') as InboundMessage['peerKind'],
+            groupName: (row.metadata as any)?.groupName,
+            channelConfig: cfg,
+          }, 3_000);
+          scheduled++;
+          if (scheduled >= 200) break; // safety cap against a thundering herd
+        }
+        if (scheduled > 0) console.log(`[Consumer] Startup: rescheduled ${scheduled} unanswered thread(s)`);
+      }
+
+      // (b) Stale-skip only rows stuck in 'processing' from a dead agent run (>1h).
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const { data: stuck } = await supabase
         .from('channel_pending_messages')
         .select('id')
-        .eq('status', 'pending')
-        .is('handled_by', null)
-        .lt('created_at', fiveMinAgo)
+        .eq('status', 'processing')
+        .lt('created_at', oneHourAgo)
         .limit(100);
-
       if (stuck && stuck.length > 0) {
-        console.log(`[Consumer] Startup cleanup: marking ${stuck.length} old stuck messages as skipped`);
+        console.log(`[Consumer] Startup: marking ${stuck.length} stuck 'processing' rows as stale`);
         await supabase
           .from('channel_pending_messages')
           .update({ status: 'handled', handled_by: 'consumer', skip_reason: 'stale_on_restart' })
-          .in('id', stuck.map(s => s.id));
+          .in('id', stuck.map((s: any) => s.id));
       }
     } catch (err: any) {
-      console.error('[Consumer] Startup cleanup failed:', err.message);
+      console.error('[Consumer] Startup reschedule failed:', err.message);
     }
   }, 10_000);
 }
@@ -165,39 +292,163 @@ async function processMessage(
     return;
   }
 
-  // ── Step 5: Debounce (merge rapid messages) ──
-  const merged = await debouncer.add(msg);
-  if (!merged) {
-    // Message absorbed into a pending batch — will be processed when flushed
-    console.log(`${logPrefix} Message buffered for debounce`);
-    return;
+  // ── Step 5 (2026-07-10): quiet-window + coalesce ──
+  // Instead of replying to THIS message immediately, save group history, show a
+  // typing indicator, and schedule a per-session quiet-window. When the customer
+  // stops sending for QUIET_WINDOW_MS, runSessionBatch() drains + coalesces every
+  // still-pending message for the thread and replies ONCE. Fix for the residual
+  // burst-typing double-reply. Steps 1-4 above still run per message (spam gates).
+  const isGroupMsg = msg.peerKind === 'group';
+  const scheduleKey = isGroupMsg
+    ? `${msg.channel}:${msg.chatId}:group`
+    : `${msg.channel}:${msg.chatId}:${msg.senderId}`;
+
+  // Group messages are always saved to the group transcript (independent of reply).
+  if (isGroupMsg) {
+    await session.saveGroupMessage(
+      msg.channel, msg.chatId, msg.senderId, msg.senderName, msg.content, msg.timestamp,
+    ).catch(() => {});
   }
 
+  // Typing indicator up-front so the quiet-window wait doesn't feel dead.
+  setAgentTyping(scheduleKey).catch(() => {});
+
+  scheduleQuietWindow(scheduleKey, {
+    channel: msg.channel,
+    channelType: msg.channelType,
+    threadId: msg.chatId,
+    senderId: msg.senderId,
+    senderName: msg.senderName,
+    peerKind: msg.peerKind,
+    groupName: msg.metadata?.groupName,
+    channelConfig,
+  });
+  console.log(`${logPrefix} queued (quiet-window ${QUIET_WINDOW_MS}ms) → ${scheduleKey}`);
+}
+
+/**
+ * Fired when a session's quiet-window settles: serialize behind any in-flight run,
+ * then drain + coalesce every still-pending message for the thread and reply once.
+ */
+async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void> {
+  // Serialize per session (a prior run may still be mid-agent).
+  const priorRun = sessionInFlight.get(sessionKey) || Promise.resolve();
+  let releaseLock: () => void = () => {};
+  const thisRun = new Promise<void>((resolve) => { releaseLock = resolve; });
+  sessionInFlight.set(sessionKey, thisRun);
+  await priorRun;
+
+  try {
+    // Owner may have taken over while we waited.
+    if (await isSessionPaused(sessionKey)) {
+      console.log(`[Consumer:${ctx.channel}] ⏸ ${sessionKey} bot_paused — skipping batch`);
+      await clearAgentTyping(sessionKey);
+      return;
+    }
+
+    const isGroup = ctx.peerKind === 'group';
+    const nowIso = new Date().toISOString();
+
+    // ── DRAIN (bounded): every still-pending message for this thread ──
+    let drainQ = supabase
+      .from('channel_pending_messages')
+      .select('id, body, media, sender_name, from_uid, created_at')
+      .eq('channel_name', ctx.channel)
+      .eq('thread_id', ctx.threadId)
+      .eq('status', 'pending')
+      .is('handled_by', null)
+      .lte('created_at', nowIso)          // snapshot — don't swallow later arrivals
+      .order('created_at', { ascending: true })
+      .limit(MAX_COALESCE);
+    if (!isGroup) drainQ = drainQ.eq('from_uid', ctx.senderId);  // DM: don't merge two customers on one thread
+    const { data: drained } = await drainQ;
+    if (!drained || drained.length === 0) { await clearAgentTyping(sessionKey); return; }
+    const drainedIds = (drained as any[]).map((r) => r.id);
+
+    // ── CLAIM (atomic, bounded to drained ids): only rows still pending ──
+    const { data: claimed } = await supabase
+      .from('channel_pending_messages')
+      .update({ status: 'processing', agent_slug: ctx.channelConfig.agent_slug ?? null, session_key: sessionKey })
+      .in('id', drainedIds)
+      .eq('status', 'pending')
+      .is('handled_by', null)
+      .select('id, body, media, sender_name, from_uid, created_at');
+    if (!claimed || claimed.length === 0) { await clearAgentTyping(sessionKey); return; }
+
+    const rows = [...(claimed as any[])].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+    const claimedIds = rows.map((r) => r.id);
+
+    // ── COALESCE: merge content (group keeps sender prefixes) + media ──
+    const coalescedContent = rows
+      .map((r) => {
+        const body = (r.body || '').trim();
+        return isGroup && r.sender_name ? `${r.sender_name}: ${body}` : body;
+      })
+      .filter(Boolean)
+      .join('\n');
+    const coalescedMedia = rows.flatMap((r) => (Array.isArray(r.media) ? (r.media as string[]) : []));
+    const last = rows[rows.length - 1];
+    const channelType = (ctx.channelConfig.channel_type || ctx.channelType) as InboundMessage['channelType'];
+
+    const merged: InboundMessage = {
+      id: last.id,
+      channel: ctx.channel,
+      channelType,
+      chatId: ctx.threadId,
+      senderId: ctx.senderId,
+      senderName: ctx.senderName || last.sender_name || ctx.senderId,
+      content: coalescedContent,
+      contentType: coalescedMedia.length > 0 ? 'image' : 'text',
+      media: coalescedMedia.length > 0
+        ? coalescedMedia.map((u) => ({ url: u, mimeType: 'application/octet-stream' }))
+        : undefined,
+      peerKind: ctx.peerKind,
+      metadata: ctx.groupName ? { groupName: ctx.groupName } : {},
+      timestamp: new Date(last.created_at),
+    };
+
+    console.log(`[Consumer:${ctx.channel}] ${sessionKey} coalesced ${claimedIds.length} msg(s) → 1 reply`);
+    await processResolved(merged, claimedIds, ctx.channelConfig);
+    await clearAgentTyping(sessionKey);
+  } catch (err: any) {
+    console.error(`[Consumer] runSessionBatch(${sessionKey}) error:`, err?.message || err);
+    await clearAgentTyping(sessionKey).catch(() => {});
+  } finally {
+    releaseLock();
+    if (sessionInFlight.get(sessionKey) === thisRun) sessionInFlight.delete(sessionKey);
+  }
+}
+
+/**
+ * Heavy pipeline for a resolved (coalesced) message: CRM resolve → agent routing →
+ * session context → runAgent → publish → mark the whole coalesced batch handled.
+ * `claimedIds` are the pending rows this reply answers (already status='processing').
+ */
+async function processResolved(
+  merged: InboundMessage,
+  claimedIds: string[],
+  channelConfig: ChannelInstanceRow,
+): Promise<void> {
+  const peerLabel = merged.peerKind === 'group' ? 'GROUP' : merged.peerKind === 'comment' ? 'COMMENT' : 'DM';
+  const logPrefix = `[Consumer:${merged.channel}] ${peerLabel} "${merged.senderName}"→${merged.chatId}`;
+
+  // Mark EVERY coalesced pending row with one status/handler (replaces per-pendingId markHandled).
+  const markBatch = async (handledBy: string, status: 'handled' | 'skipped', reason?: string): Promise<void> => {
+    if (claimedIds.length === 0) return;
+    const payload: Record<string, any> = { status, handled_by: handledBy, handled_at: new Date().toISOString() };
+    if (reason) payload.skip_reason = reason;
+    try { await supabase.from('channel_pending_messages').update(payload).in('id', claimedIds); } catch { /* best-effort */ }
+  };
+
   // ── Step 6: Group @mention gating ──
-  // A group message without an @mention must NOT trigger an auto-reply, but it
-  // MUST still surface in the inbox as part of the SINGLE group thread. Returning
-  // early here (the old behavior) skipped session creation entirely → the group
-  // either fragmented per-sender (when peer_kind was mis-set to 'direct') or
-  // vanished from the inbox. So we set a suppress flag and let the pipeline
-  // continue to session creation; auto-reply is gated off at Step 9 below.
   let suppressAutoReply = false;
   if (merged.peerKind === 'group' && channelConfig.require_mention) {
     if (!hasMention(merged.content, channelConfig)) {
       console.log(`${logPrefix} Group message without @mention → inbox only, no auto-reply`);
       suppressAutoReply = true;
     }
-  }
-
-  // For group messages, save to group history regardless
-  if (merged.peerKind === 'group') {
-    await session.saveGroupMessage(
-      merged.channel,
-      merged.chatId,
-      merged.senderId,
-      merged.senderName,
-      merged.content,
-      merged.timestamp
-    );
   }
 
   // ── Step 6b: CRM — Resolve customer + cancel pending summary ──
@@ -262,7 +513,7 @@ async function processMessage(
   if (!agentSlug) {
     const skipReason = (merged as any)._skipReason || 'no_agent_assigned';
     console.log(`${logPrefix} Skipped AI routing: ${skipReason} - Saving to Inbox only`);
-    if (pendingId) await bus.markHandled(pendingId, 'consumer', 'skipped', skipReason);
+    await markBatch('consumer', 'skipped', skipReason);
     // Don't return here! We still need to save the message to session history for human inbox
   }
 
@@ -366,8 +617,8 @@ async function processMessage(
       try { await supabase.from('channel_sessions').update({ customer_id: customerId }).eq('session_key', sessionKey); } catch {}
     }
 
-    if (pendingId) {
-      try { await supabase.from('channel_pending_messages').update({ customer_id: customerId }).eq('id', pendingId); } catch {}
+    if (claimedIds.length > 0) {
+      try { await supabase.from('channel_pending_messages').update({ customer_id: customerId }).in('id', claimedIds); } catch {}
     }
   }
 
@@ -410,67 +661,27 @@ async function processMessage(
 
   // ── Step 9: Route to agent (Claude CLI) ──
   if (agentSlug) {
-    // Escalation gate: if a previous turn fired [[ESCALATE: ...]], the session
-    // is paused. Skip auto-reply entirely — a human must un-pause from the UI.
-    const paused = await isSessionPaused(sessionKey);
-    if (paused) {
-      console.warn(`${logPrefix} ⏸ Session is bot_paused (prior escalation) — skipping auto-reply`);
-      if (pendingId) {
-        await bus.markHandled(pendingId, 'human', 'skipped', 'escalated_bot_paused');
-      }
-      return;
-    }
-
-    // ── Serialize agent runs per session (2026-07-09 fix, Codex-reviewed) ──
-    // Wait for any earlier in-flight run on this SAME sessionKey to finish
-    // before starting this one. Without this, 2 customer messages spaced
-    // beyond the 5s debounce window but inside 1 agent run's real latency
-    // (18-100s+) each triggered an independent runAgent() call reading the
-    // same stale history — producing overlapping replies + duplicate CRM
-    // side-effects (2 tickets for 1 complaint).
-    const priorRun = sessionInFlight.get(sessionKey) || Promise.resolve();
-    let releaseLock: () => void = () => {};
-    const thisRun = new Promise<void>((resolve) => { releaseLock = resolve; });
-    sessionInFlight.set(sessionKey, thisRun);
-    await priorRun;
-
+    // NOTE: this runs INSIDE runSessionBatch's per-session lock, and the batch's
+    // pending rows are already status='processing' (claimed atomically). So there
+    // is NO re-lock and NO re-claim here — that would deadlock on our own lock.
+    // `history` (fetched at Step 8, inside the lock) already reflects the prior
+    // run's saved reply, so it is fresh.
     try {
-      // Re-check pause: the owner may have taken over while this message was
-      // queued behind the prior run.
+      // Escalation / takeover gate: owner may have paused during the quiet-window.
       if (await isSessionPaused(sessionKey)) {
-        console.warn(`${logPrefix} ⏸ Session bot_paused while queued — skipping auto-reply`);
-        if (pendingId) await bus.markHandled(pendingId, 'human', 'skipped', 'escalated_bot_paused');
+        console.warn(`${logPrefix} ⏸ Session bot_paused before agent run — skipping auto-reply`);
+        await markBatch('human', 'skipped', 'escalated_bot_paused');
         return;
       }
 
-      // Re-fetch history: the prior queued run (if any) has just finished and
-      // saved its reply via router.saveHistory() — this run's agent call must
-      // see it, not the stale snapshot captured at Step 8.
-      const freshHistory = merged.peerKind === 'group'
-        ? [
-            ...(await session.getGroupHistory(merged.channel, merged.chatId, Math.min(historyLimit, 20)))
-              .map(g => ({ role: 'system' as const, content: `[${g.sender_name}]: ${g.content}`, timestamp: g.ts })),
-            ...(await session.getHistory(sessionKey, historyLimit)),
-          ]
-        : await session.getHistory(sessionKey, historyLimit);
-
       console.log(`${logPrefix} → Routing to agent: ${agentSlug}${customerId ? ` (CRM: ${customerId.substring(0, 8)})` : ''} | msg: "${merged.content.substring(0, 60)}"`);
-
-      // Mark as processing
-      if (pendingId) {
-        await supabase.from('channel_pending_messages').update({
-          status: 'processing',
-          agent_slug: agentSlug,
-          session_key: sessionKey,
-        }).eq('id', pendingId);
-      }
 
       const replyText = await router.runAgent(
         agentSlug,
         sessionKey,
         enrichedMessage,
         merged,
-        freshHistory
+        history
       );
 
       // NOTE: assistant reply is persisted to channel_sessions.history inside
@@ -484,18 +695,18 @@ async function processMessage(
       const hasChunks = Array.isArray((merged as any)._messageChunks) && (merged as any)._messageChunks.length > 0;
       if ((!replyText || !replyText.trim()) && !hasChunks) {
         console.log(`${logPrefix} Agent produced empty reply — staying silent (no fallback), left in inbox`);
-        if (pendingId) await bus.markHandled(pendingId, 'agent', 'skipped', 'agent_silent');
+        await markBatch('agent', 'skipped', 'agent_silent');
         if (customerId && merged.peerKind !== 'group') aiSummarizer.scheduleSummary(sessionKey, customerId);
         return;
       }
 
       // ── P2 re-check pause (race-guard) ──
-      // Pause được kiểm ở đầu handler (line ~415), nhưng runAgent (LLM) mất ~phút.
-      // Owner có thể bấm "Dừng Bot"/takeover GIỮA CHỪNG → re-check NGAY TRƯỚC publish
-      // để hủy reply in-flight, tránh bot trả lời chồng sau khi đã takeover.
+      // runAgent (LLM) mất ~phút. Owner có thể bấm "Dừng Bot"/takeover GIỮA CHỪNG
+      // → re-check NGAY TRƯỚC publish để hủy reply in-flight, tránh bot trả lời
+      // chồng sau khi đã takeover.
       if (await isSessionPaused(sessionKey)) {
         console.warn(`${logPrefix} ⏸ Session bot_paused mid-flight — dropping generated reply (takeover during agent run)`);
-        if (pendingId) await bus.markHandled(pendingId, 'human', 'skipped', 'paused_mid_flight');
+        await markBatch('human', 'skipped', 'paused_mid_flight');
         return;
       }
 
@@ -616,27 +827,20 @@ async function processMessage(
         });
       }
 
-      // ── Step 11: Update pending message status ──
-      if (pendingId) {
-        await bus.markHandled(pendingId, agentSlug, 'handled');
-      }
+      // ── Step 11: Update pending message status (whole coalesced batch) ──
+      await markBatch(agentSlug, 'handled');
 
       // ── KG: Fire-and-forget entity extraction from chat ──
       extractEntitiesAsync(merged.content, replyText, agentSlug);
 
       console.log(`${logPrefix} ✅ Reply sent via agent ${agentSlug} (${replyText.length} chars) | "${replyText.substring(0, 60)}"`);
     } finally {
-      releaseLock();
-      if (sessionInFlight.get(sessionKey) === thisRun) sessionInFlight.delete(sessionKey);
+      // per-session lock + timer cleanup happen in runSessionBatch (the caller).
     }
   } else {
-    // If no agent, just leave it as 'pending' for a human to read from the inbox
+    // No agent → leave for a human in the inbox (skipped, not handled by a bot).
     console.log(`${logPrefix} ✅ Saved to inbox (${suppressAutoReply ? 'group, no @mention' : 'no AI agent assigned'})`);
-    // Note: Do not mark pendingId as 'handled' so that humans can see it's waiting for them if needed,
-    // or you could mark it as 'skipped' so it doesn't get retried by the consumer!
-    if (pendingId) {
-      await bus.markHandled(pendingId, 'human', 'skipped', suppressAutoReply ? 'group_no_mention' : 'no_agent_assigned');
-    }
+    await markBatch('human', 'skipped', suppressAutoReply ? 'group_no_mention' : 'no_agent_assigned');
   }
 
   // Schedule AI summary after idle (5 min) - run for both AI-handled and Human-handled messages.
