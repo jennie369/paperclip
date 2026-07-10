@@ -8,16 +8,12 @@ import { ZaloSession, ZaloCredentials } from './protocol/message.js';
 import { supabase } from './supabase.js';
 import { bus } from '../bus.js';
 import type { OutboundMessage, MediaFile } from '../types.js';
+// SSOT resolve/download/isImage cho outbound media (dùng chung Zalo + CSKH). MEDIA_PROJECT_ROOT
+// giữ ở đây (buildOutboundMediaUrl + ALLOWED_MEDIA_ROOTS cần) — re-export từ media-util.
+import { MEDIA_PROJECT_ROOT, downloadMediaToTemp, isImageMedia } from '../media-util.js';
 import https from 'https';
-import http from 'http';
-import { writeFileSync, mkdtempSync, rmSync, existsSync, statSync } from 'fs';
-import { join as pathJoin, basename as pathBasename, extname as pathExtname, isAbsolute as pathIsAbsolute, resolve as pathResolve, relative as pathRelative } from 'path';
-import { tmpdir } from 'os';
-
-// Project root used to resolve relative media paths from agents/*/media-library.json.
-// Matches router.ts PROJECT_ROOT so relative paths like "memory/agents/shared/..."
-// resolve to the crypto-pattern-scanner tree where real assets live.
-const MEDIA_PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
+import { rmSync, existsSync, statSync } from 'fs';
+import { join as pathJoin, basename as pathBasename, isAbsolute as pathIsAbsolute, resolve as pathResolve, relative as pathRelative } from 'path';
 
 // Zalo hard limit on file/image uploads (enforced by tt-chatN-wpa.chat.zalo.me).
 // We check client-side so we can log a clear warning instead of the opaque
@@ -82,78 +78,6 @@ function sendTelegramAlert(text: string): void {
   req.on('error', (e) => console.error('[TelegramAlert] Error:', e.message));
   req.write(body);
   req.end();
-}
-
-/**
- * Download a URL to a temp file and return the local path.
- * Provider-agnostic: used by the outbound handler to materialize media items
- * that only have a remote `url` (no local `path`) before calling sendImage/sendFile.
- *
- * Returns `null` on any failure (network, 4xx/5xx, etc.) so the caller can
- * fall back to URL-append-in-text without crashing.
- */
-async function downloadMediaToTemp(
-  url: string,
-  suggestedFilename?: string,
-): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const tmpDir = mkdtempSync(pathJoin(tmpdir(), 'paperclip-media-'));
-      const urlPath = (() => { try { return new URL(url).pathname; } catch { return url; } })();
-      const filename = suggestedFilename || pathBasename(urlPath) || `media${pathExtname(urlPath) || '.bin'}`;
-      const destPath = pathJoin(tmpDir, filename);
-
-      const client = url.startsWith('https:') ? https : http;
-      const req = client.get(url, (res) => {
-        // Follow single redirect
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          downloadMediaToTemp(res.headers.location, suggestedFilename).then(resolve);
-          res.resume();
-          return;
-        }
-        if (res.statusCode !== 200) {
-          console.warn(`[ZaloMedia] Download ${url} failed: HTTP ${res.statusCode}`);
-          res.resume();
-          resolve(null);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          try {
-            writeFileSync(destPath, Buffer.concat(chunks));
-            resolve(destPath);
-          } catch (err: any) {
-            console.warn(`[ZaloMedia] Write ${destPath} failed: ${err.message}`);
-            resolve(null);
-          }
-        });
-        res.on('error', (err) => {
-          console.warn(`[ZaloMedia] Stream ${url} error: ${err.message}`);
-          resolve(null);
-        });
-      });
-      req.on('error', (err) => {
-        console.warn(`[ZaloMedia] Request ${url} error: ${err.message}`);
-        resolve(null);
-      });
-      req.setTimeout(30_000, () => {
-        req.destroy(new Error('timeout'));
-      });
-    } catch (err: any) {
-      console.warn(`[ZaloMedia] downloadMediaToTemp threw: ${err.message}`);
-      resolve(null);
-    }
-  });
-}
-
-/**
- * Classify a media item as image vs file by mimeType.
- * Zalo sendImage uses a different endpoint than sendFile so we need to pick
- * the right one — only `image/*` mime types go through sendImage.
- */
-function isImageMedia(media: MediaFile): boolean {
-  return (media.mimeType || '').toLowerCase().startsWith('image/');
 }
 
 export class ZaloPersonalChannel {
