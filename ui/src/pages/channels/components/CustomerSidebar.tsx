@@ -434,6 +434,8 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         : Promise.resolve(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      // Panel Gemral/khối đọc từ full record → phải refetch để hiện data vừa sync.
+      if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
     },
   });
 
@@ -526,35 +528,13 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
     },
   });
 
-  const gemral = customer?.gemral_data as Record<string, any> | null | undefined;
+  // Đọc từ full record (getCustomer) — list /conversations KHÔNG select gemral_data → customer.gemral_data luôn undefined.
+  const gemral = (f.gemral_data ?? customer?.gemral_data) as Record<string, any> | null | undefined;
 
-  // Recent orders (last 3)
-  const { data: recentOrders = [] } = useQuery<RecentOrder[]>({
-    queryKey: ["customer-orders", customer?.id],
-    queryFn: async () => {
-      if (!customer?.id) return [];
-      const res = await fetch(`/api/channels/crm/customers/${customer.id}/orders?limit=3`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return Array.isArray(data) ? data : data?.orders ?? [];
-    },
-    enabled: !!customer?.id,
-    staleTime: 30_000,
-  });
-
-  // Recent tickets (last 3)
-  const { data: recentTickets = [] } = useQuery<RecentTicket[]>({
-    queryKey: ["customer-tickets", customer?.id],
-    queryFn: async () => {
-      if (!customer?.id) return [];
-      const res = await fetch(`/api/channels/crm/customers/${customer.id}/tickets?limit=3`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return Array.isArray(data) ? data : data?.tickets ?? [];
-    },
-    enabled: !!customer?.id,
-    staleTime: 30_000,
-  });
+  // Recent orders/tickets (last 3) — dùng THẲNG orders/tickets từ getCustomer (f).
+  // (Endpoint /customers/:id/orders + /tickets KHÔNG tồn tại → fetch cũ luôn 404 → []).
+  const recentOrders: RecentOrder[] = ((f.orders as RecentOrder[]) || []).slice(0, 3);
+  const recentTickets: RecentTicket[] = ((f.tickets as RecentTicket[]) || []).slice(0, 3);
 
   return (
     <div className="p-3 space-y-4">
@@ -864,28 +844,39 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
             </button>
           </div>
           <div className="space-y-1 text-xs">
-            {gemral.tier && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Tier</span>
-                <span className="font-medium uppercase">{gemral.tier}</span>
-              </div>
-            )}
-            {gemral.scanner_tier && (
+            {(() => {
+              // Shape canonical gemral_data (gemral-bridge.ts): course_tier/chatbot_tier/total_courses/affiliate_tier
+              // — KHÔNG phải tier/enrollments/ctv_tier (không tồn tại → khối trống dù đã sync).
+              const courseTier = String(gemral.course_tier || gemral.chatbot_tier || "").toUpperCase();
+              return courseTier && courseTier !== "FREE" ? (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Gói</span>
+                  <span className="font-medium uppercase">{courseTier}</span>
+                </div>
+              ) : null;
+            })()}
+            {gemral.scanner_tier && String(gemral.scanner_tier).toUpperCase() !== "FREE" && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Scanner</span>
-                <span>{gemral.scanner_tier}</span>
+                <span className="uppercase">{gemral.scanner_tier}</span>
               </div>
             )}
-            {gemral.enrollments && (
+            {Number(gemral.total_courses) > 0 && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Khóa học</span>
-                <span>{gemral.enrollments} đăng ký</span>
+                <span>{gemral.total_courses} đăng ký</span>
               </div>
             )}
-            {gemral.ctv_tier && (
+            {Number(gemral.shopify_orders_count) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Đã mua (Shopify)</span>
+                <span>{gemral.shopify_orders_count} đơn</span>
+              </div>
+            )}
+            {gemral.is_affiliate && gemral.affiliate_tier && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">CTV</span>
-                <span className="capitalize">{gemral.ctv_tier}</span>
+                <span className="capitalize">{gemral.affiliate_tier}</span>
               </div>
             )}
           </div>

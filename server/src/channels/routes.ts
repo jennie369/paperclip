@@ -113,7 +113,7 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
   // Fetch inbound messages
   const { data: inbound } = await supabase
     .from('channel_pending_messages')
-    .select('id, channel_name, thread_id, thread_type, from_uid, sender_name, message_id, body, content_type, status, ts, created_at, session_key, agent_slug')
+    .select('id, channel_name, thread_id, thread_type, from_uid, sender_name, message_id, body, content_type, media, status, ts, created_at, session_key, agent_slug')
     .eq('channel_name', channelName)
     .eq('thread_id', chatId)
     .order('created_at', { ascending: false })

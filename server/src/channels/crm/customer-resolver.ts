@@ -50,8 +50,9 @@ export class CustomerResolver {
         })
         .eq('id', existing.id);
 
-      // Auto-match Gemral if not linked yet (async, non-blocking)
-      this.tryAutoMatchGemral(existing.id).catch(() => {});
+      // Auto-match Gemral if not linked yet (async, non-blocking) — truyền senderId+channelName
+      // để khách CSKH (senderId=profiles.id) tự link qua uid dù chưa có phone/email.
+      this.tryAutoMatchGemral(existing.id, senderId, channelName).catch(() => {});
 
       return { customerId: existing.id, isNew: false };
     }
@@ -103,8 +104,8 @@ export class CustomerResolver {
 
     console.log(`[CustomerResolver] Khách mới: ${senderName} (${channelType}) → ${created.id}`);
 
-    // 4. Try auto-match Gemral (async, non-blocking)
-    this.tryAutoMatchGemral(created.id).catch(() => {});
+    // 4. Try auto-match Gemral (async, non-blocking) — CSKH khách mới tự link qua uid
+    this.tryAutoMatchGemral(created.id, senderId, channelName).catch(() => {});
 
     return { customerId: created.id, isNew: true };
   }
@@ -113,7 +114,7 @@ export class CustomerResolver {
    * Auto-match Gemral account for a CRM customer.
    * Called on new customers and on existing customers without gemral_user_id (re-sync hourly).
    */
-  async tryAutoMatchGemral(customerId: string): Promise<void> {
+  async tryAutoMatchGemral(customerId: string, senderId?: string, channelName?: string): Promise<void> {
     try {
       const { data: cust } = await supabase
         .from('crm_customers')
@@ -124,6 +125,19 @@ export class CustomerResolver {
       if (!cust) return;
 
       if (!cust.gemral_user_id) {
+        // Kênh CSKH in-app: senderId = thread_id = Gemral profiles.id → link THẲNG qua uid
+        // (khách app thường không có phone/email → matchGemralUser sẽ trượt). Verify uid tồn tại
+        // trong profiles trước khi enrich (tránh ghi gemral_user_id rác). CHỈ áp 'cskh-internal'
+        // (zalo/fb external_id KHÔNG phải profiles.id). enrichWithGemralData tự set gemral_user_id + gemral_data.
+        if (channelName === 'cskh-internal' && senderId) {
+          const { data: p } = await supabase.from('profiles').select('id').eq('id', senderId).maybeSingle();
+          if (p?.id) {
+            await enrichWithGemralData(customerId, p.id);
+            console.log(`[CustomerResolver] Linked Gemral via CSKH uid: ${customerId} → ${p.id}`);
+            await this.dedupMerge(customerId);
+            return;
+          }
+        }
         // No link yet — try to match by phone/email
         const gemralId = await matchGemralUser(cust.phone, cust.email);
         if (gemralId) {

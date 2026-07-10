@@ -456,16 +456,26 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                           : "bg-muted text-foreground rounded-bl-sm border border-border/40"
                       }`}
                     >
-                      {/* Image attachments from media array */}
-                      {msg.media && Array.isArray(msg.media) && msg.media.length > 0 && (
+                      {/* Image attachments from media array — CHỈ render <img> cho tin ẢNH
+                          (content_type='image'); tin TỆP đi qua MessageRenderer FileMsg (tránh <img> vỡ). */}
+                      {msg.content_type === "image" && Array.isArray(msg.media) && msg.media.length > 0 && (
                         <div className="mb-1.5 space-y-1">
                           {msg.media.map((url: string, j: number) => (
                             <img
                               key={j}
                               src={url}
-                              alt=""
+                              alt="Hình ảnh"
                               className="max-w-[280px] rounded-lg cursor-pointer hover:opacity-90"
+                              loading="lazy"
                               onClick={() => window.open(url, "_blank")}
+                              onError={(e) => {
+                                const el = e.currentTarget;
+                                el.style.display = "none";
+                                el.parentElement?.insertAdjacentHTML(
+                                  "beforeend",
+                                  '<div class="flex items-center gap-2 text-muted-foreground text-[13px] py-1"><span>📷</span><span>Không thể tải hình ảnh</span></div>',
+                                );
+                              }}
                             />
                           ))}
                         </div>
