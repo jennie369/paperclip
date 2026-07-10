@@ -1732,16 +1732,56 @@ function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaF
   return picked;
 }
 
+/**
+ * Strip INTERNAL agent markers (e.g. `[[CALL: crm_update(...)]]`) from a reply while
+ * PRESERVING the two markers the pipeline consumes (`[[SEND_MEDIA:...]]`, `[[MSG_BREAK]]`)
+ * AND genuine customer double-brackets (`[[bao nhiêu]]`, `[[3,4]]`). Must run on the
+ * WHOLE text BEFORE the MSG_BREAK split so a marker can't be severed across chunks and
+ * leak its tail — that severing was the root cause of the `..., lifecycle_stage="consideration")]]`
+ * leak (2026-07-10 fix, Codex-reviewed). NOT a blanket `[[...]]` strip.
+ */
+function stripInternalMarkers(text: string): string {
+  return text.replace(/\[\[[\s\S]*?\]\]/g, (m) => {
+    if (/\bSEND_MEDIA\b/i.test(m) || /\bMSG_BREAK\b/i.test(m)) return m; // preserve real markers
+    const markerLike =
+      /\[\[\s*(CALL|FUNCTION|TOOL|TICKET|QUERY|API|MCP[_A-Z]*|SET_STAGE|CRM_UPDATE|UPDATE|ESCALATE)\b/i.test(m) ||
+      /\[\[\s*[A-Z_]{3,}\s*:/.test(m) ||          // uppercase keyword + colon (invented markers)
+      /[a-z_]+\s*=\s*"[^"]*"/i.test(m);           // key="value" args (CALL-style)
+    return markerLike ? '' : m;                    // keep genuine customer [[...]]
+  });
+}
+
+/**
+ * Defensive cleanup for an ORPHANED marker fragment left when a marker was severed
+ * before this ran (e.g. a leading `..., key="val")]]` tail, or a trailing unclosed
+ * `[[CALL ...`). BOUNDED — only marker-like fragments; never a blanket `]]` / `[[`
+ * removal, so ordinary customer text (`mảng [1,2]`, a stray `]]`) survives.
+ */
+function stripOrphanMarkerFragments(text: string): string {
+  return text
+    // leading severed CALL-arg tail: `[…]key="value"[)]]]` at the start of a line/chunk
+    .replace(/^\s*[^\n[]*?[a-z_]+\s*=\s*"[^"]*"\s*\)?\s*\]\]/gim, '')
+    // trailing unclosed internal marker opener (not SEND_MEDIA/MSG_BREAK)
+    .replace(/\[\[\s*(?!SEND_MEDIA|MSG_BREAK)(?:CALL|FUNCTION|TOOL|TICKET|QUERY|API|MCP[_A-Z]*|[A-Z_]{3,}\s*:)[^\]]*$/g, '')
+    .trim();
+}
+
 async function parseMediaMarkers(
   text: string,
   lib: MediaLibrary | null,
 ): Promise<{ cleanedText: string; media: MediaFile[]; chunks: MessageChunk[] }> {
   if (!text) return { cleanedText: text, media: [], chunks: [{ text }] };
 
-  // ── Step 1: Split on [[MSG_BREAK]] BEFORE any other marker processing ──
-  // This must run first so that media markers stay with their chunk.
+  // ── Step 0 (2026-07-10): strip internal markers on the WHOLE text FIRST ──
+  // Removing full `[[CALL: ...]]` markers before the MSG_BREAK split prevents a
+  // marker from being severed across chunks (root cause of the leaked tail).
+  // Genuine customer [[...]] and the SEND_MEDIA/MSG_BREAK markers are preserved.
+  const preSplit = stripInternalMarkers(text);
+
+  // ── Step 1: Split on [[MSG_BREAK]] ──
+  // Media markers stay with their chunk.
   const MSG_BREAK_RE = /\[\[\s*MSG_BREAK\s*\]\]/gi;
-  const rawChunks = text.split(MSG_BREAK_RE);
+  const rawChunks = preSplit.split(MSG_BREAK_RE);
 
   const allMedia: MediaFile[] = [];
   const seenGlobal = new Set<string>();
@@ -1749,9 +1789,6 @@ async function parseMediaMarkers(
 
   // Match [[SEND_MEDIA: some_id]] (with or without spaces, case-insensitive)
   const SEND_MEDIA_RE = /\[\[\s*SEND_MEDIA\s*:\s*([a-zA-Z0-9_\-]+)\s*\]\]/gi;
-  // Anti-leak: strip ANY remaining [[...]] marker the LLM might have hallucinated
-  // (CALL, FUNCTION, TICKET, QUERY, etc.) so the user never sees raw syntax.
-  const HALLUCINATED_MARKER_RE = /\[\[[\s\S]*?\]\]/g;
 
   for (const rawChunk of rawChunks) {
     const chunkMedia: MediaFile[] = [];
@@ -1816,14 +1853,13 @@ async function parseMediaMarkers(
       chunkText = chunkText.replace(fullMatch, '');
     }
 
-    // Step 2b: scrub any leftover hallucinated markers
-    const leakedMarkers = chunkText.match(HALLUCINATED_MARKER_RE);
-    if (leakedMarkers && leakedMarkers.length > 0) {
-      console.warn(
-        `[Router/media] Stripped ${leakedMarkers.length} hallucinated markers: `
-          + leakedMarkers.map((m) => m.substring(0, 60)).join(' | '),
-      );
-      chunkText = chunkText.replace(HALLUCINATED_MARKER_RE, '');
+    // Step 2b: defensive orphan-fragment cleanup (BOUNDED — internal markers were
+    // already stripped whole at Step 0, so this only catches a severed tail that
+    // somehow survived; it never blanket-strips [[...]] or ]] from customer text).
+    const before = chunkText;
+    chunkText = stripOrphanMarkerFragments(chunkText);
+    if (before !== chunkText) {
+      console.warn(`[Router/media] Stripped orphan marker fragment from chunk`);
     }
 
     // Step 2c: tidy whitespace
