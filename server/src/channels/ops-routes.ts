@@ -48,14 +48,23 @@ function sanitizeEmailHtml(rawHtml: string): { clean: string; removed: number } 
   return { clean, removed: Math.max(0, before - clean.length) };
 }
 
-// Dedicated Realtime client — service_role key + realtime config
+// Dedicated Realtime client — service_role key + realtime config.
+// LAZY init: đọc key từ env lúc dùng lần đầu (sau khi dotenv nạp) + KHÔNG fallback hardcode.
 const REALTIME_URL = 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
-const REALTIME_KEY = process.env.GEMRAL_SUPABASE_SERVICE_KEY
-  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZmtiY256cW96emtvaHdiZ2JrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjE3NzUzNiwiZXhwIjoyMDc3NzUzNTM2fQ.pI9VjPhcl0sds1mcPsa5nnRv6ODDHbI29Q1ViMLoEQg';
-const realtimeClient = createClient(REALTIME_URL, REALTIME_KEY, {
-  realtime: { params: { eventsPerSecond: 5 } },
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+let _realtimeClient: ReturnType<typeof createClient> | null = null;
+function getRealtimeClient(): ReturnType<typeof createClient> {
+  if (!_realtimeClient) {
+    const key = process.env.GEMRAL_SUPABASE_SERVICE_KEY;
+    if (!key) {
+      throw new Error('[ops-routes] GEMRAL_SUPABASE_SERVICE_KEY chưa set — bắt buộc cho realtime client (service_role).');
+    }
+    _realtimeClient = createClient(REALTIME_URL, key, {
+      realtime: { params: { eventsPerSecond: 5 } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return _realtimeClient;
+}
 
 const router = Router();
 
@@ -135,7 +144,7 @@ async function handlePublishInsert(row: any) {
 function startPublishRealtime() {
   if (realtimeSub) return;
   try {
-    realtimeSub = realtimeClient
+    realtimeSub = getRealtimeClient()
       .channel('publish-queue-inserts')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'cc_publish_queue' },
