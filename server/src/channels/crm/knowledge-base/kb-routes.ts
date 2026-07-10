@@ -144,26 +144,40 @@ router.post('/sync/shopify', async (_req, res) => {
 
     // Fetch products from shopify_products (FRESH daily sync; was stale shopify_product_variants
     // whose columns are product_title/price_vnd so this select errored anyway).
-    const { data: products } = await supabase
+    const { data: products, error: prodErr } = await supabase
       .from('shopify_products')
-      .select('title, price, product_type')
+      .select('title, price, product_type, vendor, shopify_product_id')
       .eq('status', 'active');
+    if (prodErr) return res.status(500).json({ error: prodErr.message });
 
     if (!products?.length) return res.json({ message: 'Không có sản phẩm nào', count: 0 });
 
+    const { createHash } = await import('crypto');
     let count = 0;
     for (const p of products) {
-      const content = `Sản phẩm: ${p.title}\nGiá: ${p.price}₫\nSKU: ${p.sku || 'N/A'}\nLoại: ${p.product_type || 'N/A'}\nNhà cung cấp: ${p.vendor || 'N/A'}`;
-      const { createHash } = await import('crypto');
+      // SKU nằm ở cấp variant (variants jsonb), KHÔNG phải cột product-level → không đưa vào content.
+      const content = `Sản phẩm: ${p.title}\nGiá: ${p.price}₫\nLoại: ${p.product_type || 'N/A'}\nNhà cung cấp: ${p.vendor || 'N/A'}`;
       const hash = createHash('md5').update(content).digest('hex');
 
-      // Skip if already exists
+      // Dedup theo ĐỊNH DANH sản phẩm (source_id = shopify_product_id), KHÔNG theo content_hash:
+      // giá/vendor đổi → UPDATE in-place + reprocess, KHÔNG đẻ doc trùng cho cùng 1 sản phẩm.
       const { data: existing } = await supabase.from('kb_documents')
-        .select('id').eq('content_hash', hash).maybeSingle();
-      if (existing) continue;
+        .select('id, content_hash')
+        .eq('source_type', 'shopify').eq('source_id', p.shopify_product_id)
+        .maybeSingle();
+
+      if (existing) {
+        if (existing.content_hash === hash) continue; // không đổi → skip
+        await supabase.from('kb_documents')
+          .update({ title: p.title, raw_content: content, content_hash: hash, status: 'pending' })
+          .eq('id', existing.id);
+        processor.processDocument(existing.id).catch(() => {}); // processDocument tự xóa chunks cũ + regen
+        count++;
+        continue;
+      }
 
       const { data: doc } = await supabase.from('kb_documents')
-        .insert({ collection_id: col.id, title: p.title, source_type: 'shopify', raw_content: content, content_hash: hash, status: 'pending' })
+        .insert({ collection_id: col.id, title: p.title, source_type: 'shopify', source_id: p.shopify_product_id, raw_content: content, content_hash: hash, status: 'pending' })
         .select('id').single();
 
       if (doc) {
@@ -172,7 +186,7 @@ router.post('/sync/shopify', async (_req, res) => {
       }
     }
 
-    res.json({ message: `Đang sync ${count} sản phẩm mới`, count });
+    res.json({ message: `Đang sync ${count} sản phẩm`, count });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
