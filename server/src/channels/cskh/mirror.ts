@@ -12,14 +12,18 @@ export async function mirrorReplyToCustomer(
   role: CskhRole,
   body: string,
   agentSlug?: string | null,
+  attachmentUrl?: string | null,
+  attachmentType?: string | null,
 ): Promise<void> {
   const sessionKey = `cskh-internal:${userId}:${userId}`;
   const { error } = await supabase.from('cskh_messages').insert({
     user_id: userId,
     session_key: sessionKey,
     role,
-    body,
+    body: body || null,
     agent_slug: agentSlug || null,
+    attachment_url: attachmentUrl || null,
+    attachment_type: attachmentType || null,
   });
   if (error) console.error('[cskh/mirror] insert failed:', error.message);
 }
@@ -51,6 +55,8 @@ export async function mirrorReplyToVisitor(
   body: string,
   agentSlug: string | null | undefined,
   channel: string, // S2: 'cskh-shopify' | 'cskh-web' — caller BẮT BUỘC truyền (ghi đúng nhãn kênh)
+  attachmentUrl?: string | null,
+  attachmentType?: string | null,
 ): Promise<void> {
   const sessionKey = `${channel}:${visitorId}:${visitorId}`;
   const { error } = await supabase.from('cskh_messages').insert({
@@ -58,8 +64,10 @@ export async function mirrorReplyToVisitor(
     channel,
     session_key: sessionKey,
     role,
-    body,
+    body: body || null,
     agent_slug: agentSlug || null,
+    attachment_url: attachmentUrl || null,
+    attachment_type: attachmentType || null,
   });
   if (error) console.error('[cskh/mirror] visitor reply insert failed:', error.message);
 }

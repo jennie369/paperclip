@@ -100,6 +100,14 @@ class MessageBus extends EventEmitter {
             senderName: row.sender_name || row.from_uid,
             content: row.body || '',
             contentType: (row.content_type || 'text') as InboundMessage['contentType'],
+            // Map cột media (text[] URL) → MediaFile[] để router attach _media cho agy vision
+            // (khách gửi ảnh → agy view_file). Trước đây bị drop → agy không "thấy" ảnh.
+            media: Array.isArray(row.media) && row.media.length > 0
+              ? row.media.map((u: string) => ({
+                  url: u,
+                  mimeType: /\.png(\?|$)/i.test(u) ? 'image/png' : /\.webp(\?|$)/i.test(u) ? 'image/webp' : 'image/jpeg',
+                }))
+              : undefined,
             peerKind: (row.peer_kind || 'direct') as PeerKind,
             metadata: row.metadata || {},
             timestamp: new Date(row.ts || row.created_at),

@@ -235,7 +235,8 @@ export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, 
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          /* CSKH (in-app) gửi được cả ảnh LẪN tệp; Zalo chỉ ảnh (sendImage). */
+          accept={channelName?.startsWith("cskh") ? undefined : "image/*"}
           className="hidden"
           onChange={handleFileUpload}
         />

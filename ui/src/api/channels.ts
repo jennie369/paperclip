@@ -201,7 +201,10 @@ export const channelsApi = {
     formData.append("thread_id", threadId);
     formData.append("thread_type", threadType);
     if (caption) formData.append("caption", caption);
-    return api.postForm<{ success: boolean; error?: string }>("/channels/zalo-personal/upload", formData);
+    // CSKH (in-app) KHÔNG có external API như Zalo → route riêng /channels/cskh/upload
+    // (server upload bucket cskh-attachments + mirror cskh_messages → khách nhận). Zalo giữ nguyên.
+    const endpoint = channelName.startsWith("cskh") ? "/channels/cskh/upload" : "/channels/zalo-personal/upload";
+    return api.postForm<{ success: boolean; error?: string }>(endpoint, formData);
   },
 
   // --- Cross-channel endpoints ---

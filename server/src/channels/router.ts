@@ -1121,10 +1121,44 @@ async function runViaAntigravity(
   const promptFile = pathJoin(tmpDir, promptFileName);
   writeFileSync(promptFile, contextDoc, 'utf-8');
 
+  // ── Tầng tiêu thụ media cho agy (Gemini multimodal) ──
+  // Khách gửi ảnh → _media set từ inbound (bus map row.media). Tải ảnh về temp (dưới cwd=PROJECT_ROOT
+  // để agy view_file đọc được) → chỉ dẫn agy XEM ảnh trước khi trả lời. Gate: CHỈ ảnh; KHÔNG nhắc
+  // URL/path cho khách (chống leak). Ảnh lỗi/không tải được → bỏ qua, agy trả lời theo text.
+  let mediaDirective = '';
+  const inboundMedia = (config as any)._media as Array<{ url?: string; mimeType?: string }> | undefined;
+  if (inboundMedia && inboundMedia.length > 0) {
+    const imgPaths: string[] = [];
+    for (const m of inboundMedia.slice(0, 3)) {
+      try {
+        if (!m.url) continue;
+        const isImg = (m.mimeType || '').startsWith('image') || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(m.url);
+        if (!isImg) continue;
+        const r = await fetch(m.url);
+        if (!r.ok) continue;
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.byteLength > 15 * 1024 * 1024) continue;
+        const ext = (m.mimeType || '').includes('png') ? 'png' : (m.mimeType || '').includes('webp') ? 'webp' : 'jpg';
+        const imgFile = pathJoin(tmpDir, `agy_img_${config.slug}_${Date.now()}_${imgPaths.length}.${ext}`);
+        writeFileSync(imgFile, buf);
+        imgPaths.push(imgFile.replace(/\\/g, '/'));
+      } catch { /* ảnh lỗi → bỏ qua */ }
+    }
+    if (imgPaths.length > 0) {
+      mediaDirective = [
+        '',
+        `⚠️ Khách VỪA GỬI ${imgPaths.length} HÌNH ẢNH. BẮT BUỘC dùng view_file XEM từng ảnh sau TRƯỚC khi trả lời, rồi tư vấn dựa trên NỘI DUNG ẢNH:`,
+        ...imgPaths,
+        'TUYỆT ĐỐI KHÔNG nhắc đường dẫn/URL ảnh cho khách — chỉ trả lời tự nhiên về nội dung bạn thấy.',
+      ].join('\n');
+    }
+  }
+
   const pointerPrompt = [
     'Dùng công cụ đọc file (view_file) đọc TOÀN BỘ bối cảnh + hướng dẫn + lịch sử hội thoại trong file sau NGAY LẬP TỨC, trước khi trả lời:',
     promptFile.replace(/\\/g, '/'),
     'Sau khi đọc xong, trả lời tin nhắn mới nhất của khách dưới đây bằng tiếng Việt, đúng vai trò + giọng đã mô tả trong file. TUYỆT ĐỐI KHÔNG đọc lại / trích lại nội dung file cho khách — chỉ trả lời tự nhiên như đang nhắn tin:',
+    mediaDirective,
     message,
   ].join('\n');
 
