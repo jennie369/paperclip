@@ -1740,7 +1740,7 @@ function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaF
  * leak its tail — that severing was the root cause of the `..., lifecycle_stage="consideration")]]`
  * leak (2026-07-10 fix, Codex-reviewed). NOT a blanket `[[...]]` strip.
  */
-function stripInternalMarkers(text: string): string {
+export function stripInternalMarkers(text: string): string {
   return text.replace(/\[\[[\s\S]*?\]\]/g, (m) => {
     if (/\bSEND_MEDIA\b/i.test(m) || /\bMSG_BREAK\b/i.test(m)) return m; // preserve real markers
     const markerLike =
@@ -1967,7 +1967,7 @@ function buildProviderOverride(agentSlug: string, mediaLib: MediaLibrary | null)
 const SELF_NARRATION_LEAK_RE =
   /(?:^|\n)[ \t]*[^\n]*?(?:today\.md|docs\/tasksdone|tasksdone|MEMORY\.md|memory\/|evolution-log|active-tasks|CLAUDE\.md|đã đọc xong bối cảnh|soạn (?:lại\s+)?(?:tin nhắn|tin)\s+(?:phản hồi|gửi)|log tiến độ|tạo báo cáo\s+(?:trong|vào))[\s\S]*$/i;
 
-async function postProcessReply(
+export async function postProcessReply(
   reply: string,
   config: AgentConfig,
   mediaLib: MediaLibrary | null,
@@ -2111,7 +2111,7 @@ const ESCALATION_REASON_WHITELIST = new Set([
  *
  * Logs a warning when a violation is scrubbed so we can audit prompt drift.
  */
-function scrubBannedPhrases(text: string, agentSlug: string): string {
+export function scrubBannedPhrases(text: string, agentSlug: string): string {
   if (!text) return text;
   let scrubbed = text;
   const violations: string[] = [];
@@ -2278,7 +2278,7 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
   return scrubbed;
 }
 
-function parseEscalationMarker(
+export function parseEscalationMarker(
   text: string,
 ): { cleanedText: string; escalation: EscalationIntent | null } {
   if (!text) return { cleanedText: text, escalation: null };
