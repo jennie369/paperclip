@@ -16,6 +16,12 @@ import {
   parseEscalationMarker,
   postProcessReply,
 } from "../channels/router.js";
+import {
+  buildBatchId,
+  buildReplyDedupeKey,
+  detectPriceLeak,
+  isUniqueViolation,
+} from "../channels/reply-contract.js";
 
 // Minimal config stub — postProcessReply only reads slug/provider and writes
 // side-channels (_escalation/_outboundMedia) onto the object we pass in.
@@ -190,5 +196,54 @@ describe("reply-contract golden-set (P0 baseline)", () => {
     for (const s of clean) {
       expect(scrubBannedPhrases(s, "sales-closer")).toBe(s);
     }
+  });
+
+  // ── G17: emission key determinism — same row set → same key (Codex C3) ──
+  it("G17 buildBatchId is order-independent; different set → different key", () => {
+    const a = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const b = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const c = "33333333-cccc-4ccc-8ccc-cccccccccccc";
+    // Same set, different input order → SAME batchId (= min uuid).
+    expect(buildBatchId([a, b, c])).toBe(buildBatchId([c, a, b]));
+    expect(buildBatchId([b, c, a])).toBe(a); // min lexicographic
+    // Different set (a message left/joined) → different batchId.
+    expect(buildBatchId([a, b])).not.toBe(buildBatchId([b, c]));
+    // Empty set → safe sentinel.
+    expect(buildBatchId([])).toBe("");
+    // Full key shape.
+    expect(buildReplyDedupeKey("cskh-internal:u1:u1", a)).toBe(
+      `reply:cskh-internal:u1:u1:${a}`,
+    );
+  });
+
+  // ── G18: price-leak detector — real prices match, phone/order/date don't ──
+  it("G18 detectPriceLeak matches real VND prices, not phone/order/date", () => {
+    const prices = [
+      "29.999.000đ",
+      "20.999.000 vnđ",
+      "68 triệu",
+      "68tr",
+      "gói này giá 68.000.000đ nhé chị",
+      "SĐT 090.123.456, giá 68.000.000đ", // price still matches after masking phone
+    ];
+    for (const s of prices) expect(detectPriceLeak(s)).toBe(true);
+
+    const notPrices = [
+      "SĐT của em là 090.123.456 đừng lo nha",
+      "đơn hàng mã #20260710 đã lên nhé",
+      "hẹn chị ngày 10.07.2026 ạ",
+      "cấp cho chị 3.500 điểm thưởng",
+      "Dạ chị cho em xin thông tin nhé ạ.",
+    ];
+    for (const s of notPrices) expect(detectPriceLeak(s)).toBe(false);
+  });
+
+  // ── isUniqueViolation — code OR message, duck-typed (Codex C10) ──
+  it("isUniqueViolation detects 23505 by code and by message", () => {
+    expect(isUniqueViolation({ code: "23505" })).toBe(true);
+    expect(isUniqueViolation({ message: "duplicate key value violates unique constraint idx_csm_dedupe" })).toBe(true);
+    expect(isUniqueViolation({ code: "23503", message: "foreign key" })).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation("boom")).toBe(false);
   });
 });
