@@ -14,7 +14,7 @@ export async function mirrorReplyToCustomer(
   agentSlug?: string | null,
   attachmentUrl?: string | null,
   attachmentType?: string | null,
-): Promise<void> {
+): Promise<{ error?: string }> {
   const sessionKey = `cskh-internal:${userId}:${userId}`;
   const { error } = await supabase.from('cskh_messages').insert({
     user_id: userId,
@@ -25,7 +25,12 @@ export async function mirrorReplyToCustomer(
     attachment_url: attachmentUrl || null,
     attachment_type: attachmentType || null,
   });
-  if (error) console.error('[cskh/mirror] insert failed:', error.message);
+  // Return the error (in addition to logging) so a caller that MUST know whether
+  // the customer actually received the reply — the Reply Gateway deliverFn — can
+  // throw instead of silently marking a lost reply as 'sent' (Codex F1). Existing
+  // callers that ignore the return value keep their prior behavior.
+  if (error) { console.error('[cskh/mirror] insert failed:', error.message); return { error: error.message }; }
+  return {};
 }
 
 /** Mirror the customer's own inbound message (role='user'). Used for parity/tests. */
@@ -57,7 +62,7 @@ export async function mirrorReplyToVisitor(
   channel: string, // S2: 'cskh-shopify' | 'cskh-web' — caller BẮT BUỘC truyền (ghi đúng nhãn kênh)
   attachmentUrl?: string | null,
   attachmentType?: string | null,
-): Promise<void> {
+): Promise<{ error?: string }> {
   const sessionKey = `${channel}:${visitorId}:${visitorId}`;
   const { error } = await supabase.from('cskh_messages').insert({
     visitor_id: visitorId,
@@ -69,5 +74,7 @@ export async function mirrorReplyToVisitor(
     attachment_url: attachmentUrl || null,
     attachment_type: attachmentType || null,
   });
-  if (error) console.error('[cskh/mirror] visitor reply insert failed:', error.message);
+  // Return error so the Reply Gateway deliverFn can throw on a lost reply (Codex F1).
+  if (error) { console.error('[cskh/mirror] visitor reply insert failed:', error.message); return { error: error.message }; }
+  return {};
 }

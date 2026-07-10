@@ -12,6 +12,7 @@
 import https from 'https';
 import { bus } from '../bus.js';
 import { supabase } from './supabase.js';
+import { deliverReplyOnce } from '../deliver-once.js';
 import { FbCookieManager } from './protocol/cookies.js';
 import { FbWebListener } from './protocol/listener.js';
 import {
@@ -471,16 +472,32 @@ export class FacebookWebChannel {
       const agentSlug = outMsg.metadata?.agentSlug as string | undefined;
       const peerKind = outMsg.metadata?.peerKind as string | undefined;
       const commentId = outMsg.metadata?.comment_id as string | undefined;
+      const isComment = peerKind === 'comment' && !!commentId;
+      const threadId = (isComment ? commentId : outMsg.chatId) as string;
+
+      // Customer-visible send (protocol), skipDbLog so the gateway owns the row.
+      // Throws on !success so deliverReplyOnce marks failed (Codex F2).
+      const doSend = async (): Promise<{ platformMessageId: string | null }> => {
+        const r: FbSendResult = isComment
+          ? await this.sendCommentReplyText(commentId as string, outMsg.content, agentSlug, /*skipDbLog*/ true)
+          : await this.send(outMsg.chatId, outMsg.content, agentSlug, /*skipDbLog*/ true);
+        if (!r.success) throw new Error(r.error || 'fb-web send failed');
+        return { platformMessageId: r.message_id ?? null };
+      };
+      const logRow = {
+        channel_name: this.channelName, thread_id: threadId, thread_type: isComment ? 'comment' : 'dm',
+        to_uid: threadId, body: outMsg.content, content_type: 'text', sent_by: agentSlug || 'agent',
+      };
 
       try {
-        let result: FbSendResult;
-        if (peerKind === 'comment' && commentId) {
-          result = await this.sendCommentReplyText(commentId, outMsg.content, agentSlug);
+        if (outMsg.dedupeKey) {
+          await deliverReplyOnce(outMsg.dedupeKey, logRow, doSend);
         } else {
-          result = await this.send(outMsg.chatId, outMsg.content, agentSlug);
-        }
-        if (!result.success) {
-          console.error(`${this.tag} Outbound failed: ${result.error}`);
+          // Manual path (no idempotency key): send WITH its own log, unchanged.
+          const result: FbSendResult = isComment
+            ? await this.sendCommentReplyText(commentId as string, outMsg.content, agentSlug)
+            : await this.send(outMsg.chatId, outMsg.content, agentSlug);
+          if (!result.success) console.error(`${this.tag} Outbound failed: ${result.error}`);
         }
       } catch (err: any) {
         console.error(`${this.tag} Outbound exception:`, err);
@@ -488,7 +505,7 @@ export class FacebookWebChannel {
     });
   }
 
-  async send(threadId: string, message: string, agentSlug?: string): Promise<FbSendResult> {
+  async send(threadId: string, message: string, agentSlug?: string, skipDbLog = false): Promise<FbSendResult> {
     if (!this.session) return { success: false, error: 'Not connected' };
     const result = await sendDMText(
       {
@@ -501,11 +518,12 @@ export class FacebookWebChannel {
       threadId,
       message,
     );
-    await this.logSentMessage(threadId, 'dm', message, 'text', result, agentSlug);
+    // skipDbLog=true when the Reply Gateway (deliverReplyOnce) already owns the row.
+    if (!skipDbLog) await this.logSentMessage(threadId, 'dm', message, 'text', result, agentSlug);
     return result;
   }
 
-  async sendCommentReplyText(commentId: string, message: string, agentSlug?: string): Promise<FbSendResult> {
+  async sendCommentReplyText(commentId: string, message: string, agentSlug?: string, skipDbLog = false): Promise<FbSendResult> {
     if (!this.session) return { success: false, error: 'Not connected' };
     const result = await sendCommentReply(
       {
@@ -518,7 +536,7 @@ export class FacebookWebChannel {
       commentId,
       message,
     );
-    await this.logSentMessage(commentId, 'comment', message, 'text', result, agentSlug);
+    if (!skipDbLog) await this.logSentMessage(commentId, 'comment', message, 'text', result, agentSlug);
     return result;
   }
 

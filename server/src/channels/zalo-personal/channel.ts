@@ -7,6 +7,8 @@ import { encryptCredentials, decryptCredentials } from './protocol/crypto.js';
 import { ZaloSession, ZaloCredentials } from './protocol/message.js';
 import { supabase } from './supabase.js';
 import { bus } from '../bus.js';
+import { deliverReplyOnce } from '../deliver-once.js';
+import { assertSent } from '../reply-contract.js';
 import type { OutboundMessage, MediaFile } from '../types.js';
 // SSOT resolve/download/isImage cho outbound media (dùng chung Zalo + CSKH). MEDIA_PROJECT_ROOT
 // giữ ở đây (buildOutboundMediaUrl + ALLOWED_MEDIA_ROOTS cần) — re-export từ media-util.
@@ -410,17 +412,37 @@ export class ZaloPersonalChannel {
     if (this._outboundHandler) { bus.off('outbound', this._outboundHandler); }
     this._outboundHandler = async (outMsg: OutboundMessage) => {
       if (outMsg.channel !== this.channelName) return;
-      const threadType = (outMsg.metadata?.threadType === 'group' ? 'group' : 'dm') as 'dm' | 'group';
+      // F5: consumer sets metadata.peerKind (NOT threadType); derive threadType so
+      // a group reply doesn't fall back to DM and get sent to the wrong endpoint.
+      const threadType = (outMsg.metadata?.threadType === 'group' || outMsg.metadata?.peerKind === 'group')
+        ? 'group' : 'dm';
       const agentSlug = outMsg.metadata?.agentSlug as string | undefined;
 
       try {
-        // Step 1: send the text reply first so the customer sees the message
-        // body before any attachments (matches natural human send order).
-        if (outMsg.content && outMsg.content.trim()) {
+        const hasText = !!(outMsg.content && outMsg.content.trim());
+        // Reply Gateway: a gated bot reply (carries dedupeKey) routes through
+        // deliverReplyOnce — ONE claim gates the whole reply (text + any media).
+        // deliverReplyOnce owns the channel_sent_messages row (skipDbLog on send).
+        if (outMsg.dedupeKey) {
+          const outcome = await deliverReplyOnce(
+            outMsg.dedupeKey,
+            {
+              channel_name: this.channelName, thread_id: outMsg.chatId, thread_type: threadType,
+              to_uid: outMsg.chatId, body: hasText ? outMsg.content : '[media]',
+              content_type: hasText ? 'text' : 'image', sent_by: agentSlug || 'agent',
+            },
+            async () => {
+              if (hasText) return assertSent(await this.send(outMsg.chatId, outMsg.content, threadType, agentSlug, /*skipDbLog*/ true));
+              return { platformMessageId: null }; // media-only: claim gates, media sent below
+            },
+          );
+          if (outcome !== 'sent') return; // failed OR duplicate → skip media too
+        } else if (hasText) {
+          // Manual/human path (no idempotency key): unchanged.
           await this.send(outMsg.chatId, outMsg.content, threadType, agentSlug);
         }
 
-        // Step 2: dispatch attachments, if any.
+        // Step 2: dispatch attachments, if any (media rows exempt from dedupe audit).
         const media = outMsg.media;
         if (!media || media.length === 0) return;
 
@@ -639,6 +661,31 @@ export class ZaloPersonalChannel {
       .maybeSingle();
     if (existing) return;
     const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    // Reply Gateway F6: a gateway bot reply claims its channel_sent_messages row
+    // with status='sending' and stamps platform_message_id only AFTER the Zalo
+    // send returns. If this self-echo races ahead of that UPDATE, the msgId lookup
+    // above misses and we'd insert a duplicate 'manual_zalo' row for our OWN reply.
+    // Fall back to matching a recent agent reply by (thread, body) and, if found,
+    // stamp its platform_message_id + skip the duplicate. SAFE: this whole method
+    // runs only for self-messages (uidFrom === session uid), so a real customer
+    // message with identical text ("ok"/"dạ") never reaches here.
+    const { data: recentAgent } = await supabase
+      .from('channel_sent_messages')
+      .select('id')
+      .eq('channel_name', this.channelName)
+      .eq('thread_id', threadId)
+      .eq('body', body)
+      .neq('sent_by', 'manual_zalo')
+      .gte('created_at', new Date(Date.now() - 60_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentAgent) {
+      await supabase.from('channel_sent_messages')
+        .update({ platform_message_id: msgId })
+        .eq('id', (recentAgent as { id: string }).id);
+      return;
+    }
     const { error } = await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,
       thread_id: threadId,
@@ -660,7 +707,7 @@ export class ZaloPersonalChannel {
     threadType: 'dm' | 'group' = 'dm',
     agentSlug?: string,
     skipDbLog = false
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; messageId?: string }> {
     if (!this.session) return { success: false, error: 'Not connected' };
 
     await sendTyping(this.session, threadId, threadType === 'group');

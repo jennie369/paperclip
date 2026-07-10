@@ -382,6 +382,10 @@ async function processQueueCycle(): Promise<string> {
         content: fu.message,
         contentType: 'text',
         replyToMessageId: undefined,
+        // Reply Gateway (Codex G2): idempotency key so a follow-up can't be sent
+        // twice for one queue row (the 8×-listener-leak class, evolog 08/06). One
+        // queue row id = one deterministic key.
+        dedupeKey: `fu:${fu.id}`,
         metadata: {
           agentSlug: fu.agent_slug,
           isFollowUp: true,

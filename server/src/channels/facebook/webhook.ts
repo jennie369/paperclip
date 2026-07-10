@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import { bus } from '../bus.js';
 import { supabase } from '../zalo-personal/supabase.js';
+import { deliverReplyOnce } from '../deliver-once.js';
 import type { InboundMessage, OutboundMessage } from '../types.js';
 
 const router = Router();
@@ -378,55 +379,48 @@ bus.on('outbound', async (msg: OutboundMessage) => {
 
   const peerKind = msg.metadata?.peerKind as string | undefined;
   const commentId = msg.metadata?.comment_id as string | undefined;
+  const threadId = (peerKind === 'comment' ? commentId : msg.chatId) as string;
+  const threadType = peerKind === 'comment' ? 'comment' : 'dm';
 
-  try {
+  // The customer-visible send (Graph API). Throws on a Graph error so the Reply
+  // Gateway (or the manual catch below) treats it as failed (Codex F2).
+  const doSend = async (): Promise<{ platformMessageId: string | null }> => {
     if (peerKind === 'comment' && commentId) {
-      // ── Comment reply: POST /{comment_id}/comments ──
       const fbRes = await fetch(`${GRAPH_API}/${commentId}/comments?access_token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg.content }),
       });
-
       const result = await fbRes.json();
-      if (result.error) {
-        console.error(`[FB] Outbound comment reply error on ${msg.channel}:`, result.error);
-        return;
-      }
-
+      if (result.error) throw new Error(`FB comment reply error: ${JSON.stringify(result.error)}`);
       console.log(`[FB] Comment reply sent on ${msg.channel} → ${commentId}: "${msg.content.slice(0, 60)}"`);
+      return { platformMessageId: result.id ?? null };
     } else {
-      // ── Messenger DM: POST /{page_id}/messages ──
       const fbRes = await fetch(`${GRAPH_API}/${pageId}/messages?access_token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipient: { id: msg.chatId },
-          message: { text: msg.content },
-          messaging_type: 'RESPONSE',
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient: { id: msg.chatId }, message: { text: msg.content }, messaging_type: 'RESPONSE' }),
       });
-
       const result = await fbRes.json();
-      if (result.error) {
-        console.error(`[FB] Outbound DM error on ${msg.channel}:`, result.error);
-        return;
-      }
-
+      if (result.error) throw new Error(`FB DM error: ${JSON.stringify(result.error)}`);
       console.log(`[FB] DM sent on ${msg.channel} → ${msg.chatId}: "${msg.content.slice(0, 60)}"`);
+      return { platformMessageId: result.message_id ?? null };
     }
+  };
 
-    // Log to channel_sent_messages (non-blocking)
-    void supabase.from('channel_sent_messages').insert({
-      channel_name: msg.channel,
-      thread_id: peerKind === 'comment' ? commentId : msg.chatId,
-      thread_type: peerKind === 'comment' ? 'comment' : 'dm',
-      to_uid: msg.chatId,
-      body: msg.content,
-      content_type: 'text',
-      status: 'sent',
-      sent_by: msg.metadata?.agentSlug || 'system',
-    }).then(() => {}, () => {});
+  const logRow = {
+    channel_name: msg.channel, thread_id: threadId, thread_type: threadType,
+    to_uid: msg.chatId, body: msg.content, content_type: 'text',
+    sent_by: msg.metadata?.agentSlug || 'system',
+  };
+
+  try {
+    if (msg.dedupeKey) {
+      // Reply Gateway: claim-before-send owns the channel_sent_messages row.
+      await deliverReplyOnce(msg.dedupeKey, logRow, doSend);
+    } else {
+      // Manual path (no idempotency key): send + best-effort log, unchanged.
+      await doSend();
+      void supabase.from('channel_sent_messages').insert({ ...logRow, status: 'sent' }).then(() => {}, () => {});
+    }
   } catch (err: any) {
     console.error(`[FB] Outbound send failed on ${msg.channel}:`, err.message);
   }

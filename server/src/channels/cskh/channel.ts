@@ -6,6 +6,7 @@ import { supabase } from './supabase.js';
 import { mirrorReplyToCustomer, mirrorReplyToVisitor } from './mirror.js';
 import { pushSupportReply } from './push.js';
 import { isImageMedia, resolveMediaToLocalPath } from '../media-util.js';
+import { deliverReplyOnce } from '../deliver-once.js';
 import type { Channel, ChannelType, OutboundMessage, MediaFile } from '../types.js';
 
 export const CSKH_CHANNEL_NAME = 'cskh-internal';
@@ -63,21 +64,42 @@ export class CskhChannel implements Channel {
     const sentBy = (msg.metadata?.sentBy as string) || (agentSlug ? `agent:${agentSlug}` : 'agent');
     const isVisitor = msg.channel !== 'cskh-internal';
 
-    // Step 1: gửi TEXT trước (khách thấy lời tư vấn trước, ảnh sau — như Zalo). Chỉ khi có nội dung.
-    if (msg.content && msg.content.trim()) {
-      await this.logSentMessage(msg.channel, threadId, msg.content, sentBy);
+    // The customer-visible action for CSKH is the cskh_messages mirror (the app
+    // reads that table), NOT channel_sent_messages. So the mirror is what deliverFn
+    // must do + assert. push (notify) is best-effort: if push fails but the mirror
+    // succeeded the customer still sees the reply in-app → stay 'sent'.
+    const doMirrorAndPush = async (): Promise<{ platformMessageId: string | null }> => {
       if (isVisitor) {
-        // S1: visitor ẩn danh (cskh-shopify / cskh-web): mirror by visitor_id; no push (no token).
-        await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug, msg.channel);
-        // P1: email-notif nếu khách offline (edge tự gate offline + debounce; fire-and-forget).
+        const r = await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug, msg.channel);
+        if (r.error) throw new Error(`cskh mirror failed: ${r.error}`);  // F1: don't mark 'sent' on lost reply
         const preview = msg.content.length > 80 ? msg.content.slice(0, 80) + '…' : msg.content;
         supabase.functions.invoke('cskh-notify-offline', {
           body: { visitor_id: threadId, channel: msg.channel, preview },
         }).catch((e: any) => console.error('[cskh] notify-offline failed:', e?.message || e));
       } else {
-        // Authenticated Gemral customer.
-        await mirrorReplyToCustomer(threadId, 'assistant', msg.content, agentSlug);
-        await pushSupportReply(threadId, msg.content);
+        const r = await mirrorReplyToCustomer(threadId, 'assistant', msg.content, agentSlug);
+        if (r.error) throw new Error(`cskh mirror failed: ${r.error}`);  // F1
+        try { await pushSupportReply(threadId, msg.content); } catch (e: any) { console.error('[cskh] push failed (best-effort):', e?.message || e); }
+      }
+      return { platformMessageId: null };
+    };
+
+    // Step 1: gửi TEXT trước (khách thấy lời tư vấn trước, ảnh sau — như Zalo). Chỉ khi có nội dung.
+    if (msg.content && msg.content.trim()) {
+      if (msg.dedupeKey) {
+        // Reply Gateway: claim owns the channel_sent_messages row (replaces
+        // logSentMessage) + gates against double-reply; deliverFn = the mirror.
+        const outcome = await deliverReplyOnce(
+          msg.dedupeKey,
+          { channel_name: msg.channel, thread_id: threadId, thread_type: 'dm', to_uid: threadId,
+            body: msg.content, content_type: 'text', sent_by: sentBy },
+          doMirrorAndPush,
+        );
+        if (outcome !== 'sent') return;  // failed OR duplicate → skip media too
+      } else {
+        // Manual/human path (no idempotency key): unchanged (log + mirror + push).
+        await this.logSentMessage(msg.channel, threadId, msg.content, sentBy);
+        await doMirrorAndPush();
       }
     }
 
