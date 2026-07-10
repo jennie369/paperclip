@@ -107,6 +107,21 @@ export class CskhChannel implements Channel {
     // = URL công khai → file media-library LOCAL phải upload lên bucket cskh-attachments trước
     // (khác Zalo gửi qua protocol). Additive: không media → return, reply text như cũ.
     if (!msg.media || msg.media.length === 0) return;
+
+    // Codex H2: a MEDIA-ONLY reply (no text) skipped the claim above, so a duplicate
+    // emit could send the image twice. Claim once here to gate the media dispatch.
+    // (When there was text, the claim above already gated the whole reply.)
+    const hadText = !!(msg.content && msg.content.trim());
+    if (!hadText && msg.dedupeKey) {
+      const outcome = await deliverReplyOnce(
+        msg.dedupeKey,
+        { channel_name: msg.channel, thread_id: threadId, thread_type: 'dm', to_uid: threadId,
+          body: '[media]', content_type: 'image', sent_by: sentBy },
+        async () => ({ platformMessageId: null }), // media sent in the loop below
+      );
+      if (outcome !== 'sent') return; // duplicate media-only → skip
+    }
+
     for (const item of msg.media) {
       try {
         await this.sendMediaToCustomer(threadId, msg.channel, agentSlug, sentBy, item, isVisitor);

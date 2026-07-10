@@ -353,7 +353,7 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
     // ── DRAIN (bounded): every still-pending message for this thread ──
     let drainQ = supabase
       .from('channel_pending_messages')
-      .select('id, body, media, sender_name, from_uid, created_at')
+      .select('id, body, media, sender_name, from_uid, created_at, metadata')
       .eq('channel_name', ctx.channel)
       .eq('thread_id', ctx.threadId)
       .eq('status', 'pending')
@@ -373,7 +373,7 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
       .in('id', drainedIds)
       .eq('status', 'pending')
       .is('handled_by', null)
-      .select('id, body, media, sender_name, from_uid, created_at');
+      .select('id, body, media, sender_name, from_uid, created_at, metadata');
     if (!claimed || claimed.length === 0) { await clearAgentTyping(sessionKey); return; }
 
     const rows = [...(claimed as any[])].sort(
@@ -406,7 +406,15 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
         ? coalescedMedia.map((u) => ({ url: u, mimeType: 'application/octet-stream' }))
         : undefined,
       peerKind: ctx.peerKind,
-      metadata: ctx.groupName ? { groupName: ctx.groupName } : {},
+      // Preserve comment_id (FB/YT comment auto-reply target) through the coalesce.
+      // The drain/claim selects didn't include `metadata`, so a coalesced comment
+      // reply lost its comment_id → YouTube skipped the reply / Facebook routed it
+      // as a DM instead of a comment (Codex H1, pre-existing coalesce bug surfaced
+      // by the gateway wiring). Carry it from the last claimed row's metadata.
+      metadata: {
+        ...(ctx.groupName ? { groupName: ctx.groupName } : {}),
+        ...((last as any).metadata?.comment_id ? { comment_id: (last as any).metadata.comment_id } : {}),
+      },
       timestamp: new Date(last.created_at),
     };
 
