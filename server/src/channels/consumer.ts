@@ -53,9 +53,24 @@ const sessionInFlight = new Map<string, Promise<void>>();
 // single prompt, and reply ONCE. See
 // docs/plans_reports/2026-07-10-CSKH-DOUBLE-REPLY-QUIETWINDOW-COALESCE-TYPING_ARCHITECTURE_PLAN.md
 const quietTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; ctx: BatchCtx }>();
-const QUIET_WINDOW_MS = 12_000;   // wait for customer to stop typing before replying
+const QUIET_WINDOW_MS = 15_000;   // wait for customer to stop typing before replying (12→15s, burst-double fix)
 const TYPING_TTL_MS = 45_000;     // typing indicator lifespan (covers quiet-window + agent latency)
 const MAX_COALESCE = 20;          // cap messages merged into one reply
+
+// ── Cancel-in-flight re-coalesce (2026-07-11, burst-double fix) ──
+// The quiet-window merges messages typed WITHIN the window. But a customer who
+// types "HI" then their real question 20-30s later (AFTER the window fired for
+// "HI") gets a useless generic greeting reply, then a second reply — 2 messages.
+// Fix: when a NEW message arrives while the agent is mid-GENERATION for this
+// session, abort that run (don't send the throwaway greeting), un-claim its rows,
+// and re-coalesce everything into one complete reply. `phase` gates this: only a
+// run that is still 'generating' is abortable — once it starts 'publishing' we
+// let it finish (Codex C7). Cohort cap stops a spammer from starving forever.
+// Plan: docs/plans_reports/2026-07-11-BURST-DOUBLE-CANCEL-INFLIGHT-RECOALESCE_ARCHITECTURE_PLAN.md
+const sessionRun = new Map<string, { controller: AbortController; phase: 'coalescing' | 'generating' | 'publishing' }>();
+const sessionAbortMeta = new Map<string, { abortCount: number; firstMsgAt: number }>();
+const MAX_ABORTS_PER_COHORT = 5;      // after N aborts → FORCE (let the run publish) to avoid starvation
+const COHORT_MAX_WAIT_MS = 90_000;    // or after 90s of a single burst → FORCE
 
 // Routing context captured when a quiet-window is scheduled; the timer callback
 // re-derives everything else from the DB-claimed rows.
@@ -109,6 +124,26 @@ async function clearAgentTyping(sessionKey: string): Promise<void> {
  * a double-schedule can never produce a double reply.
  */
 function scheduleQuietWindow(sessionKey: string, ctx: BatchCtx, delayMs: number = QUIET_WINDOW_MS): void {
+  // Cancel-in-flight: a new message for this session arrived. If a run is still
+  // GENERATING (agent producing a reply we haven't started sending), abort it so
+  // we don't send a throwaway reply — the aborted run un-claims its rows and this
+  // window will re-coalesce them with the new message. Guarded by a cohort cap so
+  // a rapid-fire spammer can't abort forever (Codex C5): after MAX_ABORTS_PER_COHORT
+  // aborts OR COHORT_MAX_WAIT_MS since the burst started, we let the run publish.
+  const run = sessionRun.get(sessionKey);
+  if (run && run.phase === 'generating') {
+    const now = Date.now();
+    const meta = sessionAbortMeta.get(sessionKey) || { abortCount: 0, firstMsgAt: now };
+    const withinCap = meta.abortCount < MAX_ABORTS_PER_COHORT && (now - meta.firstMsgAt) < COHORT_MAX_WAIT_MS;
+    if (withinCap) {
+      meta.abortCount += 1;
+      sessionAbortMeta.set(sessionKey, meta);
+      run.controller.abort();
+      console.log(`[Consumer] ${sessionKey} cancel-in-flight (abort #${meta.abortCount}) — new message, will re-coalesce`);
+    }
+    // else: FORCE — let the current run publish; the new message becomes a fresh cohort.
+  }
+
   const existing = quietTimers.get(sessionKey);
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
@@ -339,6 +374,14 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
   sessionInFlight.set(sessionKey, thisRun);
   await priorRun;
 
+  // Cancel-in-flight controller — created AFTER await priorRun so a batch waiting
+  // on the lock can't overwrite the running batch's controller (Codex C2). Starts
+  // 'coalescing' (NOT abortable — no agent running yet, Codex D3); flips to
+  // 'generating' right before runAgent inside processResolved.
+  const controller = new AbortController();
+  sessionRun.set(sessionKey, { controller, phase: 'coalescing' });
+  let claimedIds: string[] = [];
+
   try {
     // Owner may have taken over while we waited.
     if (await isSessionPaused(sessionKey)) {
@@ -379,7 +422,7 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
     const rows = [...(claimed as any[])].sort(
       (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     );
-    const claimedIds = rows.map((r) => r.id);
+    claimedIds = rows.map((r) => r.id);
 
     // ── COALESCE: merge content (group keeps sender prefixes) + media ──
     const coalescedContent = rows
@@ -419,14 +462,36 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
     };
 
     console.log(`[Consumer:${ctx.channel}] ${sessionKey} coalesced ${claimedIds.length} msg(s) → 1 reply`);
-    await processResolved(merged, claimedIds, ctx.channelConfig);
+    await processResolved(merged, claimedIds, ctx.channelConfig, sessionKey, controller);
     await clearAgentTyping(sessionKey);
+    // Reply published (or intentionally skipped) → this cohort is done; reset the
+    // abort counter so the NEXT burst starts fresh.
+    sessionAbortMeta.delete(sessionKey);
   } catch (err: any) {
-    console.error(`[Consumer] runSessionBatch(${sessionKey}) error:`, err?.message || err);
-    await clearAgentTyping(sessionKey).catch(() => {});
+    const aborted = err instanceof router.AgentAbortedError;
+    if (aborted) {
+      console.log(`[Consumer] ${sessionKey} run aborted mid-generation — un-claiming for re-coalesce`);
+    } else {
+      console.error(`[Consumer] runSessionBatch(${sessionKey}) error:`, err?.message || err);
+    }
+    // Un-claim the rows (Codex C1 aborted + D1 any error) so a follow-up batch
+    // re-gathers them — otherwise they'd sit 'processing' until the >1h startup
+    // sweep. Only rows STILL 'processing' (don't clobber a concurrent handler).
+    if (claimedIds.length > 0) {
+      try {
+        await supabase.from('channel_pending_messages')
+          .update({ status: 'pending', handled_by: null, agent_slug: null })
+          .in('id', claimedIds)
+          .eq('status', 'processing');
+      } catch { /* best-effort */ }
+    }
+    if (!aborted) await clearAgentTyping(sessionKey).catch(() => {});
   } finally {
     releaseLock();
     if (sessionInFlight.get(sessionKey) === thisRun) sessionInFlight.delete(sessionKey);
+    // CAS delete: only remove the run entry if it's still OURS (a newer batch may
+    // have already replaced it) — Codex C2.
+    if (sessionRun.get(sessionKey)?.controller === controller) sessionRun.delete(sessionKey);
   }
 }
 
@@ -439,6 +504,8 @@ async function processResolved(
   merged: InboundMessage,
   claimedIds: string[],
   channelConfig: ChannelInstanceRow,
+  batchSessionKey?: string,
+  controller?: AbortController,
 ): Promise<void> {
   const peerLabel = merged.peerKind === 'group' ? 'GROUP' : merged.peerKind === 'comment' ? 'COMMENT' : 'DM';
   const logPrefix = `[Consumer:${merged.channel}] ${peerLabel} "${merged.senderName}"→${merged.chatId}`;
@@ -685,13 +752,28 @@ async function processResolved(
 
       console.log(`${logPrefix} → Routing to agent: ${agentSlug}${customerId ? ` (CRM: ${customerId.substring(0, 8)})` : ''} | msg: "${merged.content.substring(0, 60)}"`);
 
+      // Enter the abortable GENERATING phase RIGHT before the agent runs (Codex D3
+      // — not earlier, so drain/CRM-resolve/no-agent can't be false-aborted). A new
+      // message arriving now → scheduleQuietWindow aborts controller → runAgent
+      // throws AgentAbortedError → propagates to runSessionBatch (un-claim + re-run).
+      if (batchSessionKey && controller && sessionRun.get(batchSessionKey)?.controller === controller) {
+        sessionRun.set(batchSessionKey, { controller, phase: 'generating' });
+      }
+
       const replyText = await router.runAgent(
         agentSlug,
         sessionKey,
         enrichedMessage,
         merged,
-        history
+        history,
+        controller?.signal,
       );
+
+      // Past generation: STOP being abortable (Codex C7). From here we commit to
+      // publishing this reply; a new message becomes a fresh cohort/batch.
+      if (batchSessionKey && controller && sessionRun.get(batchSessionKey)?.controller === controller) {
+        sessionRun.set(batchSessionKey, { controller, phase: 'publishing' });
+      }
 
       // NOTE: assistant reply is persisted to channel_sessions.history inside
       // router.saveHistory() (single writer). Removed duplicate appendMessage

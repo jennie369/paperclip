@@ -201,12 +201,27 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
 /**
  * Run an agent: resolve config, load history, execute, save history.
  */
+/**
+ * Thrown when an agent run is cancelled by an EXTERNAL AbortSignal (a new customer
+ * message arrived mid-generation → cancel-in-flight re-coalesce). Kept DISTINCT
+ * from a genuine empty reply ('') so the consumer can un-claim + re-coalesce
+ * instead of marking the batch agent_silent (which would lose the reply). Also
+ * distinct from an internal timeout (that stays a provider failure → '').
+ */
+export class AgentAbortedError extends Error {
+  constructor(msg = 'agent run aborted (cancel-in-flight)') {
+    super(msg);
+    this.name = 'AgentAbortedError';
+  }
+}
+
 export async function runAgent(
   agentSlug: string,
   sessionKey: string,
   message: string,
   originalMsg: InboundMessage,
   history?: SessionMessage[],
+  signal?: AbortSignal,
 ): Promise<string> {
   try {
     const baseConfig = await loadAgentConfig(agentSlug);
@@ -245,9 +260,12 @@ export async function runAgent(
     // Load history from session if not provided
     const sessionHistory = history || await loadHistory(sessionKey, config.history_limit);
 
-    const reply = await runAgentWithConfig(config, sessionKey, message, sessionHistory);
+    const reply = await runAgentWithConfig(config, sessionKey, message, sessionHistory, signal);
 
-    // Save history (single writer — stamps agent_session_id on each entry)
+    // Save history (single writer — stamps agent_session_id on each entry).
+    // NOTE (Codex D2): this runs ONLY on a successful (non-aborted) run — an
+    // AgentAbortedError thrown by runAgentWithConfig short-circuits to the catch
+    // below, so an aborted reply never enters history (no phantom assistant turn).
     const senderNameForHist = (originalMsg as any)?.senderName || null;
     await saveHistory(sessionKey, message, reply, config, senderNameForHist);
 
@@ -269,6 +287,10 @@ export async function runAgent(
 
     return reply;
   } catch (err: any) {
+    // Cancel-in-flight: propagate abort so the consumer can un-claim + re-coalesce.
+    // Do NOT swallow to '' (that would look like a genuine empty reply → the batch
+    // would be marked agent_silent and the customer's message lost). Codex C1.
+    if (err instanceof AgentAbortedError) throw err;
     console.error(`[Router] ❌ Agent "${agentSlug}" failed:`, err.message);
     return '';  // no fallback — stay silent; consumer saves to inbox
   }
@@ -283,7 +305,9 @@ export async function runAgentWithConfig(
   sessionKey: string,
   message: string,
   history?: SessionMessage[],
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();  // already cancelled before we start
   const customerContext = (config as any)._customerContext || null;
   // Company context resolved either from the config override (set by SOP
   // executor or channel consumer) or the single-tenant default GEMRAL.
@@ -301,24 +325,25 @@ export async function runAgentWithConfig(
 
     switch (config.provider) {
       case 'claude':
-        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
         break;
       case 'gemini':
-        reply = await runViaGemini(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
+        reply = await runViaGemini(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
         break;
       case 'antigravity':
-        reply = await runViaAntigravity(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
+        reply = await runViaAntigravity(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
         break;
       case 'nvidia_nim':
-        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, messageForAgent);
+        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, messageForAgent, signal);
         break;
       case 'openrouter':
-        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, messageForAgent);
+        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, messageForAgent, signal);
         break;
       default:
         console.warn(`[Router] Unknown provider: ${config.provider}, falling back to Claude`);
-        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
     }
+    if (signal?.aborted) throw new AgentAbortedError();  // aborted during generation → skip postProcess/side-effects
 
     // ── HOISTED customer-facing contract (Reply Gateway P1) ──
     // Single chokepoint: scrub banned phrases + parse [[SEND_MEDIA]]/[[ESCALATE]]
@@ -333,6 +358,7 @@ export async function runAgentWithConfig(
 
     return reply.trim();  // empty → consumer stays silent (no fallback)
   } catch (err: any) {
+    if (err instanceof AgentAbortedError) throw err;  // cancel-in-flight — do NOT swallow to '' (Codex C1)
     console.error(`[Router] Provider ${config.provider} failed for ${config.slug}:`, err.message);
     return '';  // no fallback — stay silent
   }
@@ -397,7 +423,9 @@ async function runViaClaude(
   history: SessionMessage[],
   message: string,
   sessionKey: string = '',
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   // 1. Check persistent session
   const sessionId = await getThreadSessionId(sessionKey);
 
@@ -536,10 +564,25 @@ async function runViaClaude(
 
     let stdout = '';
     let stderr = '';
+    // Cancel-in-flight: a new customer message arrived mid-generation → kill the
+    // CLI now (stop wasting tokens + release the session lock fast) and reject
+    // with AgentAbortedError so the consumer un-claims + re-coalesces. `settled`
+    // guards the close handler from running its parse/resolve side-effects after
+    // an abort (Codex C4 — first-settle-wins; skip the rest).
+    let settled = false;
     const timeout = setTimeout(() => {
+      settled = true;
       child.kill('SIGTERM');
       reject(new Error(`Claude CLI timed out for ${config.slug}`));
     }, AGENT_TIMEOUT_MS);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      reject(new AgentAbortedError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
@@ -552,6 +595,9 @@ async function runViaClaude(
     });
 
     child.on('close', async (code) => {
+      if (settled) return;   // aborted/timed-out already — skip parse/resolve side-effects
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
       clearTimeout(timeout);
 
       // Cleanup temp dir
@@ -839,7 +885,9 @@ async function runViaGemini(
   history: SessionMessage[],
   message: string,
   sessionKey: string = '',
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   // Model from UI Cấu hình Agent → paperclip_agents.model (SSOT)
   const model = config.model || 'gemini-2.5-flash';
 
@@ -1102,7 +1150,9 @@ async function runViaAntigravity(
   history: SessionMessage[],
   message: string,
   sessionKey: string = '',
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   const model = config.model || 'Gemini 3.1 Pro (High)';
 
   // Conversation id passed to agy. If a brain with this id exists, agy RESUMES it;
@@ -1278,7 +1328,9 @@ async function runViaOpenRouter(
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error('OPENROUTER_API_KEY not set');
@@ -2411,7 +2463,9 @@ async function runViaNvidiaNim(
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   const apiKey = process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY;
   if (!apiKey) {
     throw new Error(

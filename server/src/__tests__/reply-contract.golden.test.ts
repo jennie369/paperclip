@@ -15,6 +15,8 @@ import {
   stripInternalMarkers,
   parseEscalationMarker,
   postProcessReply,
+  runAgentWithConfig,
+  AgentAbortedError,
 } from "../channels/router.js";
 import {
   buildBatchId,
@@ -246,6 +248,25 @@ describe("reply-contract golden-set (P0 baseline)", () => {
     expect(isUniqueViolation({ code: "23503", message: "foreign key" })).toBe(false);
     expect(isUniqueViolation(null)).toBe(false);
     expect(isUniqueViolation("boom")).toBe(false);
+  });
+
+  // ── Cancel-in-flight: a pre-aborted signal throws AgentAbortedError (NOT '') ──
+  // This is the C1 core: abort must be a TYPED error so the consumer un-claims +
+  // re-coalesces, instead of a '' that looks like a genuine empty reply (which
+  // would mark the batch agent_silent and lose the customer's message). The entry
+  // guard fires before any DB/spawn work, so this is a pure unit test.
+  it("runAgentWithConfig throws AgentAbortedError on a pre-aborted signal", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(
+      runAgentWithConfig({ slug: "sales-closer", provider: "claude" } as any, "sk", "hi", [], ctrl.signal),
+    ).rejects.toBeInstanceOf(AgentAbortedError);
+  });
+
+  it("AgentAbortedError is an Error subclass named AgentAbortedError", () => {
+    const e = new AgentAbortedError();
+    expect(e).toBeInstanceOf(Error);
+    expect(e.name).toBe("AgentAbortedError");
   });
 
   // ── assertSent — throw on !success, else return platform id (Codex F2) ──
