@@ -515,8 +515,17 @@ function ChannelSettingsList() {
               style={{ backgroundColor: inst.color || getChannelColor(inst.display_name || inst.name) }}
             >
               <span
+                title={
+                  inst.status === "connected" ? "Đã kết nối"
+                    : inst.status === "monitor_only" ? "Kênh app — theo dõi qua mirror (không cần đăng nhập)"
+                    : inst.status === "error" ? (inst.status_message || "Lỗi kết nối")
+                    : "Chưa kết nối"
+                }
                 className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-background ${
-                  inst.status === "connected" ? "bg-green-500" : inst.status === "error" ? "bg-red-500" : "bg-gray-400"
+                  inst.status === "connected" ? "bg-green-500"
+                    : inst.status === "monitor_only" ? "bg-sky-500"
+                    : inst.status === "error" ? "bg-red-500"
+                    : "bg-gray-400"
                 }`}
               />
             </button>

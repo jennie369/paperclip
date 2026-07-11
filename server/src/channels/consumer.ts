@@ -457,6 +457,9 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
       metadata: {
         ...(ctx.groupName ? { groupName: ctx.groupName } : {}),
         ...((last as any).metadata?.comment_id ? { comment_id: (last as any).metadata.comment_id } : {}),
+        // Carry the app/web origin (edge cskh-inbound stores metadata.source =
+        // 'web'|'mobile') so the inbox can show where the customer is chatting from.
+        ...((last as any).metadata?.source ? { source: (last as any).metadata.source } : {}),
       },
       timestamp: new Date(last.created_at),
     };
@@ -625,6 +628,12 @@ async function processResolved(
   if (isGroup) {
     sessionUpdate.is_group = true;
     if (merged.metadata?.groupName) sessionUpdate.group_name = merged.metadata.groupName;
+  }
+  // Record the app/web origin of the latest message on the session so the inbox
+  // list + chat header can show a "📱 App" / "🌐 Web" badge. Merge into the
+  // existing metadata jsonb (shallow) so we don't clobber bot_paused/typing/etc.
+  if (merged.metadata?.source) {
+    sessionUpdate.metadata = { ...((sess as any).metadata || {}), last_source: merged.metadata.source };
   }
   // Link CRM customer to session (required for order/ticket creation in chat).
   // NOT for groups: a group session is shared by many members, so linking it to

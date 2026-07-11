@@ -78,6 +78,22 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
                 {leadScore != null && (
                   <span className="text-[10px] text-muted-foreground tabular-nums">Lead: {leadScore}</span>
                 )}
+                {/* App vs Web origin (metadata.last_source, set by the consumer from
+                    edge cskh-inbound). Only appears for cskh customers who chat from
+                    the app/web — Zalo/FB threads don't carry a source. */}
+                {(() => {
+                  const src = (conv.metadata as { last_source?: string } | undefined)?.last_source;
+                  if (!src) return null;
+                  const isApp = src === "mobile";
+                  return (
+                    <span
+                      title={isApp ? "Khách đang nhắn từ App" : "Khách đang nhắn từ Web"}
+                      className={`text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold ${isApp ? "bg-sky-500/10 text-sky-600" : "bg-emerald-500/10 text-emerald-600"}`}
+                    >
+                      {isApp ? "📱 App" : "🌐 Web"}
+                    </span>
+                  );
+                })()}
               </div>
               {/* Which connected account this thread belongs to — full name + the
                   channel's own color so the operator never replies from the wrong
