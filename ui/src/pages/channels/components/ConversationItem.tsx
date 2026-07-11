@@ -175,8 +175,10 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
               </span>
             </div>
 
-            {/* Row 2: Channel badge (per-account color + origin arrow) + Agent badge */}
-            <div className="flex items-center gap-1.5 mb-1">
+            {/* Row 2: Channel badge (per-account color + origin arrow) + Agent badge.
+                flex-wrap + min-w-0 so a narrow list panel wraps badges to a new line
+                instead of overflowing / overlapping the text (owner report 2026-07-11). */}
+            <div className="flex flex-wrap items-center gap-1 mb-1 min-w-0">
               <ChannelBadge name={channelLabel} color={chInfo?.color} withOriginArrow />
 
               {/* App vs Web origin badge (cskh only — metadata.last_source). */}
@@ -187,7 +189,7 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
                 return (
                   <span
                     title={isApp ? "Khách nhắn từ App" : "Khách nhắn từ Web"}
-                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${isApp ? "bg-sky-500/10 text-sky-600" : "bg-emerald-500/10 text-emerald-600"}`}
+                    className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${isApp ? "bg-sky-500/10 text-sky-600" : "bg-emerald-500/10 text-emerald-600"}`}
                   >
                     {isApp ? "📱 App" : "🌐 Web"}
                   </span>
@@ -195,8 +197,8 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
               })()}
 
               {conv.agent_slug && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-500">
-                  <Bot className="h-3 w-3" />
+                <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-500 max-w-full truncate">
+                  <Bot className="h-3 w-3 shrink-0" />
                   {conv.agent_slug}
                 </span>
               )}

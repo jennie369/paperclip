@@ -68,10 +68,10 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
               {displayName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold truncate max-w-[200px]">{displayName}</h3>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                <h3 className="text-sm font-semibold truncate max-w-[180px]">{displayName}</h3>
                 {conv.label && (
-                  <span className="text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold uppercase bg-red-500/10 text-red-500">
+                  <span className="shrink-0 text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold uppercase bg-red-500/10 text-red-500">
                     {conv.label}
                   </span>
                 )}
