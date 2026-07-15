@@ -29,6 +29,9 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
   // a single thread instantly — agent goes silent for THIS customer only,
   // messages still arrive. Channel-wide pause lives in Cài đặt kênh.
   const botPaused = (conv.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true;
+  // Số tin khách CHỜ trong lúc bot tắt (consumer stash khi tin chạm gate paused, 2026-07-16)
+  // → nhắc operator nhớ bật bot lại (chống case "quên bật 3 tuần" của khách yinyangmasters).
+  const pausedWaiting = (conv.metadata as { paused_pending_count?: number } | undefined)?.paused_pending_count ?? 0;
 
   // Agent options for the inline per-chat picker (always loaded — lets the operator
   // turn the bot ON with a chosen agent even on a channel that has no default agent).
@@ -143,7 +146,9 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
               </SelectContent>
             </Select>
             {conv.agent_slug && botPaused && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 font-semibold">Bạn đang trực</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 font-semibold">
+                Bạn đang trực{pausedWaiting > 0 ? ` · ${pausedWaiting} tin chờ` : ""}
+              </span>
             )}
             {conv.agent_slug && (
               <button
