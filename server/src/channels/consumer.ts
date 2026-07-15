@@ -159,9 +159,119 @@ function scheduleQuietWindow(sessionKey: string, ctx: BatchCtx, delayMs: number 
 }
 
 /**
+ * Surface paused state to the owner-UI (2026-07-16). When a session is bot_paused
+ * (human takeover), the gate returns WITHOUT claiming rows, so customer messages sit
+ * as 'pending' — invisibly (bug: yinyangmasters khách kẹt 3 tuần). channel_pending is
+ * service_role-only (owner-UI can't read it), so we stash the paused state onto
+ * channel_sessions.metadata (which the owner-inbox DOES read) via an atomic idempotent
+ * RPC → the badge shows "🔇 Bot tắt — N tin chờ" so the owner remembers to re-enable.
+ */
+async function surfacePausedState(ctx: BatchCtx, sessionKey: string): Promise<void> {
+  try {
+    let q = supabase
+      .from('channel_pending_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('channel_name', ctx.channel)
+      .eq('thread_id', ctx.threadId)
+      .eq('status', 'pending')
+      .is('handled_by', null);
+    if (ctx.peerKind !== 'group') q = q.eq('from_uid', ctx.senderId);
+    const { count } = await q;
+    await supabase.rpc('cskh_set_paused_meta', { p_session_key: sessionKey, p_pending_count: count ?? 0 });
+  } catch { /* best-effort surface — never block the pause gate */ }
+}
+
+/**
+ * Re-drain a session's still-pending messages (2026-07-16). Called when an owner turns
+ * the bot back ON after a takeover (manual re-enable — no auto-resume, per OD-1). Derives
+ * the batch ctx from a still-pending row (same pattern as the startup reschedule) and
+ * schedules a quiet-window so the bot answers the messages that arrived while paused.
+ * No-op if nothing is pending. Exported so conversation-routes (Paperclip toggle) can
+ * call it directly; the channel_sessions realtime subscription covers the edge/mobile
+ * toggle path.
+ */
+export async function reschedulePendingSession(sessionKey: string): Promise<void> {
+  try {
+    const idx1 = sessionKey.indexOf(':');
+    const idx2 = sessionKey.indexOf(':', idx1 + 1);
+    if (idx1 < 0 || idx2 < 0) return;
+    const channel = sessionKey.slice(0, idx1);
+    const threadId = sessionKey.slice(idx1 + 1, idx2);
+    const senderPart = sessionKey.slice(idx2 + 1);
+    const isGroup = senderPart === 'group';
+
+    let q = supabase
+      .from('channel_pending_messages')
+      .select('from_uid, sender_name, peer_kind, metadata')
+      .eq('channel_name', channel)
+      .eq('thread_id', threadId)
+      .eq('status', 'pending')
+      .is('handled_by', null)
+      .order('created_at', { ascending: true })
+      .limit(1);
+    if (!isGroup) q = q.eq('from_uid', senderPart);
+    const { data } = await q;
+    if (!data || data.length === 0) return; // nothing waiting → nothing to re-drain
+    const row = data[0] as any;
+    const cfg = await getChannelConfig(channel);
+    if (!cfg || !cfg.enabled) return;
+    scheduleQuietWindow(sessionKey, {
+      channel,
+      channelType: 'zalo_personal', // placeholder — routing uses channel, not channelType (mirror startup)
+      threadId,
+      senderId: isGroup ? row.from_uid : senderPart,
+      senderName: row.sender_name || undefined,
+      peerKind: (row.peer_kind || 'direct') as InboundMessage['peerKind'],
+      groupName: (row.metadata as any)?.groupName,
+      channelConfig: cfg,
+    }, 1_500);
+    console.log(`[Consumer] Re-drained paused session ${sessionKey} after bot unpause`);
+  } catch (err: any) {
+    console.error(`[Consumer] reschedulePendingSession ${sessionKey} failed:`, err?.message || err);
+  }
+}
+
+// Re-drain-on-unpause realtime bridge (2026-07-16). Listens for channel_sessions UPDATE
+// where bot_unpaused_at advances (an owner turned the bot back on via the edge/mobile
+// toggle, which can't call the consumer directly) → reschedule that session's waiting
+// pending. Guards: (a) singleton subscription; (b) act only on a NEW bot_unpaused_at
+// value per session (dedupe) AND not currently paused → cosmetic metadata UPDATEs
+// (typing_until/last_source) never trigger a re-drain. NEW row is always full under
+// default replica identity (we only need NEW, not OLD → no REPLICA IDENTITY FULL).
+let sessionUnpauseChannel: ReturnType<typeof supabase.channel> | null = null;
+const lastUnpauseHandled = new Map<string, string>();
+function subscribeSessionUnpause(): void {
+  if (sessionUnpauseChannel) return;
+  sessionUnpauseChannel = supabase
+    .channel('cskh-session-unpause')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'channel_sessions' },
+      (payload: { new?: Record<string, any> }) => {
+        try {
+          const row = payload.new || {};
+          const sessionKey = row.session_key as string | undefined;
+          const upa = row.bot_unpaused_at as string | null | undefined;
+          const paused = !!(row.metadata && (row.metadata as any).bot_paused);
+          if (!sessionKey || !upa || paused) return;
+          if (lastUnpauseHandled.get(sessionKey) === upa) return; // already handled this unpause
+          lastUnpauseHandled.set(sessionKey, upa);
+          if (lastUnpauseHandled.size > 5000) lastUnpauseHandled.clear(); // bound memory
+          console.log(`[Consumer] channel_sessions unpause ${sessionKey} @ ${upa} — re-draining`);
+          void reschedulePendingSession(sessionKey);
+        } catch { /* best-effort */ }
+      },
+    )
+    .subscribe();
+  console.log('[Consumer] Subscribed to channel_sessions unpause (re-drain bridge)');
+}
+
+/**
  * Start the consumer: listen for inbound messages on the bus and process them.
  */
 export function startConsumer(): void {
+  subscribeSessionUnpause();
+
   bus.on('inbound', async (msg: InboundMessage) => {
     // Look up pending message ID by message_id for tracking
     let pendingId: string | undefined;
@@ -385,7 +495,11 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
   try {
     // Owner may have taken over while we waited.
     if (await isSessionPaused(sessionKey)) {
-      console.log(`[Consumer:${ctx.channel}] ⏸ ${sessionKey} bot_paused — skipping batch`);
+      // Surface paused state to owner-UI (2026-07-16) instead of leaving customer
+      // messages invisibly 'pending' — stash paused_since + N-waiting onto
+      // channel_sessions.metadata so the badge shows "🔇 Bot tắt — N tin chờ".
+      await surfacePausedState(ctx, sessionKey);
+      console.log(`[Consumer:${ctx.channel}] ⏸ ${sessionKey} bot_paused — skipping batch (surfaced)`);
       await clearAgentTyping(sessionKey);
       return;
     }

@@ -3,6 +3,7 @@
 
 import { Router } from 'express';
 import { supabase } from './zalo-personal/supabase.js';
+import { reschedulePendingSession } from './consumer.js';
 
 const router = Router();
 
@@ -147,13 +148,14 @@ router.post('/:key/read', async (req, res) => {
 // ── POST /api/channels/conversations/:key/bot — Toggle bot auto-reply (Sale/BOT handoff) ──
 router.post('/:key/bot', async (req, res) => {
   const { paused } = req.body; // true = Sale Trực (pause bot), false = BOT Tự Động
-  const { data: sess } = await supabase
-    .from('channel_sessions')
-    .select('metadata')
-    .eq('session_key', req.params.key)
-    .maybeSingle();
-  const metadata = { ...((sess?.metadata as Record<string, unknown>) || {}), bot_paused: !!paused };
-  await supabase.from('channel_sessions').update({ metadata }).eq('session_key', req.params.key);
+  // Atomic jsonb-merge RPC (2026-07-16) — không read-merge-write JS (clobber typing_until).
+  // Unpause: RPC xoá paused_since/paused_pending_count + set bot_unpaused_at=now().
+  await supabase.rpc('cskh_toggle_bot', { p_session_key: req.params.key, p_paused: !!paused });
+  if (!paused) {
+    // Bật bot lại → re-drain tin khách đọng lúc paused (bot trả tin chờ). Trực tiếp vì
+    // route này chạy cùng process consumer; đường edge/mobile dùng realtime bridge.
+    void reschedulePendingSession(req.params.key);
+  }
   res.json({ bot_paused: !!paused, message: paused ? 'Đã chuyển Sale trực' : 'Đã bật BOT tự động' });
 });
 
