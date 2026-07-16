@@ -1755,12 +1755,56 @@ const GENERIC_MEDIA_TAGS = new Set([
   'chart', 'education', 'banner', 'promo', 'sale', 'catalog', 'overview',
 ]);
 
+// Multi-ảnh/sản phẩm (2026-07-16): cap số ảnh gửi cho 1 item/lần (upload bucket tuần tự
+// ở CSKH, tránh spam N tin + latency). Áp cho CẢ marker lẫn fallback auto-match.
+const MEDIA_MAX_PER_MARKER = 6;
+
+// Suy mimeType từ đuôi path (all_images là list PATH, mỗi ảnh có thể khác loại) → fallback item.mimeType.
+function mimeFromExt(p: string): string | undefined {
+  const ext = p.toLowerCase().match(/\.([a-z0-9]+)(?:\?|$)/)?.[1];
+  switch (ext) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'gif': return 'image/gif';
+    case 'pdf': return 'application/pdf';
+    case 'mp4': return 'video/mp4';
+    default: return undefined;
+  }
+}
+
+// SSOT resolve 1 media-library item → N MediaFile (multi-ảnh 2026-07-16). Dùng CHUNG cho
+// parseMediaMarkers ([[SEND_MEDIA]]) + autoMatchMediaFromReply (fallback quên marker) → chống
+// split-brain. item.all_images (list PATH) → N ảnh (cap); item chỉ url/path (không all_images)
+// → 1 MediaFile GIỮ url-only backward-compat (Codex: fallback all_images||[path] rớt url).
+function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile[] {
+  if (item.all_images && item.all_images.length) {
+    const capped = item.all_images.slice(0, MEDIA_MAX_PER_MARKER);
+    if (item.all_images.length > MEDIA_MAX_PER_MARKER) {
+      console.log(`[Router/media] capped ${item.all_images.length}→${MEDIA_MAX_PER_MARKER} images for id=${item.id}`);
+    }
+    return capped.map((p) => ({
+      path: p,
+      mimeType: mimeFromExt(p) || item.mimeType,
+      filename: item.name,
+      caption: item.description,
+    }));
+  }
+  return [{
+    url: item.url || undefined,
+    path: item.path || undefined,
+    mimeType: item.mimeType,
+    filename: item.name,
+    caption: item.description,
+  }];
+}
+
 /**
  * FALLBACK auto-media (2026-07-01): agy/Gemini Flash hay HỨA gửi ảnh trong prose
  * ("Em gửi bạn xem hình ảnh…") mà KHÔNG emit `[[SEND_MEDIA: id]]` → khách không
  * nhận ảnh, agent tưởng đã gửi (silent). Khi reply hứa media + 0 marker → match
  * media theo TÊN sản phẩm/set (tag danh-tính) xuất hiện trong reply → đính kèm.
- * Precise: chỉ match tag ≥6 ký tự, không generic; cap 3 để tránh nhồi.
+ * Precise: chỉ match tag ≥6 ký tự, không generic; cap tổng MEDIA_MAX_PER_MARKER.
  */
 function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaFile[] {
   if (!lib?.items?.length || !text) return [];
@@ -1784,16 +1828,10 @@ function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaF
   for (const s of scored) {
     if (seen.has(s.item.id)) continue;
     seen.add(s.item.id);
-    picked.push({
-      url: s.item.url || undefined,
-      path: s.item.path || undefined,
-      mimeType: s.item.mimeType,
-      filename: s.item.name,
-      caption: s.item.description,
-    });
-    if (picked.length >= 3) break;
+    picked.push(...itemToMediaFiles(s.item)); // multi-ảnh: item → N MediaFile (helper chung)
+    if (picked.length >= MEDIA_MAX_PER_MARKER) break; // cap TỔNG media, KHÔNG phải số item (Codex R2)
   }
-  return picked;
+  return picked.slice(0, MEDIA_MAX_PER_MARKER); // item cuối có thể đẩy vượt → cắt tổng
 }
 
 /**
@@ -1864,24 +1902,17 @@ async function parseMediaMarkers(
       const fullMatch = match[0];
       const id = match[1];
 
-      let mediaFile: MediaFile | null = null;
+      // Multi-ảnh (2026-07-16): 1 marker → N MediaFile (item.all_images) qua helper chung.
+      let mediaFiles: MediaFile[] = [];
 
       // 1. Local static library lookup
       if (lib) {
         const item = lib.items.find((x) => x.id === id);
-        if (item) {
-          mediaFile = {
-            url: item.url || undefined,
-            path: item.path || undefined,
-            mimeType: item.mimeType,
-            filename: item.name,
-            caption: item.description,
-          };
-        }
+        if (item) mediaFiles = itemToMediaFiles(item);
       }
 
-      // 2. Supabase DB lookup if UUID format
-      if (!mediaFile && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      // 2. Supabase DB lookup if UUID format (single asset — marketing_assets 1 file/id)
+      if (mediaFiles.length === 0 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
         try {
           const { data, error } = await supabase
             .from('marketing_assets')
@@ -1890,28 +1921,28 @@ async function parseMediaMarkers(
             .single();
 
           if (data && !error && data.file_path) {
-            mediaFile = {
+            mediaFiles = [{
               path: pathJoin(PROJECT_ROOT, data.file_path),
               mimeType: data.type === 'video' ? 'video/mp4' : (data.type === 'document' ? 'application/pdf' : 'image/jpeg'),
               filename: data.file_path.split('/').pop() || 'media',
               caption: [data.title, data.description].filter(Boolean).join('\n'),
-            };
+            }];
           }
         } catch (e) {
           console.error(`[Router/media] Supabase query failed for ${id}:`, e);
         }
       }
 
-      if (!mediaFile) {
+      if (mediaFiles.length === 0) {
         console.warn(`[Router/media] Marker [[SEND_MEDIA: ${id}]] — id not found in library or DB`);
         chunkText = chunkText.replace(fullMatch, '');
         continue;
       }
 
+      // Dedup theo id (1 marker = 1 set, kể cả agent emit id 2 lần) → push CẢ N ảnh.
       if (!seenGlobal.has(id)) {
         seenGlobal.add(id);
-        chunkMedia.push(mediaFile);
-        allMedia.push(mediaFile);
+        for (const mf of mediaFiles) { chunkMedia.push(mf); allMedia.push(mf); }
       }
 
       chunkText = chunkText.replace(fullMatch, '');

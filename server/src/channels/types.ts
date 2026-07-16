@@ -69,6 +69,9 @@ export interface MediaLibraryItem {
   type: 'image' | 'video' | 'pdf' | 'audio' | 'document' | 'file';
   mimeType: string;
   path?: string | null;
+  /** Multi-ảnh/sản phẩm (2026-07-16): danh sách path ảnh; `path` = primary = all_images[0].
+   *  Item không có all_images → gửi 1 ảnh (path/url) như cũ (backward-compat). */
+  all_images?: string[];
   url?: string | null;
   description: string;
   tags?: string[];
