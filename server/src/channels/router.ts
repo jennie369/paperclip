@@ -2239,10 +2239,15 @@ export function scrubBannedPhrases(text: string, agentSlug: string): string {
   // Catches: [MCP_xxx], [CALL: ...], [TOOL: ...], [FUNCTION: ...], [DEBUG: ...]
   // EXCLUDED: SEND_MEDIA, MSG_BREAK, STAGE, ESCALATE — those are real markers
   // parsed downstream by parseMediaMarkers / parseStageMarker / parseEscalationMarker.
-  const toolMarkerRe = /\[{1,2}\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\]]*\]{1,2}/gi;
+  // P18 fix (2026-07-16): form [[...]] phải match tới ]] ĐÓNG (nhánh double-bracket lazy
+  // [\s\S]*?\]\]) — KHÔNG dùng [^\]]* (dừng ở ] lồng trong args như JSON array tags=["a","b"]
+  // hoặc ngoặc khách echo → CẮT marker, leak đuôi `..., key="v")]]`). Nhánh single [TOOL:...]
+  // dùng [^\][]* (loại cả [ và ]) để không nuốt bracket khách. SEND_MEDIA/MSG_BREAK không nằm
+  // trong keyword list → vẫn preserve (parseMediaMarkers xử downstream). Verified 9/9 test.
+  const toolMarkerRe = /\[\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*[\s\S]*?\]\]|\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\][]*\]/gi;
   if (toolMarkerRe.test(scrubbed)) {
     violations.push('tool_markers');
-    scrubbed = scrubbed.replace(/\[{1,2}\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\]]*\]{1,2}/gi, '');
+    scrubbed = scrubbed.replace(/\[\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*[\s\S]*?\]\]|\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\][]*\]/gi, '');
   }
 
   // Rule 4: Strip ALL special formatting characters (★, •, **, ##, etc.)

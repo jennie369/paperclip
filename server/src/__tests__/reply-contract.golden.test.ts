@@ -117,6 +117,23 @@ describe("reply-contract golden-set (P0 baseline)", () => {
     expect(out).toContain("cảm ơn chị");
   });
 
+  // ── G9b (P18 2026-07-16): CALL marker with nested ] (JSON array arg) → no fragment leak ──
+  //    scrub Rule 3b phải match tới ]] đóng, KHÔNG cắt ở ] lồng (tags=["a","b"]) rồi leak đuôi
+  //    `, lifecycle_stage="v")]]`. Test qua FULL pipeline (postProcessReply) vì bug ở
+  //    scrubBannedPhrases chạy TRƯỚC stripInternalMarkers — G9 test cô lập KHÔNG bắt được.
+  it("G9b CALL marker with nested ] in JSON array arg → no fragment leaks", async () => {
+    const config = cfg();
+    const input =
+      'Dạ em hiểu rồi ạ [[CALL: crm_update(tags=["interested","crypto"], lifecycle_stage="consideration")]] cảm ơn chị.';
+    const out = await postProcessReply(input, config, null);
+    expect(out).not.toMatch(/lifecycle_stage/);
+    expect(out).not.toMatch(/\)\]\]/);
+    expect(out).not.toMatch(/tags=/);
+    expect(out).not.toMatch(/\bCALL\b/);
+    expect(out).toContain("Dạ em hiểu rồi");
+    expect(out).toContain("cảm ơn chị");
+  });
+
   // ── G10: genuine customer [[...]] brackets survive ──
   it("G10 customer brackets [[3,4]] / [[bao nhiêu]] survive", () => {
     const input = "combo [[3,4]] giá [[bao nhiêu]] vậy em?";
