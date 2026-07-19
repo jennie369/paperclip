@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { supabase } from './zalo-personal/supabase.js';
 import { clearConfigCache } from './consumer.js';
+import { fetchTranscript } from './transcript.js';
 import { approvePairing } from './policy.js';
 import { streamEvents, clearAgentCache } from './router.js';
 
@@ -101,32 +102,21 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
   const { sessionKey } = req.params;
   const limit = Number(req.query.limit) || 100;
 
-  // Parse session_key to get channel_name and thread_id
-  // Format: "{channel}:{chatId}:{senderId}"
-  const parts = sessionKey.split(':');
-  if (parts.length < 2) {
-    return res.status(400).json({ error: 'Invalid session_key format' });
+  // Nguồn DUY NHẤT dùng chung với CrmInbox (transcript.ts) — cùng parser canonical
+  // (indexOf-slicing, chịu được id chứa ':'; split(':') cũ cắt sai) + cùng bộ lọc + cùng
+  // chính sách ẩn `deleted_for_me` ⇒ 2 màn không thể lệch nhau. Plan 2026-07-19-INBOX-...
+  let inbound: Record<string, any>[];
+  let outbound: Record<string, any>[];
+  try {
+    const t = await fetchTranscript(sessionKey, limit);
+    inbound = t.inbound;
+    outbound = t.outbound;
+  } catch (err: any) {
+    // Trước đây lỗi DB bị nuốt (destructure không check error) → trả thread rỗng giả.
+    const invalid = /Invalid session_key/.test(err?.message || '');
+    console.error('[sessions/:sessionKey/messages] transcript failed:', err?.message || err);
+    return res.status(invalid ? 400 : 500).json({ error: err?.message || 'transcript failed' });
   }
-  const channelName = parts[0];
-  const chatId = parts[1];
-
-  // Fetch inbound messages
-  const { data: inbound } = await supabase
-    .from('channel_pending_messages')
-    .select('id, channel_name, thread_id, thread_type, from_uid, sender_name, message_id, body, content_type, media, status, ts, created_at, session_key, agent_slug')
-    .eq('channel_name', channelName)
-    .eq('thread_id', chatId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
-  // Fetch outbound messages
-  const { data: outbound } = await supabase
-    .from('channel_sent_messages')
-    .select('id, channel_name, thread_id, thread_type, to_uid, body, content_type, media, status, sent_by, created_at')
-    .eq('channel_name', channelName)
-    .eq('thread_id', chatId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
 
   // Merge and normalize
   const messages = [

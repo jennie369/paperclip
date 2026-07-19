@@ -22,7 +22,6 @@ import {
   mapHeader,
   mapCrm,
   mapMessages,
-  mapHistory,
   buildChannelGroups,
 } from "@/components/crm-messaging/command-center/adapters";
 
@@ -117,11 +116,14 @@ export function CrmInbox() {
   const mappedConvs = displayed.map(mapConversation);
   const header = detail ? mapHeader(detail) : undefined;
   const crm = detail ? mapCrm(detail) : undefined;
-  const messages = detail?.history?.length
-    ? mapHistory(detail.history)
-    : msgQuery.data
-      ? mapMessages(msgQuery.data.messages)
-      : [];
+  // Nguồn hiển thị hội thoại = transcript endpoint (channel_pending ∪ channel_sent) —
+  // CÙNG nguồn với Unified Inbox nên 2 màn không thể lệch nhau.
+  // KHÔNG dùng `detail.history`: đó là BỘ NHỚ của agent (đã trim, không có id gốc) và
+  // `router.runAgent` ghi history NGAY sau khi sinh reply, trong khi consumer vẫn có thể
+  // HUỶ reply trước lúc gửi nếu owner bấm Dừng Bot giữa chừng ⇒ history có thể chứa câu
+  // khách CHƯA TỪNG NHẬN. Hiển thị nó = nói dối người trực. (Chị Jennie duyệt 2026-07-19;
+  // plan 2026-07-19-INBOX-TRANSCRIPT-UNIFY-2-DUONG-DOC OD-5.)
+  const messages = msgQuery.data ? mapMessages(msgQuery.data.messages) : [];
   const botPaused = (detail?.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true;
 
   async function handleSend(text: string) {

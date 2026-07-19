@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { supabase } from './zalo-personal/supabase.js';
 import { reschedulePendingSession } from './consumer.js';
+import { fetchTranscript } from './transcript.js';
 
 const router = Router();
 
@@ -67,21 +68,22 @@ router.get('/:key/messages', async (req, res) => {
   const sessionKey = req.params.key;
   const limit = parseInt(String(req.query.limit || '200'));
 
-  // Fetch inbound messages
-  const { data: inbound } = await supabase
-    .from('channel_pending_messages')
-    .select('id, body, content_type, media, sender_name, from_uid, status, handled_by, skip_reason, ts, created_at')
-    .eq('session_key', sessionKey)
-    .order('created_at', { ascending: true })
-    .limit(limit);
-
-  // Fetch outbound (sent) messages
-  const { data: outbound } = await supabase
-    .from('channel_sent_messages')
-    .select('id, body, content_type, media, sent_by, metadata, created_at')
-    .eq('session_key', sessionKey)
-    .order('created_at', { ascending: true })
-    .limit(limit);
+  // Nguồn DUY NHẤT dùng chung với Unified Inbox (transcript.ts) — trước đây endpoint này
+  // tự truy vấn và lệch với màn kia: lọc inbound theo `session_key` (ẩn tin chưa claim) và
+  // lọc/select outbound bằng 2 cột KHÔNG tồn tại (`session_key`, `metadata`) mà không check
+  // error ⇒ outbound luôn rỗng (không thấy câu trả lời nào). Xem plan 2026-07-19-INBOX-...
+  let inbound: Record<string, any>[];
+  let outbound: Record<string, any>[];
+  try {
+    const t = await fetchTranscript(sessionKey, limit);
+    inbound = t.inbound;
+    outbound = t.outbound;
+  } catch (err: any) {
+    // KHÔNG nuốt lỗi thành mảng rỗng — "hội thoại trống" giả là cách bug cũ ẩn mình.
+    const invalid = /Invalid session_key/.test(err?.message || '');
+    console.error('[conversations/:key/messages] transcript failed:', err?.message || err);
+    return res.status(invalid ? 400 : 500).json({ error: err?.message || 'transcript failed' });
+  }
 
   // Merge and sort by timestamp
   const messages = [
