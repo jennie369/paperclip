@@ -91,6 +91,18 @@ class MessageBus extends EventEmitter {
         },
         (payload) => {
           const row = payload.new as Record<string, any>;
+          // Realtime re-emit tồn tại để cover kênh EDGE-INGESTED (cskh-*: tin insert từ
+          // Supabase edge fn, KHÔNG có in-process bus.emit trong paperclip server). Kênh
+          // IN-PROCESS (zalo/facebook/facebook-web/youtube) đã tự emit('inbound') ngay khi
+          // nhận tin → nếu realtime CŨNG emit thì consumer xử lý CÙNG tin 2 LẦN → bản thứ 2
+          // bị deduplicator coi 'duplicate' → markHandled('skipped') đè lên chính row đang
+          // chờ reply → runSessionBatch drain WHERE status='pending' miss → bot không trả
+          // lời (BUG Zalo Gem & Yinyang 2026-07-18, plan 2026-07-18-ZALO-GEM-INBOUND-...).
+          // → CHỈ re-emit cho kênh edge-ingested (prefix cskh). gem-master insert
+          // status='handled' nên realtime filter status=eq.pending không đụng nó. Kênh
+          // edge-ingested MỚI (ngoài cskh) → thêm prefix vào guard này.
+          const chName = String(row.channel_name || '');
+          if (!chName.startsWith('cskh')) return;
           const msg: InboundMessage = {
             id: row.message_id || row.id,
             channel: row.channel_name,

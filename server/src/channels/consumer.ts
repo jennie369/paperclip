@@ -386,8 +386,16 @@ async function processMessage(
     || `${msg.channel}:${msg.chatId}:${msg.senderId}:${msg.timestamp.getTime()}`;
 
   if (deduplicator.isDuplicate(dedupeKey)) {
-    console.log(`${logPrefix} Duplicate message skipped: ${dedupeKey}`);
-    if (pendingId) await bus.markHandled(pendingId, 'consumer', 'skipped', 'duplicate');
+    // Duplicate ở đây = ECHO của CÙNG row (cùng dedupe_key được emit 2 lần: in-process
+    // 'inbound' + realtime 'inbound:realtime'). idx_cpm_dedupe (UNIQUE partial trên
+    // dedupe_key WHERE NOT NULL) đảm bảo ≤1 row/dedupe_key → duplicate KHÔNG BAO GIỜ là
+    // 2 row khác nhau. Vì vậy markHandled(...,'skipped') ở đây sẽ GIẾT đúng row mà đường
+    // kia đang xử lý chờ reply (runSessionBatch drain WHERE status='pending' → miss → bot
+    // im). → chỉ bỏ qua im lặng, KHÔNG đụng status row (Fix B, plan 2026-07-18-ZALO-GEM).
+    // Fix A đã cắt nguồn echo cho kênh in-process; đây là lớp phòng thủ cho echo lọt bất
+    // kỳ đâu (vd multi-instance tương lai). 2 tin THẬT khác nhau = 2 dedupe_key = 2 row
+    // riêng → coalesce đúng ở runSessionBatch, KHÔNG vào nhánh này.
+    console.log(`${logPrefix} Duplicate echo skipped (row untouched): ${dedupeKey}`);
     return;
   }
 
