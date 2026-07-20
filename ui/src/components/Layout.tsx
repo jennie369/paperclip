@@ -234,16 +234,6 @@ export function Layout() {
   }, [isMobile, updateMobileNavVisibility]);
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-
-    document.body.style.overflow = isMobile ? "visible" : "hidden";
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [isMobile]);
-
-  useEffect(() => {
     if (!location.pathname.startsWith("/instance/settings/")) return;
 
     const nextPath = normalizeRememberedInstanceSettingsPath(

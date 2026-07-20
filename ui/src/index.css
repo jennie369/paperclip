@@ -124,8 +124,16 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    height: 100%;
-    overflow: hidden;
+    min-height: 100%;
+  }
+  /* The desktop shell is a fixed frame whose inner panes scroll, so the page
+     itself must not. Mobile scrolls the page — locking it here would freeze
+     scrolling whenever a dialog cleared its inline override. */
+  @media (min-width: 768px) {
+    body {
+      height: 100%;
+      overflow: hidden;
+    }
   }
   h1,
   h2,

@@ -1,6 +1,7 @@
 // Simple Modal — replaces Radix Dialog which crashes in this build
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { lockBodyScroll } from "@/lib/body-scroll-lock";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -17,16 +18,16 @@ export function SimpleModal({
   children: React.ReactNode;
   footer?: React.ReactNode;
 }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    if (open) {
-      document.body.style.overflow = 'hidden';
-      const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-      window.addEventListener('keydown', handler);
-      return () => { document.body.style.overflow = ''; window.removeEventListener('keydown', handler); };
-    } else {
-      document.body.style.overflow = '';
-    }
-  }, [open, onClose]);
+    if (!open) return;
+    const releaseScroll = lockBodyScroll();
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseRef.current(); };
+    window.addEventListener('keydown', handler);
+    return () => { releaseScroll(); window.removeEventListener('keydown', handler); };
+  }, [open]);
 
   if (!open) return null;
 

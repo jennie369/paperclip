@@ -1,5 +1,6 @@
 'use client';
 
+import { lockBodyScroll } from '../../../lib/body-scroll-lock';
 import React, {
   useState,
   useEffect,
@@ -587,10 +588,7 @@ export function CommandPalette({
   // Khoa cuon trang khi mo
   useEffect(() => {
     if (!isOpen) return;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = '';
-    };
+    return lockBodyScroll();
   }, [isOpen]);
 
   // ── Tính toán kết quả tìm kiếm ──
