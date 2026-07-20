@@ -194,7 +194,9 @@ export function UnifiedInbox() {
         // Mobile subtracts the breadcrumb bar and the bottom nav padding that
         // the shell reserves; dvh so the iOS URL bar can't push it off-screen.
         isMobile
-          ? "h-[calc(100dvh-10rem-env(safe-area-inset-bottom))] min-h-[24rem]"
+          // 7.5rem = breadcrumb (48) + bottom nav (65) + a 7px breather; the nav's
+          // own safe-area padding is subtracted separately.
+          ? "h-[calc(100dvh-7.5rem-env(safe-area-inset-bottom))] min-h-[24rem]"
           : "h-[calc(100vh-48px)]",
       )}
     >
