@@ -7,6 +7,8 @@ import { useQuery } from "@tanstack/react-query";
 import { MessageSquare, Users, Settings, Bell, BellOff, RefreshCw, Keyboard, HelpCircle, ExternalLink } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { channelsApi, type ChannelSession } from "@/api/channels";
+import { cn } from "@/lib/utils";
+import { useSidebar } from "@/context/SidebarContext";
 import { ConversationList } from "./components/ConversationList";
 import { ChatPanel } from "./components/ChatPanel";
 import { CustomerSidebar } from "./components/CustomerSidebar";
@@ -71,6 +73,7 @@ function playNotificationSound() {
 
 export function UnifiedInbox() {
   const navigate = useNavigate();
+  const { isMobile } = useSidebar();
   const [activeTab, setActiveTab] = useState<InboxTab>("inbox");
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -185,7 +188,16 @@ export function UnifiedInbox() {
   const displayName = selected?.customer?.display_name || selected?.sender_name || selected?.sender_id || "Khách hàng";
 
   return (
-    <div className="flex flex-col h-[calc(100vh-48px)] overflow-hidden -m-4 md:-m-6 bg-background">
+    <div
+      className={cn(
+        "flex flex-col overflow-hidden -m-4 md:-m-6 bg-background",
+        // Mobile subtracts the breadcrumb bar and the bottom nav padding that
+        // the shell reserves; dvh so the iOS URL bar can't push it off-screen.
+        isMobile
+          ? "h-[calc(100dvh-10rem-env(safe-area-inset-bottom))] min-h-[24rem]"
+          : "h-[calc(100vh-48px)]",
+      )}
+    >
       {/* Compact header: Main tabs + Channel tabs + Settings (ALL IN ONE ROW) */}
       <div className="flex items-center justify-between border-b border-border bg-background/80 backdrop-blur-sm shrink-0 px-2">
         {/* Left: Main tabs + Channel tabs inline */}
@@ -311,9 +323,18 @@ export function UnifiedInbox() {
       {/* Inbox tab */}
       {activeTab === "inbox" && (
         <>
+          {/* One column at a time on mobile: the list hands off to the thread,
+              and the thread's back arrow returns to the list. */}
           <div className="flex flex-1 overflow-hidden">
             {/* Panel Left: Conversation List — 340px */}
-            <div className="w-[340px] min-w-[300px] max-w-[400px] border-r border-border flex flex-col bg-background">
+            <div
+              className={cn(
+                "border-r border-border flex flex-col bg-background",
+                isMobile
+                  ? selected ? "hidden" : "w-full"
+                  : "w-[340px] min-w-[300px] max-w-[400px]",
+              )}
+            >
               <ConversationList
                 conversations={filteredConversations}
                 isLoading={isLoading}
@@ -327,22 +348,36 @@ export function UnifiedInbox() {
             </div>
 
             {/* Panel Center: Chat */}
-            <div className="flex-1 flex flex-col min-w-0 bg-background">
+            <div
+              className={cn(
+                "flex flex-col min-w-0 bg-background",
+                isMobile ? (selected ? "w-full flex-1" : "hidden") : "flex-1",
+              )}
+            >
               {selected ? (
                 <ChatPanel
                   conversation={selected}
                   onToggleCustomer={() => setRightPanel(p => p === "customer" ? "none" : "customer")}
                   onAction={handleAction}
                   channelMap={channelMap}
+                  onBack={isMobile ? () => setSelectedKey(null) : undefined}
                 />
               ) : (
                 <EmptyState count={filteredConversations.length} />
               )}
             </div>
 
-            {/* Panel Right: Customer Sidebar OR Order Panel */}
+            {/* Panel Right: Customer Sidebar OR Order Panel.
+                Too wide to sit beside the thread on a phone, so it covers it. */}
             {rightPanel === "customer" && selected && (
-              <div className="w-[380px] min-w-[320px] border-l border-border bg-background overflow-y-auto">
+              <div
+                className={cn(
+                  "bg-background overflow-y-auto",
+                  isMobile
+                    ? "fixed inset-0 z-50 pt-[env(safe-area-inset-top)]"
+                    : "w-[380px] min-w-[320px] border-l border-border",
+                )}
+              >
                 <CustomerSidebar
                   conversation={selected}
                   onClose={() => setRightPanel("none")}
@@ -351,7 +386,14 @@ export function UnifiedInbox() {
             )}
 
             {rightPanel === "order" && selected && (
-              <div className="w-[420px] min-w-[380px] border-l border-border bg-background overflow-hidden">
+              <div
+                className={cn(
+                  "bg-background overflow-hidden",
+                  isMobile
+                    ? "fixed inset-0 z-50 overflow-y-auto pt-[env(safe-area-inset-top)]"
+                    : "w-[420px] min-w-[380px] border-l border-border",
+                )}
+              >
                 <CreateOrderPanel
                   customer={{
                     id: selected.customer?.id || '',

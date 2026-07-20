@@ -17,6 +17,8 @@ interface Props {
   onToggleCustomer: () => void;
   onAction: () => void;
   channelMap?: ChannelDisplayMap;
+  /** Set on narrow layouts, where the list and the thread share one column. */
+  onBack?: () => void;
 }
 
 interface ReplyTo {
@@ -90,7 +92,7 @@ function MenuItem({
   );
 }
 
-export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, channelMap }: Props) {
+export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, channelMap, onBack }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
@@ -251,7 +253,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
 
   return (
     <div className="flex flex-col h-full">
-      <ChatHeader conversation={conv} onToggleCustomer={onToggleCustomer} onAction={onAction} channelMap={channelMap} />
+      <ChatHeader conversation={conv} onToggleCustomer={onToggleCustomer} onAction={onAction} channelMap={channelMap} onBack={onBack} />
 
       {/* FIX 4: Search bar (slides in on Ctrl+F) */}
       {showSearch && (

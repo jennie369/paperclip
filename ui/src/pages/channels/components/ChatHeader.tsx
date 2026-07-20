@@ -3,7 +3,7 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
-  ClipboardList, X, Pause, Play,
+  ClipboardList, X, Pause, Play, ArrowLeft,
 } from "lucide-react";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
@@ -17,9 +17,11 @@ interface Props {
   onToggleCustomer: () => void;
   onAction: () => void;
   channelMap?: ChannelDisplayMap;
+  /** Set on narrow layouts, where the list and the thread share one column. */
+  onBack?: () => void;
 }
 
-export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, channelMap }: Props) {
+export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, channelMap, onBack }: Props) {
   const chInfo = conv.channel_name && channelMap ? channelMap[conv.channel_name] : null;
   const channelLabel = chInfo?.display_name || conv.channel_name || "Kênh";
   const channelColor = chInfo?.color || "#6B7280";
@@ -64,6 +66,16 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
             the labeled action buttons never overlap or get clipped. */}
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
           <div className="flex items-center gap-2 min-w-0 flex-1">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                aria-label="Quay lại danh sách hội thoại"
+                className="-ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+            )}
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
               style={{ backgroundColor: channelColor }}
