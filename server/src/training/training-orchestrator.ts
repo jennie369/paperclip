@@ -1018,6 +1018,7 @@ class TrainingOrchestrator extends EventEmitter {
       };
       controller?.abortController.signal.addEventListener('abort', onAbort, { once: true });
 
+      child.stdout?.setEncoding("utf8");
       child.stdout.on('data', (chunk: Buffer) => {
         const text = chunk.toString('utf-8');
         stdout += text;
@@ -1035,6 +1036,7 @@ class TrainingOrchestrator extends EventEmitter {
           }
         }
       });
+      child.stderr?.setEncoding("utf8");
       child.stderr.on('data', (chunk: Buffer) => {
         const text = chunk.toString('utf-8');
         stderr += text;

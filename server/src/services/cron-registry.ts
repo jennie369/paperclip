@@ -303,10 +303,12 @@ export async function executeCronNow(
       finalize('timeout', stdoutBuf + stderrBuf + `\n[timeout after ${timeoutMs}ms]`, duration);
     }, timeoutMs);
 
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (chunk: Buffer) => {
       stdoutBuf += chunk.toString();
       if (stdoutBuf.length > 8000) stdoutBuf = stdoutBuf.slice(-8000);
     });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (chunk: Buffer) => {
       stderrBuf += chunk.toString();
       if (stderrBuf.length > 8000) stderrBuf = stderrBuf.slice(-8000);
@@ -938,7 +940,9 @@ function runHidden(cmd: string, args: string[]): Promise<string> {
     let stdout = '';
     let stderr = '';
     const proc = spawnHidden(cmd, args, { env: process.env });
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (c: Buffer) => { stderr += c.toString(); });
     proc.on('close', (code: number | null) => {
       if (code === 0) resolve(stdout);

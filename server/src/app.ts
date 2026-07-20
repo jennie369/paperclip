@@ -339,11 +339,13 @@ export async function createApp(
     }
     child.stdin.end();
 
+    child.stderr?.setEncoding("utf8");
     child.stderr.on("data", (chunk: Buffer) => {
       const err = chunk.toString("utf-8");
       console.log(`[PTDV-Chat] stderr: ${err.slice(0, 200)}`);
     });
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on("data", (chunk: Buffer) => {
       for (const line of chunk.toString("utf-8").split("\n")) {
         if (!line.trim()) continue;

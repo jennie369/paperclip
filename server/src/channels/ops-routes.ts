@@ -465,10 +465,12 @@ router.post('/content-pipeline/execute/:script', (req, res) => {
 
   res.write(`data: ${JSON.stringify({ type: 'start', script: scriptKey, path: scriptPath })}\n\n`);
 
+  proc.stdout?.setEncoding("utf8");
   proc.stdout.on('data', (data) => {
     res.write(`data: ${JSON.stringify({ type: 'stdout', text: data.toString() })}\n\n`);
   });
 
+  proc.stderr?.setEncoding("utf8");
   proc.stderr.on('data', (data) => {
     res.write(`data: ${JSON.stringify({ type: 'stderr', text: data.toString() })}\n\n`);
   });
@@ -829,7 +831,9 @@ router.post('/content-pipeline/delegate', (req, res) => {
     windowsHide: true,
   });
 
+  proc.stdout?.setEncoding("utf8");
   proc.stdout?.on('data', (chunk: Buffer) => { res.write(`data: ${JSON.stringify({ type: 'stdout', text: chunk.toString() })}\n\n`); });
+  proc.stderr?.setEncoding("utf8");
   proc.stderr?.on('data', (chunk: Buffer) => { res.write(`data: ${JSON.stringify({ type: 'stderr', text: chunk.toString() })}\n\n`); });
   proc.on('close', (code: number | null) => { res.write(`data: ${JSON.stringify({ type: 'exit', code, agent: agent_slug })}\n\n`); res.end(); });
   proc.on('error', (err: Error) => { res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`); res.end(); });
@@ -1623,7 +1627,9 @@ router.post('/content-pipeline/planner/delegate-ceo', async (req, res) => {
       windowsHide: true,
     });
 
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (d: Buffer) => send({ type: 'stdout', text: d.toString() }));
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (d: Buffer) => send({ type: 'stderr', text: d.toString() }));
     proc.on('close', (code: number) => { send({ type: 'exit', code }); res.end(); });
     req.on('close', () => { if (!proc.killed) proc.kill(); });
@@ -1815,7 +1821,9 @@ function spawnPublisher(args: string[], label: string): Promise<{ code: number; 
   return new Promise((resolve) => {
     const proc = spawn('python', [SCHEDULER_SCRIPT, ...args], { cwd: SCHEDULER_CWD, env: { ...process.env, PYTHONUTF8: '1' }, windowsHide: true });
     let stdout = '', stderr = '';
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code: number) => {
       console.log(`[Publisher:${label}] exit=${code} stdout=${stdout.length} stderr=${stderr.length}`);

@@ -755,7 +755,9 @@ router.post('/scripts/:id/execute', async (req, res) => {
       child.kill('SIGKILL');
     }, TIMEOUT_MS);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); if (stdout.length > 200_000) stdout = stdout.slice(-200_000); });
+    child.stderr?.setEncoding("utf8");
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); if (stderr.length > 50_000) stderr = stderr.slice(-50_000); });
 
     child.on('close', (code) => {
@@ -831,7 +833,9 @@ router.post('/mcp/:id/test', async (req, res) => {
     let err = '';
     const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout?.on('data', (c) => { out += c.toString(); if (out.length > 5_000) out = out.slice(-5_000); });
+    child.stderr?.setEncoding("utf8");
     child.stderr?.on('data', (c) => { err += c.toString(); if (err.length > 5_000) err = err.slice(-5_000); });
 
     child.on('close', (code) => {

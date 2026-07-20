@@ -218,7 +218,9 @@ async function spawnClaudeCli(prompt: string, model: string): Promise<string> {
     child.stdin.write(prompt);
     child.stdin.end();
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf-8'); });
+    child.stderr?.setEncoding("utf8");
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
 
     child.on('close', (code) => {

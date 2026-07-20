@@ -1115,6 +1115,7 @@ export async function runChildProcess(
               }, opts.timeoutSec * 1000)
             : null;
 
+        child.stdout?.setEncoding("utf8");
         child.stdout?.on("data", (chunk: unknown) => {
           const text = String(chunk);
           stdout = appendWithCap(stdout, text);
@@ -1123,6 +1124,7 @@ export async function runChildProcess(
             .catch((err) => onLogError(err, runId, "failed to append stdout log chunk"));
         });
 
+        child.stderr?.setEncoding("utf8");
         child.stderr?.on("data", (chunk: unknown) => {
           const text = String(chunk);
           stderr = appendWithCap(stderr, text);

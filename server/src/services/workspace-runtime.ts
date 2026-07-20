@@ -269,9 +269,11 @@ async function executeProcess(input: {
     });
     let stdout = "";
     let stderr = "";
+    child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => {
       stdout += String(chunk);
     });
+    child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
       stderr += String(chunk);
     });
@@ -1370,11 +1372,13 @@ async function startLocalRuntimeService(input: {
   });
   let stderrExcerpt = "";
   let stdoutExcerpt = "";
+  child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", async (chunk) => {
     const text = String(chunk);
     stdoutExcerpt = (stdoutExcerpt + text).slice(-4096);
     if (input.onLog) await input.onLog("stdout", `[service:${serviceName}] ${text}`);
   });
+  child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", async (chunk) => {
     const text = String(chunk);
     stderrExcerpt = (stderrExcerpt + text).slice(-4096);

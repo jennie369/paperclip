@@ -584,12 +584,14 @@ async function runViaClaude(
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
       stdout += text;
       streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: text, partial: stdout });
     });
 
+    child.stderr?.setEncoding("utf8");
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf-8');
     });
@@ -1023,12 +1025,14 @@ async function runViaGemini(
       reject(new Error(`Gemini CLI timed out for ${config.slug}`));
     }, AGENT_TIMEOUT_MS);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
       stdout += text;
       streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: text });
     });
 
+    child.stderr?.setEncoding("utf8");
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf-8');
     });
@@ -1262,9 +1266,11 @@ async function runViaAntigravity(
       reject(new Error(`Antigravity CLI timed out for ${config.slug}`));
     }, AGENT_TIMEOUT_MS);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on('data', (chunk: Buffer) => {
       streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: chunk.toString('utf-8') });
     });
+    child.stderr?.setEncoding("utf8");
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
 
     child.on('close', async (code) => {
