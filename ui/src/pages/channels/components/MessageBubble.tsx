@@ -59,6 +59,7 @@ export function MessageBubble({ message: msg }: Props) {
                       src={url}
                       alt="attachment"
                       className="max-w-[300px] rounded-lg cursor-pointer hover:opacity-90"
+                      data-lightbox=""
                       onClick={() => openImage(url, "Hình ảnh")}
                     />
                   ) : (

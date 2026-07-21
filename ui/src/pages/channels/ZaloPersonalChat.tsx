@@ -761,6 +761,8 @@ export function ZaloPersonalChat() {
                         src={imageData.thumb}
                         alt={imageData.title || "Hình ảnh"}
                         className="max-w-[200px] rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+                        data-lightbox=""
+                        data-lightbox-src={imageData.hd || imageData.href || imageData.thumb}
                         onClick={() => {
                           const fullUrl = imageData.hd || imageData.href || imageData.thumb;
                           openImage(fullUrl, imageData.title || "Hình ảnh");

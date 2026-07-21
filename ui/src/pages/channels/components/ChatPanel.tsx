@@ -471,6 +471,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                               alt="Hình ảnh"
                               className="max-w-[280px] rounded-lg cursor-pointer hover:opacity-90"
                               loading="lazy"
+                              data-lightbox=""
                               onClick={() => openImage(url, "Hình ảnh")}
                               onError={(e) => {
                                 const el = e.currentTarget;

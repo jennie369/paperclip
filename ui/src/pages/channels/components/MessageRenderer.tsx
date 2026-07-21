@@ -230,6 +230,8 @@ function ImageMsg({ data }: { data: Record<string, unknown> }) {
         alt="Hình ảnh"
         className="rounded-xl max-h-72 cursor-pointer hover:opacity-90 transition-opacity shadow-sm"
         loading="lazy"
+        data-lightbox=""
+        data-lightbox-src={fullSrc}
         onClick={() => openImage(fullSrc, "Hình ảnh")}
         onError={(e) => {
           const el = e.currentTarget;
