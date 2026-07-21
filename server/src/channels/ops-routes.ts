@@ -850,8 +850,14 @@ router.post('/content-pipeline/reload-agents', (_req, res) => {
 router.get('/content-pipeline/schedule', async (req, res) => {
   try {
     const { date } = req.query;
-    let query = supabase.from('cc_calendar_events').select('*').order('scheduled_at', { ascending: true });
-    if (date) query = query.gte('scheduled_at', `${date}T00:00:00`).lte('scheduled_at', `${date}T23:59:59`);
+    // Column is `scheduled_date` (a DATE) plus a separate `scheduled_time`; the old
+    // `scheduled_at` never existed, so PostgREST rejected every one of these queries.
+    let query = supabase
+      .from('cc_calendar_events')
+      .select('*')
+      .order('scheduled_date', { ascending: true })
+      .order('scheduled_time', { ascending: true, nullsFirst: true });
+    if (date) query = query.eq('scheduled_date', date as string);
     const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
