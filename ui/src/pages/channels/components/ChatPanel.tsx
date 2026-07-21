@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, X, ChevronDown, SmilePlus, Bot, Reply, MoreHorizontal, Copy, Pin, Star, ListChecks, RotateCcw, Trash2, Check } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
+import { useImageLightbox } from "@/components/ImageLightbox";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
@@ -93,6 +94,7 @@ function MenuItem({
 }
 
 export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, channelMap, onBack }: Props) {
+  const { openImage } = useImageLightbox();
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
@@ -469,7 +471,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                               alt="Hình ảnh"
                               className="max-w-[280px] rounded-lg cursor-pointer hover:opacity-90"
                               loading="lazy"
-                              onClick={() => window.open(url, "_blank")}
+                              onClick={() => openImage(url, "Hình ảnh")}
                               onError={(e) => {
                                 const el = e.currentTarget;
                                 el.style.display = "none";

@@ -34,6 +34,7 @@ import { cn } from "../lib/utils";
 import { NotFoundPage } from "../pages/NotFound";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { ImageLightboxProvider } from "@/components/ImageLightbox";
 
 const INSTANCE_SETTINGS_MEMORY_KEY = "paperclip.lastInstanceSettingsPath";
 
@@ -249,6 +250,7 @@ export function Layout() {
   }, [location.hash, location.pathname, location.search]);
 
   return (
+    <ImageLightboxProvider>
     <div
       className={cn(
         "bg-background text-foreground pt-[env(safe-area-inset-top)]",
@@ -427,5 +429,6 @@ export function Layout() {
       <NewAgentDialog />
       <ToastViewport />
     </div>
+    </ImageLightboxProvider>
   );
 }

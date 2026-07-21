@@ -3,6 +3,7 @@
 
 import { Bot } from "lucide-react";
 import { type ConversationMessage } from "@/api/channels";
+import { useImageLightbox } from "@/components/ImageLightbox";
 import { MessageRenderer } from "./MessageRenderer";
 
 interface Props {
@@ -17,6 +18,7 @@ function formatTime(ts: string): string {
 }
 
 export function MessageBubble({ message: msg }: Props) {
+  const { openImage } = useImageLightbox();
   const isOutbound = msg.direction === "outbound";
 
   return (
@@ -57,7 +59,7 @@ export function MessageBubble({ message: msg }: Props) {
                       src={url}
                       alt="attachment"
                       className="max-w-[300px] rounded-lg cursor-pointer hover:opacity-90"
-                      onClick={() => window.open(url, "_blank")}
+                      onClick={() => openImage(url, "Hình ảnh")}
                     />
                   ) : (
                     <a

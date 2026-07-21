@@ -3,6 +3,8 @@
 // Gracefully handles JSON content and mojibake encoding
 
 import { Component, useState, type ErrorInfo, type ReactNode } from "react";
+
+import { useImageLightbox } from "@/components/ImageLightbox";
 import {
   Phone, FileText, Download, AlertCircle, CheckCircle, Clock, Info, ChevronDown, ChevronUp,
   File, FileSpreadsheet, Presentation, Archive, Music, Video, Paperclip, Image, Link2, Palette
@@ -204,6 +206,7 @@ function TypingIndicator() {
 
 // ── Image ──
 function ImageMsg({ data }: { data: Record<string, unknown> }) {
+  const { openImage } = useImageLightbox();
   const src = (data?.href || data?.thumb || data?.url || "") as string;
   let params: Record<string, unknown> = {};
   if (typeof data?.params === "string") {
@@ -227,7 +230,7 @@ function ImageMsg({ data }: { data: Record<string, unknown> }) {
         alt="Hình ảnh"
         className="rounded-xl max-h-72 cursor-pointer hover:opacity-90 transition-opacity shadow-sm"
         loading="lazy"
-        onClick={() => window.open(fullSrc, "_blank")}
+        onClick={() => openImage(fullSrc, "Hình ảnh")}
         onError={(e) => {
           const el = e.currentTarget;
           el.style.display = "none";
