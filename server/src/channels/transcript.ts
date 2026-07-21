@@ -86,12 +86,18 @@ export async function fetchTranscript(sessionKey: string, limit = 200): Promise<
   if (!parsed) throw new Error(`Invalid session_key format: ${sessionKey}`);
   const { channel, threadId, senderPart, isGroup } = parsed;
 
+  // Lấy `limit` tin MỚI NHẤT (order desc + limit) rồi đảo lại thành thứ tự thời gian.
+  // Bản cũ `ascending: true` + limit lấy nhầm `limit` tin CŨ NHẤT: hội thoại dài hơn
+  // limit thì cửa sổ đứng yên ở quá khứ và tin mới KHÔNG BAO GIỜ hiện, trong khi cột
+  // danh sách (đọc channel_sessions.last_message) vẫn cập nhật ⇒ "thấy preview nhưng
+  // mở ra không có tin". Chỉ lộ ở thread cũ/nhiều tin nên dễ tưởng lỗi riêng 1 khách
+  // (đo 21/07: Trần Thắng 296 tin → mất 96 tin gần nhất; Gemral 89 tin < limit → bình thường).
   let inQ = supabase
     .from('channel_pending_messages')
     .select(INBOUND_COLS)
     .eq('channel_name', channel)
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit);
   if (!isGroup) inQ = inQ.eq('from_uid', senderPart);
 
@@ -100,12 +106,16 @@ export async function fetchTranscript(sessionKey: string, limit = 200): Promise<
     .select(OUTBOUND_COLS)
     .eq('channel_name', channel)
     .eq('thread_id', threadId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
-  const [{ data: inbound, error: inErr }, { data: outbound, error: outErr }] = await Promise.all([inQ, outQ]);
+  const [{ data: inboundDesc, error: inErr }, { data: outboundDesc, error: outErr }] = await Promise.all([inQ, outQ]);
   if (inErr) throw new Error(`transcript inbound query failed: ${inErr.message}`);
   if (outErr) throw new Error(`transcript outbound query failed: ${outErr.message}`);
+
+  // Caller (ChatPanel/CrmInbox) render theo thứ tự mảng — trả về cũ→mới như trước.
+  const inbound = (inboundDesc || []).slice().reverse();
+  const outbound = (outboundDesc || []).slice().reverse();
 
   // Cờ thao tác của operator (sao / ghim / xoá-với-tôi) — key theo message uuid (duy nhất
   // across cả 2 bảng). CHÍNH SÁCH DÙNG CHUNG: caller nào cũng phải ẩn `deleted_for_me`,
