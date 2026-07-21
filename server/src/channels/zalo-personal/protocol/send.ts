@@ -29,6 +29,39 @@ function decryptResponse(session: ZaloSession, data: string): string {
 }
 
 /**
+ * Zalo trả LỖI ở HAI TẦNG. Tầng ngoài (`res.data.error_code`) hầu như luôn 0
+ * — nó chỉ nói "request tới được server". Lỗi thật (114 tham số không hợp lệ,
+ * 216 không phải bạn bè, ...) nằm trong payload ĐÃ GIẢI MÃ.
+ *
+ * Trước 2026-07-21 chỉ tầng ngoài được đọc ⇒ mọi lần gửi hỏng đều báo
+ * `success: true`, tin vẫn ghi vào lịch sử hội thoại như đã gửi, CSKH tưởng
+ * khách đã nhận. Đây là hỏng-CÂM, tệ hơn hỏng-báo-lỗi.
+ * Ca phát hiện: gửi tới hội thoại có chat_id là SỐ ĐIỆN THOẠI (không phải uid
+ * Zalo) → error_code 114, route vẫn trả success:true.
+ */
+function resolveSendResult(lastResult: any): { success: boolean; messageId?: string; error?: string } {
+  const outerCode = lastResult?.error_code;
+  const inner = lastResult?.decryptedData;
+  const innerCode = inner?.error_code;
+
+  // Tầng nào báo khác 0 cũng là THẤT BẠI.
+  const failedCode = outerCode !== 0
+    ? outerCode
+    : (innerCode !== undefined && innerCode !== 0 ? innerCode : undefined);
+
+  if (failedCode !== undefined) {
+    const msg = (outerCode !== 0 ? lastResult?.error_message : inner?.error_message)
+      || `Zalo tu choi (ma ${failedCode})`;
+    return { success: false, error: `[${failedCode}] ${msg}` };
+  }
+
+  return {
+    success: true,
+    messageId: inner?.msgId || inner?.data?.msgId || lastResult?.data?.msgId,
+  };
+}
+
+/**
  * Encrypt payload with session SecretKey (zpw_enk from getLoginInfo).
  * GoClaw: base64.decode(sess.SecretKey) → AES-CBC encrypt → base64 output
  * NOT the same as ZCID-based encryption used for getLoginInfo API.
@@ -151,11 +184,7 @@ export async function sendDMText(
     }
   }
 
-  return {
-    success: lastResult?.error_code === 0,
-    messageId: lastResult?.decryptedData?.msgId || lastResult?.data?.msgId,
-    error: lastResult?.error_code !== 0 ? lastResult?.error_message : undefined,
-  };
+  return resolveSendResult(lastResult);
 }
 
 /**
@@ -204,16 +233,22 @@ export async function sendGroupText(
         timeout: 30_000,
       });
       lastResult = res.data;
+      // Cùng bẫy 2 tầng như tin riêng: phải giải mã mới thấy lỗi thật (21/07).
+      if (lastResult?.error_code === 0 && typeof lastResult?.data === 'string') {
+        try {
+          const decrypted = decryptResponse(session, lastResult.data);
+          console.log(`[ZaloSend] Decrypted (group):`, decrypted.substring(0, 200));
+          lastResult.decryptedData = JSON.parse(decrypted);
+        } catch (decryptErr: any) {
+          console.warn(`[ZaloSend] Failed to decrypt group response:`, decryptErr.message);
+        }
+      }
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
-  return {
-    success: lastResult?.error_code === 0,
-    messageId: lastResult?.data?.msgId,
-    error: lastResult?.error_code !== 0 ? lastResult?.error_message : undefined,
-  };
+  return resolveSendResult(lastResult);
 }
 
 /**

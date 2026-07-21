@@ -132,6 +132,16 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: 'Channel not connected' });
   }
 
+  // Chặn sớm: uid Zalo là dãy số dài (~15-20 chữ số), KHÔNG phải số điện thoại.
+  // Hội thoại có chat_id là SĐT do luồng khác tự tạo (vd từ đơn hàng) — nhìn trên
+  // giao diện y hệt hội thoại thật nhưng Zalo luôn trả 114. Báo thẳng thay vì để
+  // người gọi tưởng đã gửi (21/07).
+  if (typeof thread_id === 'string' && /^\+?[\d\s.-]{9,15}$/.test(thread_id.trim()) && !/^\d{15,}$/.test(thread_id.replace(/\D/g, ''))) {
+    const msg = `thread_id "${thread_id}" là SỐ ĐIỆN THOẠI, không phải uid Zalo — hội thoại này chưa gắn với người dùng Zalo thật nên không gửi tự động được. Nhắn tay giúp khách.`;
+    console.error(`[ZaloRoutes] ${msg}`);
+    return res.status(400).json({ success: false, error: msg });
+  }
+
   try {
     // skip_db_log=true khi gọi từ universal /send (route đó đã ghi row optimistic rồi)
     // → tránh double-insert channel_sent_messages. Path agent gọi channel.send trực tiếp vẫn log.
