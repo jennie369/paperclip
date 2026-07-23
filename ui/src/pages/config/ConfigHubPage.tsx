@@ -1134,7 +1134,9 @@ function EmailTemplatesTab() {
     setSendingTest(templateKey);
     setTestResult(null);
     try {
-      const r = await fetch("https://pgfkbcnzqozzkohwbgbk.supabase.co/functions/v1/send-email", {
+      // send-email lockdown (2026-07-24): browser KHÔNG cầm secret → qua paperclip-server proxy
+      // (giữ SB_SECRET_BACKEND server-side, forward tới send-email). Route sau remoteApiKeyGuard.
+      const r = await fetch("/api/tools/send-test-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: testEmail, template: templateKey, data: { name: "Test User", tier: "Tier 1" } }),
