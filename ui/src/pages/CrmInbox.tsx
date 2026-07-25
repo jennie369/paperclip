@@ -15,6 +15,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Inbox, AlertTriangle, RotateCw } from "lucide-react";
 import { channelsApi } from "@/api/channels";
+import { is4xx } from "@/api/client";
+import { useToast } from "@/context/ToastContext";
 import type { ChannelSession } from "@/api/channels";
 import { CrmMessagingCommandCenter } from "@/components/crm-messaging";
 import {
@@ -37,6 +39,7 @@ const FILTER_TESTS: Array<(s: ChannelSession) => boolean> = [
 
 export function CrmInbox() {
   const qc = useQueryClient();
+  const { pushToast } = useToast();
   const [activeKey, setActiveKey] = useState<string | undefined>();
   const [filterIdx, setFilterIdx] = useState(0);
 
@@ -63,6 +66,8 @@ export function CrmInbox() {
     queryFn: () => channelsApi.getConversationMessages(effectiveKey!),
     enabled: !!effectiveKey,
     refetchInterval: 15_000,
+    // 4xx = yêu cầu sai, thử lại vô ích. 5xx/mất mạng vẫn retry (pm2 restart).
+    retry: (n, e) => !is4xx(e) && n < 3,
   });
 
   if (convQuery.isLoading) {
@@ -131,8 +136,12 @@ export function CrmInbox() {
     try {
       await channelsApi.sendMessage(detail.channel_name, detail.chat_id, text, detail.is_group ? "group" : "dm");
       await qc.invalidateQueries({ queryKey: ["crm-inbox", "messages", effectiveKey] });
-    } catch {
-      /* the optimistic message is already shown by the component */
+    } catch (err: any) {
+      // 25/07: trước đây `catch {}` NUỐT SẠCH — kênh chưa hỗ trợ gửi tay (app/facebook) trả
+      // 400 mà người trực không thấy gì, còn bong bóng lạc quan vẫn nằm đó như đã gửi.
+      pushToast({ title: "Gửi tin thất bại", body: err?.message || "Không gửi được tin nhắn.", tone: "error" });
+      // Xoá bong bóng lạc quan ngay thay vì chờ hết chu kỳ 15s.
+      await qc.invalidateQueries({ queryKey: ["crm-inbox", "messages", effectiveKey] });
     }
   }
 
@@ -153,9 +162,36 @@ export function CrmInbox() {
   }
 
   return (
-    <div className="h-[calc(100vh-3.5rem)]">
+    /* ⚠️ `flex flex-col` + `flex-1` (không phải `h-full` cứng): khi banner lỗi xuất hiện nó
+       chiếm chiều cao, layout co lại thay vì đẩy tràn đáy làm ô soạn tin tụt khỏi tầm nhìn. */
+    <div className="h-[calc(100vh-3.5rem)] flex flex-col">
+      {/* Lỗi ĐỌC transcript của MỘT hội thoại → banner TRONG khung, ⛔ TUYỆT ĐỐI KHÔNG
+          `return` sớm như 3 nhánh convQuery ở trên (`:69` isLoading, `:78` isError,
+          `:94` rỗng). msgQuery chỉ là transcript của 1 hội thoại — return sớm sẽ xoá luôn
+          danh sách hội thoại + rail kênh + Customer 360, những thứ đến từ convQuery/instQuery
+          và VẪN TỐT. Kèm `messages.length === 0` vì react-query giữ data cũ khi lỗi, thiếu
+          nó thì mỗi lần `pm2 restart` transcript đang đọc bị banner đè. */}
+      {msgQuery.isError && messages.length === 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-destructive bg-destructive/10 border-b border-destructive/30">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1 min-w-0">
+            Không tải được tin nhắn của hội thoại này — đây là lỗi khi đọc, không phải hội thoại trống.
+          </span>
+          <button
+            onClick={() => msgQuery.refetch()}
+            className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-destructive/40 hover:bg-destructive/10"
+          >
+            <RotateCw className="h-3 w-3" /> Thử lại
+          </button>
+        </div>
+      )}
+      {msgQuery.isError && messages.length > 0 && (
+        <div className="px-3 py-1 text-[11px] text-muted-foreground bg-muted/40 border-b">
+          Mất kết nối — đang thử lại…
+        </div>
+      )}
       <CrmMessagingCommandCenter
-        heightClass="h-full"
+        heightClass="flex-1 min-h-0"
         workspace={{ name: "Gemral Inbox", online: true }}
         channelGroups={channelGroups}
         allCount={String(convQuery.data?.total ?? conversations.length)}

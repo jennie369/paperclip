@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { channelsApi, type PendingMessage } from "@/api/channels";
+import { is4xx } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,11 +51,19 @@ export function ConversationChat() {
   });
 
   // Load messages
-  const { data: messages = [], isLoading: messagesLoading } = useQuery({
+  const {
+    data: messages = [],
+    isLoading: messagesLoading,
+    isError: messagesError,
+    refetch: refetchMessages,
+  } = useQuery({
     queryKey: ["channels", "session-messages", decodedKey],
     queryFn: () => channelsApi.getSessionMessages(decodedKey, 200),
     enabled: !!decodedKey,
-    refetchInterval: 3_000,
+    // 4xx = yêu cầu sai → dừng, đừng gõ server vô hạn. 5xx/mất mạng vẫn thử lại
+    // (bắt buộc, vì mỗi lần `pm2 restart` là vài giây fetch fail).
+    retry: (n, e) => !is4xx(e) && n < 3,
+    refetchInterval: (q) => (is4xx(q.state.error) ? false : 3_000),
   });
 
   // Send message via the Zalo Personal route (channel-specific)
@@ -133,7 +142,29 @@ export function ConversationChat() {
           </div>
         )}
 
-        {!messagesLoading && sorted.length === 0 && (
+        {/* Lỗi + CHƯA có tin nào → nói THẬT là lỗi đọc, đừng giả vờ "hội thoại trống".
+            `messages.length === 0` là bắt buộc: react-query giữ data cũ, nên mỗi lần
+            restart server mọi hội thoại đang mở đều isError — thiếu điều kiện này thì
+            transcript đang đọc bị thay bằng màn lỗi. */}
+        {messagesError && messages.length === 0 && (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center px-6">
+              <p className="text-sm text-destructive">Không tải được tin nhắn của hội thoại này.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Hội thoại vẫn còn trên hệ thống — đây là lỗi khi đọc, không phải hội thoại trống.
+              </p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => refetchMessages()}>
+                Thử lại
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {messagesError && messages.length > 0 && (
+          <div className="mb-2 text-[11px] text-muted-foreground text-center">Mất kết nối — đang thử lại…</div>
+        )}
+
+        {!messagesLoading && !messagesError && sorted.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <MessageCircle className="h-8 w-8 mx-auto text-muted-foreground mb-2 opacity-50" />

@@ -80,6 +80,13 @@ interface Props {
 export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, onCancelReply }: Props) {
   const [text, setText] = useState("");
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Lỗi khi GỬI TIN (25/07). Trước đây `onSend` reject chỉ khôi phục chữ rồi `throw` tiếp
+  // vào handler async KHÔNG AI BẮT ⇒ unhandled rejection, người trực chỉ thấy "không có gì
+  // xảy ra". Đặt surface lỗi Ở ĐÂY (không phải ở caller) vì 2 lý do:
+  //   1. caller nuốt lỗi = `setText(trimmed)` bên dưới KHÔNG chạy ⇒ MẤT chữ vừa gõ;
+  //   2. đặt ở đây tự phủ MỌI caller của ChatInput, không phải vá từng màn.
+  // Dùng lại y khuôn `uploadError` ngay dưới — vốn sinh ra từ đúng bệnh này (01/07).
+  const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -118,6 +125,7 @@ export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, 
     if (!trimmed || sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
+    setSendError(null); // xoá lỗi lần trước, kẻo banner dính vĩnh viễn
     // Clear ô input NGAY để tránh user tưởng chưa gửi (Zalo send delay ~2s) rồi bấm lại → double
     setText("");
     if (textareaRef.current) {
@@ -125,10 +133,11 @@ export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, 
     }
     try {
       await onSend(trimmed, replyTo?.id);
-    } catch (err) {
-      // Gửi thất bại → khôi phục nội dung để user thử lại
+    } catch (err: any) {
+      // Gửi thất bại → khôi phục nội dung để user thử lại + NÓI CHO NGƯỜI TRỰC BIẾT.
+      // (Kênh chưa hỗ trợ gửi tay trả 400 ở đây — trước đây im lặng hoàn toàn.)
       setText(trimmed);
-      throw err;
+      setSendError(err?.message || "Gửi tin thất bại.");
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -195,6 +204,13 @@ export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, 
 
   return (
     <div className="border-t px-3 py-2">
+      {/* Send error banner — cùng khuôn với uploadError bên dưới (25/07) */}
+      {sendError && (
+        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-[11px]">
+          <span className="flex-1 min-w-0">⚠️ {sendError}</span>
+          <button onClick={() => setSendError(null)} className="shrink-0 hover:opacity-70" title="Đóng">✕</button>
+        </div>
+      )}
       {/* Upload error banner — không còn nuốt lỗi im lặng khi gửi ảnh/file thất bại */}
       {uploadError && (
         <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-[11px]">

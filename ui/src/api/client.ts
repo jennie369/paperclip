@@ -63,6 +63,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Lỗi 4xx = server ĐÃ trả lời và nói "yêu cầu này sai" → thử lại bao nhiêu lần cũng vậy.
+ * Khác hẳn 5xx / mất mạng (server chưa trả lời được) → PHẢI thử lại, nhất là lúc
+ * `pm2 restart paperclip-server` (vài giây fetch fail).
+ *
+ * Dùng CHUNG cho mọi màn inbox (25/07). Đừng để mỗi màn tự viết vị từ riêng — đó đúng là
+ * căn bệnh "2 màn đọc 2 kiểu" mà commit 092ff4ae5 sinh ra để diệt ở tầng server.
+ * ⚠️ Vị từ SAI thường gặp: `status === 'error'` (không phân biệt 4xx với 5xx) ⇒ mất mạng
+ * 2 giây là tắt polling VĨNH VIỄN ⇒ hội thoại tốt ngừng nhận tin CÂM.
+ */
+export const is4xx = (e: unknown): boolean =>
+  e instanceof ApiError && e.status >= 400 && e.status < 500;
+
 async function request<T>(path: string, init?: RequestInit, _retried = false): Promise<T> {
   const headers = new Headers(init?.headers ?? undefined);
   const body = init?.body;

@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, X, ChevronDown, SmilePlus, Bot, Reply, MoreHorizontal, Copy, Pin, Star, ListChecks, RotateCcw, Trash2, Check } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
+import { is4xx } from "@/api/client";
 import { useImageLightbox } from "@/components/ImageLightbox";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
@@ -115,10 +116,13 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Use existing session messages endpoint — already merges inbound + outbound
-  const { data: messages = [], isLoading, refetch } = useQuery({
+  const { data: messages = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["session-messages", conv.session_key],
     queryFn: () => channelsApi.getSessionMessages(conv.session_key, 200),
-    refetchInterval: 2_000,
+    // 4xx = yêu cầu sai, thử lại vô ích → dừng ngay (trước đây gõ ~0.45 req/s VÔ HẠN suốt
+    // 6 ngày trên 7 hội thoại gem-master mà không ai thấy, vì lỗi bị nuốt thành "trống").
+    retry: (n, e) => !is4xx(e) && n < 3,
+    refetchInterval: (q) => (is4xx(q.state.error) ? false : 2_000),
   });
 
   // Auto-scroll to bottom — CRITICAL LOGIC:
@@ -283,11 +287,37 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
         </div>
       )}
 
+      {/* Mất kết nối NHƯNG vẫn còn tin cũ → giữ nguyên transcript, chỉ báo chip nhỏ.
+          (Thay cả màn bằng lỗi sẽ nháy mỗi lần restart server — xem nhánh isError bên dưới.) */}
+      {isError && messages.length > 0 && (
+        <div className="px-4 py-1 text-[11px] text-muted-foreground bg-muted/40 border-b">
+          Mất kết nối — đang thử lại…
+        </div>
+      )}
+
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-sm text-muted-foreground">Đang tải tin nhắn...</div>
+          </div>
+        ) : isError && messages.length === 0 ? (
+          /* Lỗi + CHƯA có tin nào → hiện lỗi THẬT. Không được để rơi xuống nhánh "Chưa có
+             tin nhắn": empty-state giả chính là thứ đã giấu bug 400 suốt 6 ngày.
+             ⚠️ Bắt buộc kèm `messages.length === 0` — react-query giữ data cũ trong cache,
+             nên MỖI LẦN `pm2 restart` mọi hội thoại đang mở đều isError=true; thiếu điều
+             kiện này thì transcript đang đọc bị thay bằng màn lỗi mỗi lần deploy. */
+          <div className="flex flex-col items-center justify-center h-full gap-2 px-6 text-center">
+            <div className="text-sm text-destructive">Không tải được tin nhắn của hội thoại này.</div>
+            <div className="text-xs text-muted-foreground">
+              Hội thoại vẫn còn trên hệ thống — đây là lỗi khi đọc, không phải hội thoại trống.
+            </div>
+            <button
+              onClick={() => refetch()}
+              className="mt-1 px-3 py-1.5 rounded-lg border text-xs hover:bg-accent"
+            >
+              Thử lại
+            </button>
           </div>
         ) : filteredMsgs.length === 0 ? (
           <div className="flex items-center justify-center h-full">
