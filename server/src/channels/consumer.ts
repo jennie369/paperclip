@@ -9,6 +9,7 @@ import * as quota from './quota.js';
 import * as session from './session.js';
 import * as router from './router.js';
 import { buildBatchId, buildReplyDedupeKey } from './reply-contract.js';
+import { parseSessionKey } from './transcript.js';
 import { supabase } from './zalo-personal/supabase.js';
 import { CustomerResolver } from './crm/customer-resolver.js';
 import { ContextBuilder } from './crm/context-builder.js';
@@ -192,13 +193,16 @@ async function surfacePausedState(ctx: BatchCtx, sessionKey: string): Promise<vo
  */
 export async function reschedulePendingSession(sessionKey: string): Promise<void> {
   try {
-    const idx1 = sessionKey.indexOf(':');
-    const idx2 = sessionKey.indexOf(':', idx1 + 1);
-    if (idx1 < 0 || idx2 < 0) return;
-    const channel = sessionKey.slice(0, idx1);
-    const threadId = sessionKey.slice(idx1 + 1, idx2);
-    const senderPart = sessionKey.slice(idx2 + 1);
-    const isGroup = senderPart === 'group';
+    // Parser CHUNG với transcript.ts (25/07) — trước đây file này có luật riêng đòi 2 dấu ':'
+    // và `return` CÂM với key 2 phần ⇒ mầm drift (cùng gốc bug gem-master 400).
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed) return;
+    // Channel single-party (gem-master) có ENGINE TRẢ LỜI RIÊNG (gemini-proxy) và chỉ được
+    // MIRROR sang đây để xem. Cho nó đi tiếp = consumer lên lịch bot trả lời lần 2 ⇒ trả lời
+    // kép cho khách + gửi qua đường fallback sai. Trước khi gộp parser, nhánh này bị chặn
+    // NGẪU NHIÊN bởi luật parse cũ; giờ phải chặn CÓ CHỦ Ý.
+    if (!parsed.filterSender && !parsed.isGroup) return;
+    const { channel, threadId, senderPart, isGroup } = parsed;
 
     let q = supabase
       .from('channel_pending_messages')

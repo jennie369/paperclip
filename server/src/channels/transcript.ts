@@ -31,6 +31,9 @@ export interface ParsedSessionKey {
   threadId: string;
   senderPart: string;
   isGroup: boolean;
+  /** Có lọc thêm `from_uid = senderPart` không. false cho group (nhiều người) VÀ cho
+   *  channel single-party (thread_id đã định danh duy nhất, lọc thêm là THỪA). */
+  filterSender: boolean;
 }
 
 export interface MessageFlags {
@@ -46,35 +49,72 @@ export interface Transcript {
 }
 
 /**
- * Parser CANONICAL cho session_key — dùng CHUNG mọi nơi đọc transcript.
- * Format: `{channel}:{threadId}:{senderId|'group'}`.
+ * Channel dùng convention session_key **2 PHẦN** `{channel}:{userId}` — 1 khách = 1 phiên,
+ * không có "người gửi" thứ hai để phân biệt.
  *
- * Dùng indexOf-slicing (khớp consumer.ts) CHỨ KHÔNG `split(':')`: thread/sender id có thể
- * CHỨA dấu ':' → split rồi lấy parts[1] sẽ cắt sai id. Trả null nếu key không hợp lệ để
- * caller trả 400 — KHÔNG đoán bừa (guard cũ `parts.length < 2` chấp nhận cả "channel:").
+ * ⚠️ WRITER nằm ở REPO KHÁC (Deno edge, không import chéo được với Node server này):
+ *   crypto-pattern-scanner/supabase/functions/{gemini-proxy,gem-master-chat,gem-master-mirror}/
+ *   → gem-master-inbox-log.ts
+ * Chống drift bằng: (a) comment trỏ đích danh writer ở trên; (b) probe by-effect P26 trong
+ * `scripts/audit_cskh.py` (gọi thật endpoint mỗi channel, đòi 200); (c) seed
+ * `memory/ssot_drift_registry.json` cho health-sweep §M24.
+ *
+ * BỐI CẢNH (regression 092ff4ae5 ngày 19/07 → phát hiện 25/07): bản gộp-về-1-parser siết
+ * validate lên ĐÚNG 3 phần ⇒ 7 phiên gem-master trả 400 SUỐT 6 NGÀY mà không ai thấy, vì
+ * danh sách hội thoại vẫn hiện bình thường và UI nuốt lỗi thành "Chưa có tin nhắn".
+ */
+const SINGLE_PARTY_CHANNELS = new Set(['gem-master']);
+
+/**
+ * Parser CANONICAL cho session_key — dùng CHUNG mọi nơi (transcript + consumer).
+ * Hai convention hợp lệ:
+ *   • 3 phần `{channel}:{threadId}:{senderId|'group'}`  — mặc định
+ *   • 2 phần `{channel}:{userId}`                        — CHỈ channel trong SINGLE_PARTY_CHANNELS
+ *
+ * Dùng indexOf-slicing CHỨ KHÔNG `split(':')`: thread/sender id có thể CHỨA dấu ':' → split
+ * rồi lấy parts[1] sẽ cắt sai id. Trả null nếu key không hợp lệ để caller trả 400 — KHÔNG
+ * đoán bừa (guard cũ `parts.length < 2` chấp nhận cả "channel:").
  */
 export function parseSessionKey(sessionKey: string): ParsedSessionKey | null {
   if (!sessionKey) return null;
   const idx1 = sessionKey.indexOf(':');
   if (idx1 <= 0) return null;
-  const idx2 = sessionKey.indexOf(':', idx1 + 1);
-  if (idx2 <= idx1 + 1) return null;
-
   const channel = sessionKey.slice(0, idx1);
+  const idx2 = sessionKey.indexOf(':', idx1 + 1);
+
+  if (idx2 === -1) {
+    // Dạng 2 phần — chỉ chấp nhận cho channel ĐÃ ĐĂNG KÝ (fail-closed cho phần còn lại).
+    if (!SINGLE_PARTY_CHANNELS.has(channel)) {
+      console.warn(
+        `[transcript] session_key 2 phần nhưng channel "${channel}" chưa đăng ký single-party: ${sessionKey}`,
+      );
+      return null;
+    }
+    const threadId = sessionKey.slice(idx1 + 1);
+    if (!threadId) return null; // "gem-master:" vẫn reject
+    // filterSender=false: thread_id ĐÃ định danh duy nhất khách, lọc thêm from_uid là THỪA và
+    // chỉ có 1 chiều hậu quả — mất tin CÂM nếu mai có writer ghi from_uid khác.
+    return { channel, threadId, senderPart: threadId, isGroup: false, filterSender: false };
+  }
+
+  if (idx2 <= idx1 + 1) return null;
   const threadId = sessionKey.slice(idx1 + 1, idx2);
   const senderPart = sessionKey.slice(idx2 + 1);
-  if (!channel || !threadId || !senderPart) return null;
+  if (!threadId || !senderPart) return null;
 
-  return { channel, threadId, senderPart, isGroup: senderPart === 'group' };
+  const isGroup = senderPart === 'group';
+  return { channel, threadId, senderPart, isGroup, filterSender: !isGroup };
 }
 
 /**
  * Đọc TOÀN BỘ tin của 1 hội thoại (inbound + outbound) theo bộ lọc canonical.
  *
- * Bộ lọc: channel_name + thread_id, CỘNG from_uid khi KHÔNG phải group.
+ * Bộ lọc: channel_name + thread_id, CỘNG from_uid khi `filterSender`.
  *   - group  (`…:group`)      → KHÔNG lọc from_uid (giữ đủ tin của mọi người trong nhóm).
  *   - direct / comment        → lọc from_uid (mỗi người 1 hội thoại; verify 2026-07-19:
  *                               0 thread comment nào có >1 from_uid nên lọc là an toàn).
+ *   - single-party (2 phần)   → KHÔNG lọc from_uid: thread_id đã định danh duy nhất khách
+ *                               (verify 25/07: gem-master 62/62 row from_uid == thread_id).
  * KHÔNG lọc theo cột `session_key` — cột đó chỉ được ghi lúc claim, tin chưa claim sẽ NULL
  * và biến mất khỏi màn hình (đúng bug đang sửa).
  *
@@ -84,7 +124,7 @@ export function parseSessionKey(sessionKey: string): ParsedSessionKey | null {
 export async function fetchTranscript(sessionKey: string, limit = 200): Promise<Transcript> {
   const parsed = parseSessionKey(sessionKey);
   if (!parsed) throw new Error(`Invalid session_key format: ${sessionKey}`);
-  const { channel, threadId, senderPart, isGroup } = parsed;
+  const { channel, threadId, senderPart, filterSender } = parsed;
 
   // Lấy `limit` tin MỚI NHẤT (order desc + limit) rồi đảo lại thành thứ tự thời gian.
   // Bản cũ `ascending: true` + limit lấy nhầm `limit` tin CŨ NHẤT: hội thoại dài hơn
@@ -99,7 +139,7 @@ export async function fetchTranscript(sessionKey: string, limit = 200): Promise<
     .eq('thread_id', threadId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (!isGroup) inQ = inQ.eq('from_uid', senderPart);
+  if (filterSender) inQ = inQ.eq('from_uid', senderPart);
 
   const outQ = supabase
     .from('channel_sent_messages')
