@@ -708,6 +708,24 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: `Kênh "${channel_name}" không tồn tại` });
   }
 
+  // 0. FAIL-CLOSED (25/07): chỉ gửi khi channel_type có sub-handler THẬT SỰ tương thích.
+  //    Trước đây `subPathByType[type] || 'zalo-personal'` fail-OPEN ⇒ mọi type lạ
+  //    (app / facebook / facebook_web) bị đẩy sang handler Zalo. Đường đó KHÔNG BAO GIỜ gửi
+  //    được (zalo-personal/routes.ts:129 `activeChannels.get()` → 404) nhưng KỊP tạo row
+  //    'sending' → lật 'failed'; mà transcript KHÔNG lọc status ⇒ tin hiện như ĐÃ GỬI trong
+  //    khi khách chưa từng nhận ("tin ma" — đo 25/07: 18 row 'failed' đang render như vậy).
+  //    Phải chặn TRƯỚC câu insert bên dưới, vì chính câu insert đẻ ra tin ma.
+  //    ⚠️ KHÔNG map facebook/facebook_web vào đây: 2 handler đó nhận body KHÁC HẲN
+  //    (facebook cần {page_id, recipient_id}; facebook-web là `/:name/send`) ⇒ nối đường gửi
+  //    tay cho chúng là FEATURE riêng, không phải đổi 1 dòng map.
+  const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
+  const sub = subPathByType[inst.channel_type];
+  if (!sub) {
+    return res.status(400).json({
+      error: `Kênh "${channel_name}" (loại ${inst.channel_type}) chưa hỗ trợ gửi tay từ Paperclip.`,
+    });
+  }
+
   // 1. Ghi outbound message vào DB NGAY (status 'sending') để UI hiển thị tức thì.
   //    Đây là row DUY NHẤT cho tin này — sub-handler được yêu cầu skip_db_log
   //    để tránh double-insert (channel.send tự log trước đây tạo row thứ 2).
@@ -732,9 +750,8 @@ router.post('/send', async (req, res) => {
   //    Việc forward + cập nhật trạng thái chạy nền; status reconcile ở refetch kế.
   res.json({ success: true, optimistic: true, id: rowId });
 
-  // 3. Forward (nền) đến sub-handler theo channel_type, rồi cập nhật status theo id.
-  const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
-  const sub = subPathByType[inst.channel_type] || 'zalo-personal';
+  // 3. Forward (nền) đến sub-handler theo channel_type (đã resolve fail-closed ở bước 0),
+  //    rồi cập nhật status theo id.
   const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/${sub}/send`;
   (async () => {
     try {
