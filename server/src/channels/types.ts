@@ -235,6 +235,11 @@ export interface AgentConfig {
 /** Provider → default models mapping */
 export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
   claude: [
+    // 2026-07-26: +opus-5 (agent gem-beat dùng) và +opus-4-7 — bản UI
+    // (ui/src/api/agentConfigs.ts) đã có opus-4-7 từ trước mà bản server này thiếu,
+    // tức hai danh sách đã lệch nhau. Đồng bộ lại cùng lượt.
+    'claude-opus-5',
+    'claude-opus-4-7',
     'claude-sonnet-4-6',
     'claude-opus-4-6',
     'claude-haiku-4-5-20251001',
