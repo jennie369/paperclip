@@ -5,6 +5,7 @@ import { bus } from '../bus.js';
 import { supabase } from './supabase.js';
 import { mirrorReplyToCustomer, mirrorReplyToVisitor } from './mirror.js';
 import { pushSupportReply } from './push.js';
+import { goiEdgeGemral } from './edge-call.js';
 import { isImageMedia, resolveMediaToLocalPath } from '../media-util.js';
 import { deliverReplyOnce } from '../deliver-once.js';
 import type { Channel, ChannelType, OutboundMessage, MediaFile } from '../types.js';
@@ -73,9 +74,8 @@ export class CskhChannel implements Channel {
         const r = await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug, msg.channel);
         if (r.error) throw new Error(`cskh mirror failed: ${r.error}`);  // F1: don't mark 'sent' on lost reply
         const preview = msg.content.length > 80 ? msg.content.slice(0, 80) + '…' : msg.content;
-        supabase.functions.invoke('cskh-notify-offline', {
-          body: { visitor_id: threadId, channel: msg.channel, preview },
-        }).catch((e: any) => console.error('[cskh] notify-offline failed:', e?.message || e));
+        // Qua edge-call: client dùng chung cầm service_role → cổng 'secret' từ chối 401 (28/07).
+        void goiEdgeGemral('cskh-notify-offline', { visitor_id: threadId, channel: msg.channel, preview });
       } else {
         const r = await mirrorReplyToCustomer(threadId, 'assistant', msg.content, agentSlug);
         if (r.error) throw new Error(`cskh mirror failed: ${r.error}`);  // F1
@@ -168,7 +168,8 @@ export class CskhChannel implements Channel {
     const preview = isImg ? '📷 Hình ảnh' : '📎 Tệp đính kèm';
     if (isVisitor) {
       await mirrorReplyToVisitor(threadId, 'assistant', '', agentSlug, channel, publicUrl, attachmentType);
-      supabase.functions.invoke('cskh-notify-offline', { body: { visitor_id: threadId, channel, preview } }).catch(() => {});
+      // Qua edge-call (28/07): khoá đúng + KHÔNG nuốt lỗi im lặng như `.catch(()=>{})` cũ.
+      void goiEdgeGemral('cskh-notify-offline', { visitor_id: threadId, channel, preview });
     } else {
       await mirrorReplyToCustomer(threadId, 'assistant', '', agentSlug, publicUrl, attachmentType);
       await pushSupportReply(threadId, preview);

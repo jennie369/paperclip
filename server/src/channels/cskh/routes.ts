@@ -6,6 +6,7 @@ import { supabase } from './supabase.js';
 import { cskhChannel } from './channel.js';
 import { mirrorReplyToCustomer, mirrorReplyToVisitor } from './mirror.js';
 import { pushSupportReply } from './push.js';
+import { goiEdgeGemral } from './edge-call.js';
 
 export const cskhRouter = Router();
 
@@ -43,8 +44,8 @@ cskhRouter.post('/send', async (req, res) => {
     await mirrorReplyToVisitor(id, 'human', message, null, channel);
     // P1: email-notif nếu khách offline (edge tự gate offline + debounce; fire-and-forget).
     const preview = message.length > 80 ? message.slice(0, 80) + '…' : message;
-    supabase.functions.invoke('cskh-notify-offline', { body: { visitor_id: id, channel, preview } })
-      .catch((e: any) => console.error('[cskh] notify-offline failed:', e?.message || e));
+    // Qua edge-call: client dùng chung cầm service_role → cổng 'secret' từ chối 401 (28/07).
+    void goiEdgeGemral('cskh-notify-offline', { visitor_id: id, channel, preview });
   } else {
     await mirrorReplyToCustomer(id, 'human', message, null);
     await pushSupportReply(id, message);
@@ -100,7 +101,8 @@ cskhRouter.post('/upload', uploadMem.single('file'), async (req, res) => {
     const preview = isImage ? '📷 Hình ảnh' : '📎 Tệp đính kèm';
     if (channel !== 'cskh-internal') {
       await mirrorReplyToVisitor(id, 'human', text, null, channel, attachmentUrl, attachmentType);
-      supabase.functions.invoke('cskh-notify-offline', { body: { visitor_id: id, channel, preview } }).catch(() => {});
+      // Qua edge-call (28/07): khoá đúng + KHÔNG nuốt lỗi im lặng như `.catch(()=>{})` cũ.
+      void goiEdgeGemral('cskh-notify-offline', { visitor_id: id, channel, preview });
     } else {
       await mirrorReplyToCustomer(id, 'human', text, null, attachmentUrl, attachmentType);
       await pushSupportReply(id, preview);
