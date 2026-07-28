@@ -6,7 +6,7 @@ import { type ChannelSession } from "@/api/channels";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ConversationActions } from "./ConversationActions";
 import { ChannelBadge } from "@/components/ChannelBadge";
-import { Pin, VolumeX, Users, Bot, Paperclip } from "lucide-react";
+import { Pin, VolumeX, Users, Bot, Paperclip, PauseCircle } from "lucide-react";
 
 interface Props {
   conversation: ChannelSession;
@@ -200,6 +200,22 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
                 <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-500 max-w-full truncate">
                   <Bot className="h-3 w-3 shrink-0" />
                   {conv.agent_slug}
+                </span>
+              )}
+
+              {/* BOT ĐANG DỪNG (2026-07-28) — trước đây cờ này CHỈ hiện trong ChatHeader,
+                  nên phải MỞ TỪNG hội thoại mới biết. Ca thật 27-28/07: một thread bị Dừng
+                  Bot từ trước, khách nhắn 3 lần trong 16h chỉ nhận câu "nhân viên sẽ phản hồi
+                  ngay" — không ai biết vì danh sách trông y hệt thread bình thường.
+                  KHÔNG gate theo agent_slug: gemini-proxy đọc cờ này độc lập agent, gate sẽ
+                  GIẤU trạng thái dừng thật. */}
+              {(conv.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true && (
+                <span
+                  title="Bot ĐANG DỪNG cho hội thoại này — khách chỉ nhận câu chờ, bạn phải tự trả lời. Mở hội thoại rồi bấm 'Bật Bot' để bot chạy lại."
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-600 ring-1 ring-amber-500/40"
+                >
+                  <PauseCircle className="h-3 w-3 shrink-0" />
+                  Bot đang dừng
                 </span>
               )}
             </div>

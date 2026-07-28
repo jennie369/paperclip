@@ -3,7 +3,7 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
-  ClipboardList, X, Pause, Play, ArrowLeft,
+  ClipboardList, X, Pause, Play, ArrowLeft, PauseCircle,
 } from "lucide-react";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
@@ -157,9 +157,17 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
                 ))}
               </SelectContent>
             </Select>
-            {conv.agent_slug && botPaused && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 font-semibold">
-                Bạn đang trực{pausedWaiting > 0 ? ` · ${pausedWaiting} tin chờ` : ""}
+            {/* BOT ĐANG DỪNG (đậm hơn 2026-07-28) — bản cũ là chip mờ 10px, chị lướt qua
+                không thấy nên một thread bị dừng từ trước vẫn nằm im 16h (khách nhắn 3 lần
+                chỉ nhận câu chờ). BỎ gate `conv.agent_slug`: gemini-proxy đọc cờ bot_paused
+                ĐỘC LẬP agent_slug, nên gate cũ có thể GIẤU đúng trạng thái đang dừng. */}
+            {botPaused && (
+              <span
+                title="Bot ĐANG DỪNG cho hội thoại này — khách chỉ nhận câu chờ, không ai tự trả lời. Bấm 'Bật Bot' để bot chạy lại."
+                className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-amber-500/20 text-amber-600 font-bold ring-1 ring-amber-500/40"
+              >
+                <PauseCircle className="h-3.5 w-3.5" />
+                BOT ĐANG DỪNG — bạn đang trực{pausedWaiting > 0 ? ` · ${pausedWaiting} tin chờ` : ""}
               </span>
             )}
             {conv.agent_slug && (
