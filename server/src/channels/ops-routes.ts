@@ -1075,10 +1075,13 @@ router.post('/email/send', async (req, res) => {
 
 router.get('/affiliate/stats', async (_req, res) => {
   try {
-    const { data: profiles } = await supabase.from('affiliate_profiles').select('partnership_role, is_active, total_sales');
+    // Cột vai của affiliate_profiles là `role` (CHECK IN ('ctv','kol')).
+    // `partnership_role` là cột của `profiles`, KHÔNG có ở đây ⇒ query cột lạ thì
+    // PostgREST trả 400 và `catch` dưới đây nuốt thành 0/0/0 (đọc như "chưa có đối tác").
+    const { data: profiles } = await supabase.from('affiliate_profiles').select('role, is_active, total_sales');
     const all = profiles || [];
-    const ctv = all.filter(p => p.partnership_role === 'ctv' || !p.partnership_role).length;
-    const kol = all.filter(p => p.partnership_role === 'kol').length;
+    const ctv = all.filter(p => p.role === 'ctv' || !p.role).length;
+    const kol = all.filter(p => p.role === 'kol').length;
     const monthSales = all.reduce((s, p) => s + (parseFloat(p.total_sales) || 0), 0);
     const { count: pendingCount } = await supabase.from('partnership_applications').select('id', { count: 'exact', head: true }).eq('status', 'pending');
     res.json({ ctv, kol, pending: pendingCount || 0, month_sales: monthSales });
@@ -1097,7 +1100,7 @@ router.get('/affiliate/list', async (req, res) => {
     const { tier, role, active } = req.query;
     let query = supabase.from('affiliate_profiles').select('*').order('total_sales', { ascending: false });
     if (tier) query = query.eq('ctv_tier', String(tier));
-    if (role) query = query.eq('partnership_role', String(role));
+    if (role) query = query.eq('role', String(role));
     if (active === 'true') query = query.eq('is_active', true);
     if (active === 'false') query = query.eq('is_active', false);
     const { data } = await query;
@@ -1111,7 +1114,13 @@ router.post('/affiliate/:id/approve', async (req, res) => {
     if (!app) return res.status(404).json({ error: 'Không tìm thấy đơn' });
     await supabase.from('partnership_applications').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', req.params.id);
     if (app.user_id) {
-      await supabase.from('affiliate_profiles').upsert({ user_id: app.user_id, partnership_role: app.application_type || 'ctv', ctv_tier: 'bronze', is_active: true }, { onConflict: 'user_id' });
+      // `role` (KHÔNG phải `partnership_role`) + chặn giá trị ngoài CHECK: application_type
+      // cho phép 'affiliate' nhưng affiliate_profiles.role chỉ nhận ctv/kol — cùng guard với
+      // admin web (frontend ApplicationsPage/UsersPage). Thiếu `role` thì rơi vào DEFAULT và
+      // trước 2026-07-30 DEFAULT là 'affiliate' ⇒ 23514 câm.
+      const affRole = ['ctv', 'kol'].includes(app.application_type) ? app.application_type : 'ctv';
+      const { error: affErr } = await supabase.from('affiliate_profiles').upsert({ user_id: app.user_id, role: affRole, ctv_tier: 'bronze', is_active: true }, { onConflict: 'user_id' });
+      if (affErr) console.error('[affiliate/approve] upsert affiliate_profiles that bai:', affErr);
       await supabase.from('profiles').update({ partnership_role: app.application_type || 'ctv', ctv_tier: 'bronze' }).eq('id', app.user_id);
     }
     res.json({ success: true });
