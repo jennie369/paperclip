@@ -28,7 +28,13 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
-      min_uptime: '30s',
+      // 2026-08-01: min_uptime 30s -> 120s. Sự cố cạn pooler 31/07: khi DB kẹt, paperclip sống
+      // ~40s (quét khởi động 67s bị cắt giữa chừng) rồi chết. min_uptime=30s < 40s ⇒ PM2 coi mỗi
+      // lần là "start thành công rồi mới sập" ⇒ reset bộ đếm ⇒ max_restarts=10 KHÔNG BAO GIỜ kích
+      // ⇒ crash-loop vô hạn dội vào pooler. 120s > survival window ⇒ death-in-40s tính là unstable
+      // ⇒ phanh max_restarts:10 dừng loop. Report: crypto-pattern-scanner/memory/reports/
+      // 2026-08-01-supabase-pooler-connection-exhaustion-incident.md §8.
+      min_uptime: '120s',
       max_restarts: 10,
       restart_delay: 2000,
       exp_backoff_restart_delay: 100,
