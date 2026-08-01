@@ -704,6 +704,7 @@ function AgentRow({
                     value={edit.model ?? a.model ?? "claude-sonnet-4-6"}
                     onChange={(e) => onEditChange("model", e.target.value)}
                   >
+                    <option value="claude-opus-4-8">claude-opus-4-8</option>
                     <option value="claude-opus-5">claude-opus-5</option>
                     <option value="claude-opus-4-7">claude-opus-4-7</option>
                     <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
