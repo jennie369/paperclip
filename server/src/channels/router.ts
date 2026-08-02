@@ -2087,6 +2087,34 @@ export async function postProcessReply(
     return 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
   }
 
+  // ── Final defense: refuse Antigravity/Gemini function-call TRACE leak (incident
+  // 2026-08-01, cskh-shopify: customer Hồ Thị Mỹ Huệ received the agent's raw brain
+  // transcript — `default_api:run_command{CommandLine:python "...antigravity-cli\\brain
+  // \\...\\inspect_tables.py",...ExitCode:0,Output:=== GET SCHEMA DEFINITIONS ===...task-36}`
+  // — prepended to the real reply). The model serialized an internal tool-call turn as
+  // TEXT instead of executing it, and the antigravity reply-extractor (brain transcript
+  // turnMarker) pulled the whole transcript. These tokens NEVER appear in a real
+  // Vietnamese customer reply. Do NOT salvage the "clean" tail — a bled transcript can
+  // carry another customer's data (task-36 referenced a different order). Refuse the whole
+  // reply, hand off, and escalate so the session pauses (the agent is malfunctioning and
+  // would re-leak on the next turn). Distinct from jsonlLeakRegex (raw JSONL stream) and
+  // SELF_NARRATION_LEAK_RE (CLAUDE.md protocol leak on provider=claude).
+  const agentTraceLeakRegex =
+    /default_api\s*:\s*\w+\s*\{|run_command\s*\{|antigravity-cli[\\/]+brain|ExitCode\s*:\s*-?\d|=== GET SCHEMA DEFINITIONS ===/i;
+  if (agentTraceLeakRegex.test(reply)) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: postProcessReply REFUSED agent-trace leak `
+        + `(${reply.length} chars). Suppressing + escalating. `
+        + `Head: ${JSON.stringify(reply.slice(0, 300))}`,
+    );
+    (config as any)._escalation = {
+      reason: 'agent_output_corrupted',
+      priority: 'high',
+      summary: 'Bot rò rỉ trace nội bộ (default_api / run_command / brain transcript) — đã chặn gửi, cần người tiếp quản.',
+    };
+    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+  }
+
   let cleaned = scrubBannedPhrases(reply, config.slug);
 
   // ── Collapse guard: scrub nuked ALL real content (incident 2026-06-10) ──

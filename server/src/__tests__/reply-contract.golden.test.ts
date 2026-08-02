@@ -106,6 +106,26 @@ describe("reply-contract golden-set (P0 baseline)", () => {
     expect(out).toBe("Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.");
   });
 
+  // ── G8b (2026-08-01): Antigravity/Gemini function-call TRACE leak → handoff + escalate ──
+  //    Incident cskh-shopify: customer received the agent's raw brain transcript
+  //    (`default_api:run_command{CommandLine:python "...antigravity-cli\brain\...\inspect_tables.py",
+  //    ...ExitCode:0,Output:=== GET SCHEMA DEFINITIONS ===...task-36}`) prepended to the real reply.
+  //    The whole reply must be refused (bled transcript can carry another customer's data) +
+  //    escalated (agent malfunctioning). Distinct from G8 (raw JSONL) and G1 (output-style collapse).
+  it("G8b antigravity trace leak → safe handoff + escalation, no trace leaked", async () => {
+    const config = cfg();
+    const input =
+      'default_api:run_command{CommandLine:python "C:\\Users\\x\\.gemini\\antigravity-cli\\brain\\0a31daed\\scratch\\inspect_tables.py",Cwd:C:\\proj,ExitCode:0,Output:=== GET SCHEMA DEFINITIONS ===\ncrm_tickets properties:\n - id: string\n task-36}\n\nDạ em nhận được chuyển khoản 899k của chị Huệ rồi ạ.';
+    const out = await postProcessReply(input, config, null);
+    // Never leak any internal-trace token to the customer.
+    expect(out).not.toMatch(/default_api|run_command|ExitCode|antigravity-cli|GET SCHEMA/i);
+    // Safe handoff line (same as the corrupted-collapse guard).
+    expect(out).toBe("Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.");
+    // Malfunction → escalate (bot_paused + ticket + CS ping downstream).
+    expect((config as any)._escalation).toBeTruthy();
+    expect((config as any)._escalation.reason).toBe("agent_output_corrupted");
+  });
+
   // ── G9: [[CALL: ...key="v"]] severed marker → no fragment leaks ──
   it("G9 CALL marker with kwargs → stripped, no fragment", () => {
     const input =
