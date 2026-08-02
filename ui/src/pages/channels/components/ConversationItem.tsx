@@ -3,10 +3,10 @@
 
 import { useState } from "react";
 import { type ChannelSession } from "@/api/channels";
-import { type ChannelDisplayMap } from "../UnifiedInbox";
+import { type ChannelDisplayMap, type TicketInfo } from "../UnifiedInbox";
 import { ConversationActions } from "./ConversationActions";
 import { ChannelBadge } from "@/components/ChannelBadge";
-import { Pin, VolumeX, Users, Bot, Paperclip, PauseCircle } from "lucide-react";
+import { Pin, VolumeX, Users, Bot, Paperclip, PauseCircle, Ticket } from "lucide-react";
 
 interface Props {
   conversation: ChannelSession;
@@ -14,7 +14,21 @@ interface Props {
   onClick: () => void;
   onAction: () => void;
   channelMap: ChannelDisplayMap;
+  ticketInfo?: TicketInfo;
+  onOpenTicket?: (customerId: string) => void;
 }
+
+// Compact badge color by the customer's highest open-ticket priority.
+const TICKET_BADGE_TONE: Record<string, string> = {
+  critical: "bg-red-600/15 text-red-600 ring-red-600/40",
+  urgent: "bg-red-500/15 text-red-600 ring-red-500/40",
+  high: "bg-orange-500/15 text-orange-600 ring-orange-500/40",
+  medium: "bg-amber-500/15 text-amber-600 ring-amber-500/40",
+  low: "bg-zinc-400/15 text-zinc-500 ring-zinc-400/40",
+};
+const PRIORITY_VN: Record<string, string> = {
+  critical: "Nghiêm trọng", urgent: "Gấp", high: "Cao", medium: "TB", low: "Thấp",
+};
 
 function formatTime(ts: string | null): string {
   if (!ts) return "";
@@ -99,7 +113,7 @@ function Avatar({
   );
 }
 
-export function ConversationItem({ conversation: conv, isSelected, onClick, onAction, channelMap }: Props) {
+export function ConversationItem({ conversation: conv, isSelected, onClick, onAction, channelMap, ticketInfo, onOpenTicket }: Props) {
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const isUnread = (conv.unread_count || 0) > 0;
@@ -217,6 +231,22 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
                   <PauseCircle className="h-3 w-3 shrink-0" />
                   Bot đang dừng
                 </span>
+              )}
+
+              {/* Open-ticket badge — bấm để mở phiếu (top priority) ngay từ list */}
+              {ticketInfo && ticketInfo.count > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (conv.customer_id && onOpenTicket) onOpenTicket(conv.customer_id);
+                  }}
+                  title={`${ticketInfo.count} phiếu mở · cao nhất: ${PRIORITY_VN[ticketInfo.maxPriority] || ticketInfo.maxPriority}. Bấm để xem.`}
+                  className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ring-1 hover:brightness-110 transition ${TICKET_BADGE_TONE[ticketInfo.maxPriority] || TICKET_BADGE_TONE.low}`}
+                >
+                  <Ticket className="h-3 w-3 shrink-0" />
+                  {ticketInfo.count > 1 ? `${ticketInfo.count} phiếu` : "Phiếu"}
+                </button>
               )}
             </div>
 

@@ -4,11 +4,11 @@
 import { useState, useMemo } from "react";
 import {
   Search, SlidersHorizontal, Plus, X, Filter, RotateCcw,
-  Circle, CheckCircle, Pin, Flame, Thermometer, Snowflake, Star, User, Handshake, Briefcase, Ban
+  Circle, CheckCircle, Pin, Flame, Thermometer, Snowflake, Star, User, Handshake, Briefcase, Ban, Ticket, PanelLeftClose
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { channelsApi, type ChannelSession } from "@/api/channels";
-import { type ChannelDisplayMap } from "../UnifiedInbox";
+import { type ChannelDisplayMap, type TicketMap } from "../UnifiedInbox";
 import { ConversationItem } from "./ConversationItem";
 
 interface Props {
@@ -20,6 +20,12 @@ interface Props {
   onFiltersChange: (f: Props["filters"]) => void;
   onAction: () => void;
   channelMap: ChannelDisplayMap;
+  ticketMap?: TicketMap;
+  onOpenTicket?: (customerId: string) => void;
+  ticketOnly?: boolean;
+  onToggleTicketOnly?: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 const STATUS_TABS = [
@@ -50,6 +56,11 @@ export function ConversationList({
   onFiltersChange,
   onAction,
   channelMap,
+  ticketMap,
+  onOpenTicket,
+  ticketOnly,
+  onToggleTicketOnly,
+  onToggleCollapse,
 }: Props) {
   const [searchInput, setSearchInput] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -128,6 +139,17 @@ export function ConversationList({
           >
             <Plus className="h-4 w-4" />
           </button>
+
+          {/* Collapse the whole list panel (desktop only — parent passes the toggle) */}
+          {onToggleCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              className="h-9 px-2.5 rounded-lg border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-all shrink-0"
+              title="Thu gọn danh sách"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
         {/* Status tabs */}
@@ -165,6 +187,25 @@ export function ConversationList({
               </button>
             );
           })}
+
+          {/* S3: toggle to show only conversations whose customer has an open ticket */}
+          {onToggleTicketOnly && (
+            <button
+              onClick={onToggleTicketOnly}
+              title="Chỉ hiện khách đang có phiếu hỗ trợ"
+              className={`
+                flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+                transition-all whitespace-nowrap shrink-0
+                ${ticketOnly
+                  ? "bg-amber-500 text-white shadow-sm"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                }
+              `}
+            >
+              <Ticket className="h-3 w-3" />
+              <span>Có phiếu</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -245,6 +286,8 @@ export function ConversationList({
                 onClick={() => onSelect(conv.session_key)}
                 onAction={onAction}
                 channelMap={channelMap}
+                ticketInfo={conv.customer_id ? ticketMap?.get(conv.customer_id) : undefined}
+                onOpenTicket={onOpenTicket}
               />
             ))}
           </div>

@@ -4,7 +4,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy, ChevronDown, Tag, Plus } from "lucide-react";
+import { X, ExternalLink, RefreshCw, ShoppingBag, Ticket, Pencil, Check, CalendarClock, History, Phone, Mail, MapPin, Search, Copy, ChevronDown, Tag, Plus, Loader2 } from "lucide-react";
+import { TicketDetailPanel } from "./TicketDetailPanel";
 import { type ChannelSession } from "@/api/channels";
 import { crmApi } from "@/api/crm";
 import { Button } from "@/components/ui/button";
@@ -406,6 +407,21 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   // ── Phiếu HT: ticket modal (move từ ChatHeader vào card) ──
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [ticketForm, setTicketForm] = useState(defaultTicketForm);
+  // ── Ticket detail overlay: click "Yêu cầu gần đây" → fetch full ticket → shared panel ──
+  const [detailTicket, setDetailTicket] = useState<any>(null);
+  const [loadingTicketId, setLoadingTicketId] = useState<string | null>(null);
+  const openTicketDetail = async (t: RecentTicket) => {
+    setLoadingTicketId(t.id);
+    try {
+      const full = await crmApi.getTicket(t.id);
+      setDetailTicket(full || { ...t, title: t.subject });
+    } catch {
+      // Degraded fallback — still show the minimal fields we already have.
+      setDetailTicket({ ...t, title: t.subject });
+    } finally {
+      setLoadingTicketId(null);
+    }
+  };
   const { data: agentList = [] } = useQuery({
     queryKey: ["agents-list"],
     queryFn: async () => {
@@ -932,9 +948,17 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           </div>
           <div className="space-y-1.5">
             {recentTickets.map((ticket) => (
-              <div key={ticket.id} className="text-xs bg-muted/20 rounded-md px-2 py-1.5">
+              <button
+                key={ticket.id}
+                type="button"
+                onClick={() => openTicketDetail(ticket)}
+                disabled={loadingTicketId === ticket.id}
+                title="Bấm để xem chi tiết phiếu"
+                className="w-full text-left text-xs bg-muted/20 hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary/30 rounded-md px-2 py-1.5 transition-colors cursor-pointer disabled:opacity-60"
+              >
                 <div className="flex items-center justify-between">
-                  <span className="truncate font-medium flex-1 min-w-0">
+                  <span className="truncate font-medium flex-1 min-w-0 flex items-center gap-1">
+                    {loadingTicketId === ticket.id && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
                     {ticket.subject || `Ticket #${ticket.id.slice(0, 8)}`}
                   </span>
                   {ticket.priority && (
@@ -955,7 +979,7 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
                     {ticket.created_at ? new Date(ticket.created_at).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" }) : ""}
                   </span>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -1071,6 +1095,11 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
           )}
           <p className="text-[10px] text-muted-foreground">Hoặc khách sẽ tự liên kết khi có thông tin CRM.</p>
         </div>
+      )}
+
+      {/* Ticket detail overlay (shared TicketDetailPanel) — read-only, no Sửa in inbox */}
+      {detailTicket && (
+        <TicketDetailPanel ticket={detailTicket} onClose={() => setDetailTicket(null)} />
       )}
 
       {/* Modal: Phiếu hỗ trợ (chuyển từ ChatHeader vào card — reuse SimpleModal) */}

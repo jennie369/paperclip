@@ -4,17 +4,24 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MessageSquare, Users, Settings, Bell, BellOff, RefreshCw, Keyboard, HelpCircle, ExternalLink } from "lucide-react";
+import { MessageSquare, Users, Settings, Bell, BellOff, RefreshCw, Keyboard, HelpCircle, ExternalLink, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { channelsApi, type ChannelSession } from "@/api/channels";
+import { crmApi } from "@/api/crm";
+import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "@/context/SidebarContext";
 import { ConversationList } from "./components/ConversationList";
 import { ChatPanel } from "./components/ChatPanel";
 import { CustomerSidebar } from "./components/CustomerSidebar";
+import { TicketDetailPanel, PRIORITY_RANK } from "./components/TicketDetailPanel";
 import { CreateOrderPanel } from "../crm/components/CreateOrderPanel";
 import { ContactsPage } from "./ContactsPage";
 import { getChannelColor } from "./components/channelConfig";
+
+// Open-ticket summary attached to a conversation row (badge on the list).
+export type TicketInfo = { count: number; maxPriority: string; tickets: any[] };
+export type TicketMap = Map<string, TicketInfo>;
 
 export type ChannelDisplayMap = Record<string, { display_name: string; color: string }>;
 
@@ -87,6 +94,17 @@ export function UnifiedInbox() {
     search?: string;
     label?: string;
   }>({});
+  // Collapse the conversation-list panel to give the thread more room (persisted).
+  const [listCollapsed, setListCollapsed] = useState<boolean>(
+    () => { try { return localStorage.getItem("inbox_list_collapsed") === "1"; } catch { return false; } }
+  );
+  const toggleListCollapsed = useCallback(() => {
+    setListCollapsed((v) => { const n = !v; try { localStorage.setItem("inbox_list_collapsed", n ? "1" : "0"); } catch { /* ignore */ } return n; });
+  }, []);
+  // S3: show only conversations whose customer has an open ticket.
+  const [ticketOnly, setTicketOnly] = useState(false);
+  // S1: ticket overlay opened from a list badge.
+  const [inboxDetailTicket, setInboxDetailTicket] = useState<any>(null);
 
   // Close settings menu when clicking outside
   useEffect(() => {
@@ -136,9 +154,44 @@ export function UnifiedInbox() {
     refetchIntervalInBackground: true,
   });
 
-  // Filter conversations by channel tab (client-side for instant filtering)
+  // Open tickets → map customer_id → {count, maxPriority, tickets} for the list badge.
+  // Client-side aggregation over open tickets (few); non-open statuses excluded.
+  const { data: openTicketsData } = useQuery({
+    queryKey: ["open-tickets-by-customer"],
+    queryFn: () => crmApi.getTickets({ status: "open,assigned,in_progress,waiting_customer,escalated", limit: "500" }),
+    staleTime: 30_000,
+  });
+  // S4: badge auto-refreshes when a ticket changes status (create/resolve/escalate).
+  useLiveInvalidate({ table: "crm_tickets", queryKeys: [["open-tickets-by-customer"]] });
+
+  const ticketMap: TicketMap = useMemo(() => {
+    const m: TicketMap = new Map();
+    for (const t of (openTicketsData?.data || []) as any[]) {
+      if (!t.customer_id) continue;
+      const e = m.get(t.customer_id) || { count: 0, maxPriority: "low", tickets: [] };
+      e.count++;
+      e.tickets.push(t);
+      if ((PRIORITY_RANK[t.priority] || 0) > (PRIORITY_RANK[e.maxPriority] || 0)) e.maxPriority = t.priority;
+      m.set(t.customer_id, e);
+    }
+    return m;
+  }, [openTicketsData]);
+
+  // S1: open the top-priority open ticket for a customer when its list badge is clicked.
+  const openTicketFromBadge = useCallback(async (customerId: string) => {
+    const entry = ticketMap.get(customerId);
+    if (!entry?.tickets.length) return;
+    const top = [...entry.tickets].sort(
+      (a, b) => (PRIORITY_RANK[b.priority] || 0) - (PRIORITY_RANK[a.priority] || 0),
+    )[0];
+    try { setInboxDetailTicket((await crmApi.getTicket(top.id)) || top); }
+    catch { setInboxDetailTicket(top); }
+  }, [ticketMap]);
+
+  // Filter conversations by channel tab + optional "has open ticket" (client-side).
   const filteredConversations = useMemo(() => {
-    const convs = data?.conversations || [];
+    let convs = data?.conversations || [];
+    if (ticketOnly) convs = convs.filter((c) => c.customer_id && ticketMap.has(c.customer_id));
     if (!activeChannel) return convs;
 
     return convs.filter((conv) => {
@@ -153,7 +206,7 @@ export function UnifiedInbox() {
         default: return true;
       }
     });
-  }, [data?.conversations, activeChannel]);
+  }, [data?.conversations, activeChannel, ticketOnly, ticketMap]);
 
   const selected = filteredConversations.find((c) => c.session_key === selectedKey) || null;
 
@@ -328,26 +381,54 @@ export function UnifiedInbox() {
           {/* One column at a time on mobile: the list hands off to the thread,
               and the thread's back arrow returns to the list. */}
           <div className="flex flex-1 overflow-hidden">
-            {/* Panel Left: Conversation List — 340px */}
-            <div
-              className={cn(
-                "border-r border-border flex flex-col bg-background",
-                isMobile
-                  ? selected ? "hidden" : "w-full"
-                  : "w-[340px] min-w-[300px] max-w-[400px]",
-              )}
-            >
-              <ConversationList
-                conversations={filteredConversations}
-                isLoading={isLoading}
-                selectedKey={selectedKey}
-                onSelect={handleSelect}
-                filters={filters}
-                onFiltersChange={setFilters}
-                onAction={handleAction}
-                channelMap={channelMap}
-              />
-            </div>
+            {/* Panel Left: Conversation List — collapsible (desktop) / full-width (mobile).
+                Collapsed = a thin rail with an expand button + total unread, giving the
+                thread more room on narrow laptops. Mobile keeps the list↔thread handoff. */}
+            {!isMobile && listCollapsed ? (
+              <div className="border-r border-border flex flex-col items-center bg-background w-12 shrink-0 py-2 gap-2">
+                <button
+                  onClick={toggleListCollapsed}
+                  title="Mở danh sách hội thoại"
+                  className="p-2 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </button>
+                {(() => {
+                  const totalUnread = filteredConversations.reduce((s, c) => s + (c.unread_count || 0), 0);
+                  return totalUnread > 0 ? (
+                    <span className="min-w-[20px] h-5 flex items-center justify-center text-[11px] font-bold text-white bg-red-500 rounded-full px-1.5">
+                      {totalUnread > 99 ? "99+" : totalUnread}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
+            ) : (
+              <div
+                className={cn(
+                  "border-r border-border flex flex-col bg-background",
+                  isMobile
+                    ? selected ? "hidden" : "w-full"
+                    : "w-[340px] min-w-[300px] max-w-[400px]",
+                )}
+              >
+                <ConversationList
+                  conversations={filteredConversations}
+                  isLoading={isLoading}
+                  selectedKey={selectedKey}
+                  onSelect={handleSelect}
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                  onAction={handleAction}
+                  channelMap={channelMap}
+                  ticketMap={ticketMap}
+                  onOpenTicket={openTicketFromBadge}
+                  ticketOnly={ticketOnly}
+                  onToggleTicketOnly={() => setTicketOnly((v) => !v)}
+                  collapsed={listCollapsed}
+                  onToggleCollapse={!isMobile ? toggleListCollapsed : undefined}
+                />
+              </div>
+            )}
 
             {/* Panel Center: Chat */}
             <div
@@ -412,6 +493,11 @@ export function UnifiedInbox() {
               </div>
             )}
           </div>
+
+          {/* S1: ticket overlay opened from a list badge (shared TicketDetailPanel) */}
+          {inboxDetailTicket && (
+            <TicketDetailPanel ticket={inboxDetailTicket} onClose={() => setInboxDetailTicket(null)} />
+          )}
         </>
       )}
     </div>
