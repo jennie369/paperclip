@@ -99,7 +99,7 @@ export function Agents() {
   const [showTerminated, setShowTerminated] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState<SortOption>("name-asc");
+  const [sortBy, setSortBy] = useState<SortOption>("custom");
   const [customOrder, setCustomOrder] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("paperclip_agent_order");
@@ -485,7 +485,7 @@ function SortableAgentRow({
                 )}
                 <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
-                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : "Lịch: Không cố định"}
+                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : (agent.runtimeConfig as any)?.heartbeat?.cronExpression ? `Lịch: ${(agent.runtimeConfig as any).heartbeat.cronExpression}` : "Lịch: Không cố định"}
                   </span>
                   <span className="text-xs text-muted-foreground truncate w-full">
                     {agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : "Chưa từng chạy"}
@@ -571,7 +571,7 @@ function OrgTreeNode({
               <>
                 <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
-                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : "Lịch: Không cố định"}
+                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : (agent.runtimeConfig as any)?.heartbeat?.cronExpression ? `Lịch: ${(agent.runtimeConfig as any).heartbeat.cronExpression}` : "Lịch: Không cố định"}
                   </span>
                   <span className="text-xs text-muted-foreground truncate w-full">
                     {agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : "Chưa từng chạy"}
