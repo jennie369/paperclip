@@ -35,6 +35,7 @@ export interface TimetableRowAgent {
   id: string;
   name: string;
   model: string | null;
+  schedule?: string | null;
 }
 
 export interface TimetableRow {

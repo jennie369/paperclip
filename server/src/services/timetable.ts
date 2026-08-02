@@ -12,7 +12,7 @@ import {
   TIMETABLE_SOURCE_TABLES,
   type TimetableSourceTable,
 } from "@paperclipai/db";
-import * as cronParser from "cron-parser";
+import { CronExpressionParser } from "cron-parser";
 
 // Raw Supabase client for cc_scripts (no Drizzle schema — see
 // paperclip-dashboard/architecture/FEATURE SPECS/TIMETABLE.md Deferred).
@@ -47,6 +47,7 @@ export interface TimetableRow {
     id: string;
     name: string;
     model: string | null;
+    schedule?: string | null;
   } | null;
   kind: string;                  // heartbeat | task | post | reel | email | reply | routine | manual_task | meeting | reminder
   title: string;
@@ -1008,16 +1009,15 @@ async function fetchProjectedCrons(
     if (schedule === "Không cố định") continue;
 
     try {
-      const interval = cronParser.parseExpression(schedule, {
+      const interval = CronExpressionParser.parse(schedule, {
         currentDate: startUtc,
         endDate: endUtc,
         tz: "Asia/Ho_Chi_Minh",
-        iterator: true,
       });
 
       while (interval.hasNext()) {
         const obj = interval.next();
-        const date = obj.value.toDate();
+        const date = obj.toDate();
         if (date >= startUtc && date <= endUtc) {
           // If the cron time is far in the past, it's missed, skip it
           // Only show future crons (allow small grace period)
@@ -1033,6 +1033,7 @@ async function fetchProjectedCrons(
               id: agent.id,
               name: agent.name,
               model: agentModel(agent.adapterConfig as Record<string, unknown>),
+              schedule,
             },
             kind: "heartbeat",
             title: `Heartbeat · system`,
