@@ -121,7 +121,9 @@ export function Agents() {
   const { isMobile } = useSidebar();
   const pathSegment = location.pathname.split("/").pop() ?? "all";
   const tab: FilterTab = (pathSegment === "all" || pathSegment === "active" || pathSegment === "paused" || pathSegment === "error") ? pathSegment : "all";
-  const [view, setView] = useState<"list" | "org">("org");
+  const [view, setView] = useState<"list" | "org">(() => {
+    return (localStorage.getItem("paperclip_agent_view") as "list" | "org") || "list";
+  });
   const forceListView = isMobile;
   const effectiveView: "list" | "org" = forceListView ? "list" : view;
   const [showTerminated, setShowTerminated] = useState(false);
@@ -340,7 +342,10 @@ export function Agents() {
                   "p-1.5 transition-colors",
                   effectiveView === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
                 )}
-                onClick={() => setView("list")}
+                onClick={() => {
+                  setView("list");
+                  localStorage.setItem("paperclip_agent_view", "list");
+                }}
               >
                 <List className="h-3.5 w-3.5" />
               </button>
@@ -349,7 +354,10 @@ export function Agents() {
                   "p-1.5 transition-colors",
                   effectiveView === "org" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
                 )}
-                onClick={() => setView("org")}
+                onClick={() => {
+                  setView("org");
+                  localStorage.setItem("paperclip_agent_view", "org");
+                }}
               >
                 <GitBranch className="h-3.5 w-3.5" />
               </button>
@@ -511,7 +519,7 @@ function SortableAgentRow({
                     liveCount={liveRunByAgent.get(agent.id)!.liveCount}
                   />
                 )}
-                <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
+                <div className="flex flex-col items-start justify-center w-64 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
                     Lịch: {formatSchedule(typeof agent.metadata?.schedule === "string" ? agent.metadata.schedule : (agent.runtimeConfig as any)?.heartbeat?.cronExpression)}
                   </span>
@@ -597,7 +605,7 @@ function OrgTreeNode({
             )}
             {agent && (
               <>
-                <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
+                <div className="flex flex-col items-start justify-center w-64 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
                     Lịch: {formatSchedule(typeof agent.metadata?.schedule === "string" ? agent.metadata.schedule : (agent.runtimeConfig as any)?.heartbeat?.cronExpression)}
                   </span>
