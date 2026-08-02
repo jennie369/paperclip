@@ -1,5 +1,22 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useNavigate, useLocation } from "@/lib/router";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useQuery } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
@@ -17,8 +34,12 @@ import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Bot, Plus, List, GitBranch, SlidersHorizontal } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Bot, Plus, List, GitBranch, SlidersHorizontal, Search, ArrowDownUp, GripVertical } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
+
+type SortOption = "name-asc" | "name-desc" | "status" | "recent" | "model" | "custom";
 
 const adapterLabels: Record<string, string> = {
   claude_local: "Claude",
@@ -77,6 +98,16 @@ export function Agents() {
   const effectiveView: "list" | "org" = forceListView ? "list" : view;
   const [showTerminated, setShowTerminated] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortOption>("name-asc");
+  const [customOrder, setCustomOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("paperclip_agent_order");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const { data: agents, isLoading, error } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -130,8 +161,68 @@ export function Agents() {
     return <PageSkeleton variant="list" />;
   }
 
-  const filtered = filterAgents(agents ?? [], tab, showTerminated);
+  let filtered = filterAgents(agents ?? [], tab, showTerminated);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = filtered.filter((a) =>
+      a.name.toLowerCase().includes(q) ||
+      (adapterLabels[a.adapterType] ?? a.adapterType).toLowerCase().includes(q) ||
+      (typeof a.adapterConfig?.model === "string" && a.adapterConfig.model.toLowerCase().includes(q))
+    );
+  }
+
+  if (sortBy === "custom" && customOrder.length > 0) {
+    filtered.sort((a, b) => {
+      const indexA = customOrder.indexOf(a.id);
+      const indexB = customOrder.indexOf(b.id);
+      if (indexA === -1 && indexB === -1) return a.name.localeCompare(b.name);
+      if (indexA === -1) return 1;
+      if (indexB === -1) return -1;
+      return indexA - indexB;
+    });
+  } else {
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case "name-asc": return a.name.localeCompare(b.name);
+        case "name-desc": return b.name.localeCompare(a.name);
+        case "recent": {
+          const timeA = a.lastHeartbeatAt ? new Date(a.lastHeartbeatAt).getTime() : 0;
+          const timeB = b.lastHeartbeatAt ? new Date(b.lastHeartbeatAt).getTime() : 0;
+          return timeB - timeA;
+        }
+        case "status": return a.status.localeCompare(b.status);
+        case "model": {
+          const modelA = typeof a.adapterConfig?.model === "string" ? a.adapterConfig.model : "";
+          const modelB = typeof b.adapterConfig?.model === "string" ? b.adapterConfig.model : "";
+          return modelA.localeCompare(modelB);
+        }
+        default: return 0;
+      }
+    });
+  }
+
   const filteredOrg = filterOrgTree(orgTree ?? [], tab, showTerminated);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const oldIndex = filtered.findIndex((a) => a.id === active.id);
+      const newIndex = filtered.findIndex((a) => a.id === over.id);
+      
+      const newArray = arrayMove(filtered, oldIndex, newIndex);
+      const newOrder = newArray.map((a) => a.id);
+      setCustomOrder(newOrder);
+      localStorage.setItem("paperclip_agent_order", JSON.stringify(newOrder));
+      setSortBy("custom");
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -148,7 +239,41 @@ export function Agents() {
             onValueChange={(v) => navigate(`/agents/${v}`)}
           />
         </Tabs>
+
+        <div className="relative max-w-xs w-full sm:w-48 ml-auto sm:ml-4">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            type="search"
+            placeholder="Search agents..."
+            className="w-full pl-8 h-8 text-xs"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
         <div className="flex items-center gap-2">
+          {/* Sort */}
+          {effectiveView === "list" && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs">
+                  <ArrowDownUp className="h-3.5 w-3.5 mr-1.5" />
+                  Sort
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuRadioGroup value={sortBy} onValueChange={(v) => setSortBy(v as SortOption)}>
+                  <DropdownMenuRadioItem value="name-asc" className="text-xs">Name (A-Z)</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="name-desc" className="text-xs">Name (Z-A)</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="status" className="text-xs">Status</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="recent" className="text-xs">Recently Active</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="model" className="text-xs">Model</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="custom" className="text-xs">Custom Order</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
           {/* Filters */}
           <div className="relative">
             <button
@@ -226,65 +351,31 @@ export function Agents() {
 
       {/* List view */}
       {effectiveView === "list" && filtered.length > 0 && (
-        <div className="border border-border">
-          {filtered.map((agent) => {
-            return (
-              <EntityRow
-                key={agent.id}
-                title={agent.name}
-                subtitle={`${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`}
-                to={agentUrl(agent)}
-                leading={
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span
-                      className={`absolute inline-flex h-full w-full rounded-full ${agentStatusDot[agent.status] ?? agentStatusDotDefault}`}
-                    />
-                  </span>
-                }
-                trailing={
-                  <div className="flex items-center gap-3">
-                    <span className="sm:hidden">
-                      {liveRunByAgent.has(agent.id) ? (
-                        <LiveRunIndicator
-                          agentRef={agentRouteRef(agent)}
-                          runId={liveRunByAgent.get(agent.id)!.runId}
-                          liveCount={liveRunByAgent.get(agent.id)!.liveCount}
-                        />
-                      ) : (
-                        <StatusBadge status={agent.status} />
-                      )}
-                    </span>
-                    <div className="hidden sm:flex items-center gap-3">
-                      {liveRunByAgent.has(agent.id) && (
-                        <LiveRunIndicator
-                          agentRef={agentRouteRef(agent)}
-                          runId={liveRunByAgent.get(agent.id)!.runId}
-                          liveCount={liveRunByAgent.get(agent.id)!.liveCount}
-                        />
-                      )}
-                      <div className="flex flex-col items-end justify-center w-32 shrink-0">
-                        <span className="text-xs text-foreground font-medium text-right truncate w-full">
-                          {adapterLabels[agent.adapterType] ?? agent.adapterType}
-                        </span>
-                        {typeof agent.adapterConfig?.model === "string" && (
-                          <span className="text-[10px] text-muted-foreground text-right truncate w-full" title={agent.adapterConfig.model}>
-                            {agent.adapterConfig.model}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-muted-foreground w-16 text-right shrink-0">
-                        {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
-                      </span>
-                      <span className="w-20 flex justify-end">
-                        <StatusBadge status={agent.status} />
-                      </span>
-                    </div>
-                  </div>
-                }
-              />
-            );
-          })}
-        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="border border-border flex flex-col">
+            <SortableContext
+              items={filtered.map((a) => a.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {filtered.map((agent) => (
+                <SortableAgentRow
+                  key={agent.id}
+                  agent={agent}
+                  roleLabels={roleLabels}
+                  adapterLabels={adapterLabels}
+                  agentStatusDot={agentStatusDot}
+                  agentStatusDotDefault={agentStatusDotDefault}
+                  liveRunByAgent={liveRunByAgent}
+                  agentRouteRef={agentRouteRef}
+                />
+              ))}
+            </SortableContext>
+          </div>
+        </DndContext>
       )}
 
       {effectiveView === "list" && agents && agents.length > 0 && filtered.length === 0 && (
@@ -313,6 +404,106 @@ export function Agents() {
           No organizational hierarchy defined.
         </p>
       )}
+    </div>
+  );
+}
+
+function SortableAgentRow({
+  agent,
+  roleLabels,
+  adapterLabels,
+  agentStatusDot,
+  agentStatusDotDefault,
+  liveRunByAgent,
+  agentRouteRef,
+}: any) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: agent.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    position: "relative" as const,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "flex group bg-background border-b border-border last:border-b-0",
+        isDragging && "opacity-50"
+      )}
+    >
+      <div
+        {...attributes}
+        {...listeners}
+        className="flex items-center justify-center px-2 cursor-grab active:cursor-grabbing hover:bg-accent/50 text-muted-foreground hover:text-foreground"
+      >
+        <GripVertical className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <EntityRow
+          className="border-b-0"
+          title={agent.name}
+          subtitle={`${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`}
+          to={agentUrl(agent)}
+          leading={
+            <span className="relative flex h-2.5 w-2.5">
+              <span
+                className={`absolute inline-flex h-full w-full rounded-full ${agentStatusDot[agent.status] ?? agentStatusDotDefault}`}
+              />
+            </span>
+          }
+          trailing={
+            <div className="flex items-center gap-3">
+              <span className="sm:hidden">
+                {liveRunByAgent.has(agent.id) ? (
+                  <LiveRunIndicator
+                    agentRef={agentRouteRef(agent)}
+                    runId={liveRunByAgent.get(agent.id)!.runId}
+                    liveCount={liveRunByAgent.get(agent.id)!.liveCount}
+                  />
+                ) : (
+                  <StatusBadge status={agent.status} />
+                )}
+              </span>
+              <div className="hidden sm:flex items-center gap-3">
+                {liveRunByAgent.has(agent.id) && (
+                  <LiveRunIndicator
+                    agentRef={agentRouteRef(agent)}
+                    runId={liveRunByAgent.get(agent.id)!.runId}
+                    liveCount={liveRunByAgent.get(agent.id)!.liveCount}
+                  />
+                )}
+                <div className="flex flex-col items-end justify-center w-32 shrink-0">
+                  <span className="text-xs text-foreground font-medium text-right truncate w-full">
+                    {adapterLabels[agent.adapterType] ?? agent.adapterType}
+                  </span>
+                  {typeof agent.adapterConfig?.model === "string" && (
+                    <span className="text-[10px] text-muted-foreground text-right truncate w-full" title={agent.adapterConfig.model}>
+                      {agent.adapterConfig.model}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground w-16 text-right shrink-0">
+                  {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
+                </span>
+                <span className="w-20 flex justify-end">
+                  <StatusBadge status={agent.status} />
+                </span>
+              </div>
+            </div>
+          }
+        />
+      </div>
     </div>
   );
 }
