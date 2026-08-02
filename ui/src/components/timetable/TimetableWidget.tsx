@@ -12,11 +12,14 @@ import {
   ChevronRight,
   Plus,
   RotateCw,
+  List,
+  Calendar as CalendarIcon
 } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { useTimetable } from "@/hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "./TimetableTable";
 import { AddManualRowModal } from "./AddManualRowModal";
+import { TimetableCalendarView } from "./TimetableCalendarView";
 import { SortMenu, GroupMenu, ColumnMenu, FilterMenu } from "./TimetableMenus";
 import { SmartSearch } from "./SmartSearch";
 import type { TimetableSort, TimetableGroup } from "@/types/timetable";
@@ -84,6 +87,7 @@ export default function TimetableWidget() {
   const companyId = selectedCompanyId ?? "";
 
   const [date, setDate] = useState<string>(todayHCM());
+  const [displayMode, setDisplayMode] = useState<"list" | "calendar">("list");
 
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } =
     useTimetable(companyId, { date });
@@ -250,6 +254,24 @@ export default function TimetableWidget() {
                 Hôm nay
               </button>
             )}
+            <div className="flex bg-muted/40 rounded border border-border ml-1 p-0.5">
+              <button
+                type="button"
+                className={`rounded px-1.5 py-0.5 text-xs transition-colors ${displayMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setDisplayMode("list")}
+                title="Dạng danh sách"
+              >
+                <List size={14} />
+              </button>
+              <button
+                type="button"
+                className={`rounded px-1.5 py-0.5 text-xs transition-colors ${displayMode === "calendar" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setDisplayMode("calendar")}
+                title="Dạng Timeline 1 ngày"
+              >
+                <CalendarIcon size={14} />
+              </button>
+            </div>
           </div>
           <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground ml-1">
             {formatDateLabel(date)}
@@ -386,6 +408,8 @@ export default function TimetableWidget() {
               <>Không có dòng nào khớp.</>
             )}
           </div>
+        ) : displayMode === "calendar" ? (
+          <TimetableCalendarView rows={filteredRows} companyId={companyId} />
         ) : (
           <div>
             {processedSections.map((section) => (
