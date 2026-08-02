@@ -30,7 +30,7 @@ import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { EntityRow } from "../components/EntityRow";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
-import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
+import { relativeTime, formatDateTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -483,7 +483,15 @@ function SortableAgentRow({
                     liveCount={liveRunByAgent.get(agent.id)!.liveCount}
                   />
                 )}
-                <div className="flex flex-col items-end justify-center w-32 shrink-0">
+                <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
+                  <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
+                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : "Lịch: Không cố định"}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate w-full">
+                    {agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : "Chưa từng chạy"}
+                  </span>
+                </div>
+                <div className="flex flex-col items-end justify-center w-32 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-xs text-foreground font-medium text-right truncate w-full">
                     {adapterLabels[agent.adapterType] ?? agent.adapterType}
                   </span>
@@ -561,7 +569,15 @@ function OrgTreeNode({
             )}
             {agent && (
               <>
-                <div className="flex flex-col items-end justify-center w-32 shrink-0">
+                <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
+                  <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
+                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : "Lịch: Không cố định"}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate w-full">
+                    {agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : "Chưa từng chạy"}
+                  </span>
+                </div>
+                <div className="flex flex-col items-end justify-center w-32 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-xs text-foreground font-medium text-right truncate w-full">
                     {adapterLabels[agent.adapterType] ?? agent.adapterType}
                   </span>
