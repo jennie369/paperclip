@@ -262,10 +262,17 @@ export function Agents() {
                           liveCount={liveRunByAgent.get(agent.id)!.liveCount}
                         />
                       )}
-                      <span className="text-xs text-muted-foreground font-mono w-14 text-right">
-                        {adapterLabels[agent.adapterType] ?? agent.adapterType}
-                      </span>
-                      <span className="text-xs text-muted-foreground w-16 text-right">
+                      <div className="flex flex-col items-end justify-center w-32 shrink-0">
+                        <span className="text-xs text-foreground font-medium text-right truncate w-full">
+                          {adapterLabels[agent.adapterType] ?? agent.adapterType}
+                        </span>
+                        {typeof agent.adapterConfig?.model === "string" && (
+                          <span className="text-[10px] text-muted-foreground text-right truncate w-full" title={agent.adapterConfig.model}>
+                            {agent.adapterConfig.model}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground w-16 text-right shrink-0">
                         {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
                       </span>
                       <span className="w-20 flex justify-end">
@@ -363,10 +370,17 @@ function OrgTreeNode({
             )}
             {agent && (
               <>
-                <span className="text-xs text-muted-foreground font-mono w-14 text-right">
-                  {adapterLabels[agent.adapterType] ?? agent.adapterType}
-                </span>
-                <span className="text-xs text-muted-foreground w-16 text-right">
+                <div className="flex flex-col items-end justify-center w-32 shrink-0">
+                  <span className="text-xs text-foreground font-medium text-right truncate w-full">
+                    {adapterLabels[agent.adapterType] ?? agent.adapterType}
+                  </span>
+                  {typeof agent.adapterConfig?.model === "string" && (
+                    <span className="text-[10px] text-muted-foreground text-right truncate w-full" title={agent.adapterConfig.model}>
+                      {agent.adapterConfig.model}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground w-16 text-right shrink-0">
                   {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
                 </span>
               </>
