@@ -62,7 +62,12 @@ export class CskhChannel implements Channel {
   async send(msg: OutboundMessage): Promise<void> {
     const threadId = msg.chatId;
     const agentSlug = (msg.metadata?.agentSlug as string) || null;
-    const sentBy = (msg.metadata?.sentBy as string) || (agentSlug ? `agent:${agentSlug}` : 'agent');
+    // channel_sent_messages.sent_by = BARE agent slug (SSOT 2026-08-03). CSKH trước
+    // ghi `agent:<slug>` = split-brain: 6 kênh khác (zalo/fb/fb-web/youtube/manager)
+    // + cột `agent_slug` (pending/follow_up) + consumer agent-config-routes `.eq('sent_by', slug)`
+    // đều dùng slug TRẦN → cskh prefix làm view hoạt-động-agent bỏ sót tin cskh. Prefix `agent:`
+    // chỉ dành cho KG entity-id (khái niệm khác), KHÔNG cho sent_by.
+    const sentBy = (msg.metadata?.sentBy as string) || agentSlug || 'agent';
     const isVisitor = msg.channel !== 'cskh-internal';
 
     // The customer-visible action for CSKH is the cskh_messages mirror (the app

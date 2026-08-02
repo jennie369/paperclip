@@ -35,7 +35,7 @@ const logRow = {
   channel_name: "cskh-internal",
   thread_id: "u1",
   body: "Dạ em chào chị ạ.",
-  sent_by: "agent:sales-closer",
+  sent_by: "sales-closer", // BARE slug (SSOT 2026-08-03, no `agent:` prefix)
 };
 
 describe("deliverReplyOnce (P2 claim-before-send)", () => {
