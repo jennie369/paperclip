@@ -55,6 +55,34 @@ const adapterLabels: Record<string, string> = {
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
+function formatSchedule(schedule: string | undefined | null): string {
+  if (!schedule) return "Không cố định";
+  
+  // Try to parse basic cron "0 8,15,22 * * *" or "30 8 * * *"
+  const parts = schedule.trim().split(/\s+/);
+  if (parts.length >= 5) {
+    const min = parts[0];
+    const hr = parts[1];
+    
+    // Every X minutes or hours
+    if (min!.startsWith("*/") && hr === "*") {
+      return `Mỗi ${min!.replace("*/", "")} phút`;
+    }
+    if (min === "0" && hr!.startsWith("*/")) {
+      return `Mỗi ${hr!.replace("*/", "")} giờ`;
+    }
+    
+    // specific hours with a specific minute
+    if (min !== "*" && !min!.includes("/") && hr !== "*" && !hr!.includes("/")) {
+      const hours = hr!.split(",");
+      const formatted = hours.map(h => `${h.padStart(2, "0")}:${min!.padStart(2, "0")}`);
+      return formatted.join(" · ");
+    }
+  }
+  
+  return schedule;
+}
+
 type FilterTab = "all" | "active" | "paused" | "error";
 
 function matchesFilter(status: string, tab: FilterTab, showTerminated: boolean): boolean {
@@ -485,7 +513,7 @@ function SortableAgentRow({
                 )}
                 <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
-                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : (agent.runtimeConfig as any)?.heartbeat?.cronExpression ? `Lịch: ${(agent.runtimeConfig as any).heartbeat.cronExpression}` : "Lịch: Không cố định"}
+                    Lịch: {formatSchedule(typeof agent.metadata?.schedule === "string" ? agent.metadata.schedule : (agent.runtimeConfig as any)?.heartbeat?.cronExpression)}
                   </span>
                   <span className="text-xs text-muted-foreground truncate w-full">
                     {agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : "Chưa từng chạy"}
@@ -571,7 +599,7 @@ function OrgTreeNode({
               <>
                 <div className="flex flex-col items-start justify-center w-44 shrink-0 border-l border-border/50 pl-3">
                   <span className="text-[10px] text-muted-foreground font-semibold truncate w-full">
-                    {typeof agent.metadata?.schedule === "string" ? `Lịch: ${agent.metadata.schedule}` : (agent.runtimeConfig as any)?.heartbeat?.cronExpression ? `Lịch: ${(agent.runtimeConfig as any).heartbeat.cronExpression}` : "Lịch: Không cố định"}
+                    Lịch: {formatSchedule(typeof agent.metadata?.schedule === "string" ? agent.metadata.schedule : (agent.runtimeConfig as any)?.heartbeat?.cronExpression)}
                   </span>
                   <span className="text-xs text-muted-foreground truncate w-full">
                     {agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : "Chưa từng chạy"}
