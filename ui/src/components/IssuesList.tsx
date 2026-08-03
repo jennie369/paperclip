@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
-import { CircleDot, Plus, Filter, ArrowUpDown, Layers, Check, X, ChevronRight, List, Columns3, User, Search } from "lucide-react";
+import { CircleDot, Plus, Filter, ArrowUpDown, Layers, Check, X, ChevronRight, List, Columns3, User, Search, AlarmClock } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
 import { useNavigate } from "@/lib/router";
 import type { Issue } from "@paperclipai/shared";
@@ -743,6 +743,22 @@ export function IssuesList({
                           </span>
                           <span className="hidden text-[11px] font-medium text-blue-600 dark:text-blue-400 sm:inline">
                             Live
+                          </span>
+                        </span>
+                      )}
+                      {issue.scheduledWakeAt && new Date(issue.scheduledWakeAt).getTime() > Date.now() && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400"
+                          title="Hẹn giờ wake agent"
+                        >
+                          <AlarmClock className="h-3 w-3" />
+                          <span className="hidden sm:inline">
+                            {new Date(issue.scheduledWakeAt).toLocaleString("vi-VN", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </span>
                         </span>
                       )}

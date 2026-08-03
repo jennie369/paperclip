@@ -4371,6 +4371,9 @@ export function heartbeatService(db: Db) {
               inArray(issues.assigneeAgentId, pendingIds),
               inArray(issues.status, ["todo", "in_progress", "backlog", "blocked"]),
               sql`${issues.hiddenAt} is null`,
+              // Issues waiting on a scheduled wake are not actionable yet —
+              // they must not keep an otherwise-idle agent's timer firing.
+              sql`(${issues.scheduledWakeAt} is null or ${issues.scheduledWakeAt} <= now())`,
             ),
           );
         for (const row of taskRows) {

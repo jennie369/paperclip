@@ -42,6 +42,7 @@ import {
   AlertTriangle,
   Tag,
   Calendar,
+  AlarmClock,
   Paperclip,
   FileText,
   Loader2,
@@ -73,6 +74,13 @@ interface IssueDraft {
   executionWorkspaceMode?: string;
   selectedExecutionWorkspaceId?: string;
   useIsolatedExecutionWorkspace?: boolean;
+  scheduledWakeAt?: string;
+}
+
+// datetime-local expects "YYYY-MM-DDTHH:mm" in the user's local timezone.
+function toDatetimeLocalValue(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 type StagedIssueFile = {
@@ -287,6 +295,7 @@ export function NewIssueDialog() {
   const [assigneeChrome, setAssigneeChrome] = useState(false);
   const [executionWorkspaceMode, setExecutionWorkspaceMode] = useState<string>("shared_workspace");
   const [selectedExecutionWorkspaceId, setSelectedExecutionWorkspaceId] = useState("");
+  const [scheduledWakeAt, setScheduledWakeAt] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [dialogCompanyId, setDialogCompanyId] = useState<string | null>(null);
   const [stagedFiles, setStagedFiles] = useState<StagedIssueFile[]>([]);
@@ -483,6 +492,7 @@ export function NewIssueDialog() {
       assigneeChrome,
       executionWorkspaceMode,
       selectedExecutionWorkspaceId,
+      scheduledWakeAt,
     });
   }, [
     title,
@@ -497,6 +507,7 @@ export function NewIssueDialog() {
     assigneeChrome,
     executionWorkspaceMode,
     selectedExecutionWorkspaceId,
+    scheduledWakeAt,
     newIssueOpen,
     scheduleSave,
   ]);
@@ -523,6 +534,7 @@ export function NewIssueDialog() {
       setAssigneeChrome(false);
       setExecutionWorkspaceMode(defaultExecutionWorkspaceModeForProject(defaultProject));
       setSelectedExecutionWorkspaceId("");
+      setScheduledWakeAt("");
       executionWorkspaceDefaultProjectId.current = defaultProjectId || null;
     } else if (draft && draft.title.trim()) {
       const restoredProjectId = newIssueDefaults.projectId ?? draft.projectId;
@@ -546,6 +558,7 @@ export function NewIssueDialog() {
           ?? (draft.useIsolatedExecutionWorkspace ? "isolated_workspace" : defaultExecutionWorkspaceModeForProject(restoredProject)),
       );
       setSelectedExecutionWorkspaceId(draft.selectedExecutionWorkspaceId ?? "");
+      setScheduledWakeAt(draft.scheduledWakeAt ?? "");
       executionWorkspaceDefaultProjectId.current = restoredProjectId || null;
     } else {
       const defaultProjectId = newIssueDefaults.projectId ?? "";
@@ -560,6 +573,7 @@ export function NewIssueDialog() {
       setAssigneeChrome(false);
       setExecutionWorkspaceMode(defaultExecutionWorkspaceModeForProject(defaultProject));
       setSelectedExecutionWorkspaceId("");
+      setScheduledWakeAt("");
       executionWorkspaceDefaultProjectId.current = defaultProjectId || null;
     }
   }, [newIssueOpen, newIssueDefaults, orderedProjects]);
@@ -605,6 +619,7 @@ export function NewIssueDialog() {
     setAssigneeChrome(false);
     setExecutionWorkspaceMode("shared_workspace");
     setSelectedExecutionWorkspaceId("");
+    setScheduledWakeAt("");
     setExpanded(false);
     setDialogCompanyId(null);
     setStagedFiles([]);
@@ -632,8 +647,12 @@ export function NewIssueDialog() {
     closeNewIssue();
   }
 
+  const scheduleInPast =
+    scheduledWakeAt !== "" && new Date(scheduledWakeAt).getTime() <= Date.now();
+
   function handleSubmit() {
     if (!effectiveCompanyId || !title.trim() || createIssue.isPending) return;
+    if (scheduleInPast) return;
     const assigneeAdapterOverrides = buildAssigneeAdapterOverrides({
       adapterType: assigneeAdapterType,
       modelOverride: assigneeModelOverride,
@@ -672,6 +691,9 @@ export function NewIssueDialog() {
         ? { executionWorkspaceId: selectedExecutionWorkspaceId }
         : {}),
       ...(executionWorkspaceSettings ? { executionWorkspaceSettings } : {}),
+      // Server converts + forces status=backlog; datetime-local has no zone,
+      // so normalize to ISO UTC here (zod .datetime() rejects bare local strings).
+      ...(scheduledWakeAt ? { scheduledWakeAt: new Date(scheduledWakeAt).toISOString() } : {}),
     });
   }
 
@@ -1334,9 +1356,13 @@ export function NewIssueDialog() {
           {/* Status chip */}
           <Popover open={statusOpen} onOpenChange={setStatusOpen}>
             <PopoverTrigger asChild>
-              <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors">
+              <button
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                disabled={!!scheduledWakeAt}
+                title={scheduledWakeAt ? "Issue hẹn giờ luôn nằm ở Backlog cho tới giờ wake" : undefined}
+              >
                 <CircleDot className={cn("h-3 w-3", currentStatus.color)} />
-                {currentStatus.label}
+                {scheduledWakeAt ? "Backlog" : currentStatus.label}
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-36 p-1" align="start">
@@ -1413,22 +1439,81 @@ export function NewIssueDialog() {
             Upload
           </button>
 
-          {/* More (dates) */}
+          {/* Scheduled wake chip (visible when set) */}
+          {scheduledWakeAt && (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
+                scheduleInPast
+                  ? "border-destructive/50 text-destructive"
+                  : "border-amber-500/50 text-amber-600 dark:text-amber-400",
+              )}
+            >
+              <AlarmClock className="h-3 w-3" />
+              {new Date(scheduledWakeAt).toLocaleString("vi-VN", {
+                day: "2-digit",
+                month: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+              <button
+                className="hover:text-foreground"
+                onClick={() => setScheduledWakeAt("")}
+                title="Bỏ hẹn giờ"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+
+          {/* More (dates + scheduled wake) */}
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
               <button className="inline-flex items-center justify-center rounded-md border border-border p-1 text-xs hover:bg-accent/50 transition-colors text-muted-foreground">
                 <MoreHorizontal className="h-3 w-3" />
               </button>
             </PopoverTrigger>
-            <PopoverContent className="w-44 p-1" align="start">
-              <button className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground">
-                <Calendar className="h-3 w-3" />
-                Start date
-              </button>
-              <button className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground">
-                <Calendar className="h-3 w-3" />
-                Due date
-              </button>
+            <PopoverContent className="w-64 p-2" align="start">
+              <div className="px-1 pb-1.5">
+                <div className="flex items-center gap-2 text-xs font-medium">
+                  <AlarmClock className="h-3 w-3" />
+                  Hẹn giờ wake agent
+                </div>
+                <input
+                  type="datetime-local"
+                  className="mt-1.5 w-full h-8 rounded-md border border-input bg-transparent px-2 text-xs focus:outline-none focus:border-ring"
+                  value={scheduledWakeAt}
+                  min={toDatetimeLocalValue(new Date())}
+                  onChange={(e) => setScheduledWakeAt(e.target.value)}
+                />
+                {scheduleInPast ? (
+                  <p className="mt-1 text-[11px] text-destructive">
+                    Giờ hẹn phải ở tương lai — chọn lại thời điểm sau bây giờ.
+                  </p>
+                ) : scheduledWakeAt ? (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Task nằm ở Backlog, đến giờ tự chuyển Todo + đánh thức agent (chính xác trong ~1 phút).
+                  </p>
+                ) : null}
+                {scheduledWakeAt && (
+                  <button
+                    className="mt-1 text-[11px] text-muted-foreground hover:text-foreground underline"
+                    onClick={() => setScheduledWakeAt("")}
+                  >
+                    Bỏ hẹn giờ
+                  </button>
+                )}
+              </div>
+              <div className="border-t border-border pt-1">
+                <button className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground">
+                  <Calendar className="h-3 w-3" />
+                  Start date
+                </button>
+                <button className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground">
+                  <Calendar className="h-3 w-3" />
+                  Due date
+                </button>
+              </div>
             </PopoverContent>
           </Popover>
         </div>
@@ -1458,7 +1543,7 @@ export function NewIssueDialog() {
             <Button
               size="sm"
               className="min-w-[8.5rem] disabled:opacity-100"
-              disabled={!title.trim() || createIssue.isPending}
+              disabled={!title.trim() || createIssue.isPending || scheduleInPast}
               onClick={handleSubmit}
               aria-busy={createIssue.isPending}
             >

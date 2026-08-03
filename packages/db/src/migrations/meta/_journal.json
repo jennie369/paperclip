@@ -351,6 +351,13 @@
       "when": 1777723200000,
       "tag": "0049_lesson_extraction_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1785761664520,
+      "tag": "0050_scheduled_issue_wake",
+      "breakpoints": true
     }
   ]
 }

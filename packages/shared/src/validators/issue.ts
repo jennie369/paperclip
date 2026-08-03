@@ -54,6 +54,7 @@ export const createIssueSchema = z.object({
   executionWorkspaceSettings: issueExecutionWorkspaceSettingsSchema.optional().nullable(),
   labelIds: z.array(z.string().uuid()).optional(),
   metadata: z.record(z.unknown()).optional().default({}),
+  scheduledWakeAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 export type CreateIssue = z.infer<typeof createIssueSchema>;
