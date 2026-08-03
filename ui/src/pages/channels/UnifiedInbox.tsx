@@ -3,7 +3,7 @@
 // Design: Clean, modern, consistent with Paperclip theme
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare, Users, Settings, Bell, BellOff, RefreshCw, Keyboard, HelpCircle, ExternalLink, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { channelsApi, type ChannelSession } from "@/api/channels";
@@ -80,6 +80,7 @@ function playNotificationSound() {
 
 export function UnifiedInbox() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { isMobile } = useSidebar();
   const [activeTab, setActiveTab] = useState<InboxTab>("inbox");
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
@@ -494,9 +495,17 @@ export function UnifiedInbox() {
             )}
           </div>
 
-          {/* S1: ticket overlay opened from a list badge (shared TicketDetailPanel) */}
+          {/* S1: ticket overlay opened from a list badge (shared TicketDetailPanel).
+              Built-in inline edit → refresh the badge map + conversations on save. */}
           {inboxDetailTicket && (
-            <TicketDetailPanel ticket={inboxDetailTicket} onClose={() => setInboxDetailTicket(null)} />
+            <TicketDetailPanel
+              ticket={inboxDetailTicket}
+              onClose={() => setInboxDetailTicket(null)}
+              onUpdated={() => {
+                queryClient.invalidateQueries({ queryKey: ["open-tickets-by-customer"] });
+                queryClient.invalidateQueries({ queryKey: ["conversations"] });
+              }}
+            />
           )}
         </>
       )}
