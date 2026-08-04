@@ -4,6 +4,9 @@
 // Integrates with the Channel-Agent Auto-Reply consumer pipeline via bus.publishInbound()
 
 import { Router, type Request, type Response } from 'express';
+import { promises as fsp } from 'fs';
+import path from 'path';
+import { randomUUID } from 'crypto';
 import { bus } from '../bus.js';
 import { supabase } from '../zalo-personal/supabase.js';
 import { deliverReplyOnce } from '../deliver-once.js';
@@ -13,6 +16,20 @@ const router = Router();
 
 const FB_VERIFY_TOKEN = process.env.FB_VERIFY_TOKEN || 'gemral-fb-webhook-verify-2026';
 const GRAPH_API = 'https://graph.facebook.com/v24.0';
+
+// ─── OAuth (Facebook Login for Business) — lấy Page token mới khớp app 998 ───
+const FB_APP_ID = process.env.FB_APP_ID || '';
+const FB_LOGIN_CONFIG_ID = process.env.FB_LOGIN_CONFIG_ID || '';
+const FB_REDIRECT_URI =
+  process.env.FB_REDIRECT_URI ||
+  'https://gemops.gemcapitalholding.com/api/channels/facebook/oauth/callback';
+
+// Page ID → tên biến .env để ghi đè token bền qua restart
+const PAGE_ENV_KEY: Record<string, string> = {
+  [process.env.FB_PAGE_ID_JENNIE || '101609408467458']: 'FB_PAGE_TOKEN_JENNIE',
+  [process.env.FB_PAGE_ID_GEMRAL || '893324337205554']: 'FB_PAGE_TOKEN_GEMRAL',
+  [process.env.FB_PAGE_ID_YINYANG || '844146582110162']: 'FB_PAGE_TOKEN_YINYANG',
+};
 
 // Page tokens map (loaded from env)
 const PAGE_TOKENS: Record<string, string> = {};
@@ -423,6 +440,154 @@ bus.on('outbound', async (msg: OutboundMessage) => {
     }
   } catch (err: any) {
     console.error(`[FB] Outbound send failed on ${msg.channel}:`, err.message);
+  }
+});
+
+// ─── Token setter: nạp nóng in-memory + đăng ký routing map + ghi .env (OD-1 A) ───
+// (Opus CRITICAL F1) PHẢI đăng ký CẢ PAGE_CHANNEL + CHANNEL_PAGE, nếu không POST /webhook
+// gặp pageId lạ → "Unknown page ID" → tin DROP CÂM.
+async function setPageToken(pageId: string, token: string, channelName?: string): Promise<void> {
+  PAGE_TOKENS[pageId] = token;
+  const ch = channelName || PAGE_CHANNEL[pageId] || `fb-${pageId}`;
+  PAGE_CHANNEL[pageId] = ch;
+  CHANNEL_PAGE[ch] = pageId;
+
+  // Ghi bền vào .env (chỉ 3 page đã biết có biến env; page lạ chỉ nạp nóng)
+  const envKey = PAGE_ENV_KEY[pageId];
+  if (!envKey) return;
+  try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    let content = await fsp.readFile(envPath, 'utf8');
+    const line = `${envKey}=${token}`;
+    const re = new RegExp(`^${envKey}=.*$`, 'm');
+    content = re.test(content) ? content.replace(re, line) : `${content.replace(/\s*$/, '')}\n${line}\n`;
+    await fsp.writeFile(envPath, content, 'utf8');
+    console.log(`[FB] Persisted ${envKey} to .env (page ${pageId} → ${ch})`);
+  } catch (err: any) {
+    console.warn(`[FB] Could not persist ${envKey} to .env:`, err.message);
+  }
+}
+
+// CSRF state store (in-memory, TTL 10 phút) — Opus LOW F8
+const oauthStates = new Map<string, number>();
+function newState(): string {
+  const s = randomUUID();
+  oauthStates.set(s, Date.now() + 600_000);
+  return s;
+}
+function consumeState(s: string): boolean {
+  const exp = oauthStates.get(s);
+  oauthStates.delete(s);
+  return !!exp && exp > Date.now();
+}
+
+/**
+ * GET /api/channels/facebook/oauth/start — bắt đầu luồng "Đăng nhập bằng Facebook"
+ * → redirect tới Business Login dialog (config_id). User consent → callback.
+ */
+router.get('/oauth/start', (_req: Request, res: Response) => {
+  if (!FB_APP_ID || !FB_LOGIN_CONFIG_ID) {
+    res.status(500).send('Thiếu FB_APP_ID / FB_LOGIN_CONFIG_ID trong .env');
+    return;
+  }
+  const state = newState();
+  const url =
+    `https://www.facebook.com/v24.0/dialog/oauth?` +
+    `client_id=${encodeURIComponent(FB_APP_ID)}` +
+    `&config_id=${encodeURIComponent(FB_LOGIN_CONFIG_ID)}` +
+    `&redirect_uri=${encodeURIComponent(FB_REDIRECT_URI)}` +
+    `&state=${encodeURIComponent(state)}` +
+    `&response_type=code`;
+  res.redirect(url);
+});
+
+/**
+ * GET /api/channels/facebook/oauth/callback — nhận code → đổi ra Page token(s) never-expires,
+ * lưu (.env + nạp nóng), auto-subscribe từng Page vào webhook app.
+ */
+router.get('/oauth/callback', async (req: Request, res: Response) => {
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  const err = req.query.error_description as string | undefined;
+
+  if (err) { res.status(400).send(`Facebook trả lỗi: ${err}`); return; }
+  if (!code || !state || !consumeState(state)) {
+    res.status(400).send('State không hợp lệ hoặc thiếu code (thử đăng nhập lại).');
+    return;
+  }
+
+  const appSecret = process.env.FB_APP_SECRET || '';
+  if (!FB_APP_ID || !appSecret) { res.status(500).send('Thiếu FB_APP_ID / FB_APP_SECRET.'); return; }
+
+  try {
+    // 1) code → short-lived user token
+    const tokRes = await fetch(
+      `${GRAPH_API}/oauth/access_token?client_id=${encodeURIComponent(FB_APP_ID)}` +
+      `&client_secret=${encodeURIComponent(appSecret)}` +
+      `&redirect_uri=${encodeURIComponent(FB_REDIRECT_URI)}` +
+      `&code=${encodeURIComponent(code)}`
+    );
+    const tok = await tokRes.json();
+    if (tok.error) throw new Error(`exchange code: ${JSON.stringify(tok.error)}`);
+    const shortUserToken = tok.access_token as string;
+
+    // 2) short → long-lived user token (page tokens dẫn xuất từ đây = never-expires)
+    const llRes = await fetch(
+      `${GRAPH_API}/oauth/access_token?grant_type=fb_exchange_token` +
+      `&client_id=${encodeURIComponent(FB_APP_ID)}` +
+      `&client_secret=${encodeURIComponent(appSecret)}` +
+      `&fb_exchange_token=${encodeURIComponent(shortUserToken)}`
+    );
+    const ll = await llRes.json();
+    const longUserToken = (ll.error ? shortUserToken : ll.access_token) as string;
+
+    // 3) /me/accounts → danh sách Page + page access_token
+    const accRes = await fetch(
+      `${GRAPH_API}/me/accounts?fields=id,name,access_token&limit=100&access_token=${encodeURIComponent(longUserToken)}`
+    );
+    const acc = await accRes.json();
+    if (acc.error) throw new Error(`me/accounts: ${JSON.stringify(acc.error)}`);
+    const pages: Array<{ id: string; name: string; access_token: string }> = acc.data || [];
+    if (pages.length === 0) {
+      res.status(200).send('Đăng nhập OK nhưng không có Page nào được cấp quyền. Thử lại và chọn Page.');
+      return;
+    }
+
+    // 4) lưu token + 5) auto-subscribe từng Page vào webhook app
+    const results: Array<{ name: string; id: string; subscribed: boolean }> = [];
+    for (const p of pages) {
+      await setPageToken(p.id, p.access_token, PAGE_CHANNEL[p.id]);
+      let subscribed = false;
+      try {
+        const subRes = await fetch(
+          `${GRAPH_API}/${p.id}/subscribed_apps?access_token=${encodeURIComponent(p.access_token)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscribed_fields: ['messages', 'messaging_postbacks', 'feed'] }),
+          }
+        );
+        const sub = await subRes.json();
+        subscribed = !!sub.success;
+        if (sub.error) console.warn(`[FB] subscribe ${p.id}:`, JSON.stringify(sub.error));
+      } catch (e: any) {
+        console.warn(`[FB] subscribe ${p.id} failed:`, e.message);
+      }
+      console.log(`[FB] OAuth connected Page ${p.name} (${p.id}) → ${PAGE_CHANNEL[p.id]} · subscribed=${subscribed}`);
+      results.push({ name: p.name, id: p.id, subscribed });
+    }
+
+    const rows = results
+      .map((r) => `<li><b>${r.name}</b> (${r.id}) — ${r.subscribed ? '✅ đã kết nối webhook' : '⚠️ chưa subscribe'}</li>`)
+      .join('');
+    res.status(200).send(
+      `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:560px;margin:48px auto;padding:0 16px">` +
+      `<h2>✅ Đã kết nối Facebook</h2><p>Các Page đã lấy token mới (khớp app Gemral Growth) + đăng ký nhận tin:</p>` +
+      `<ul>${rows}</ul><p style="color:#666">Bạn có thể đóng cửa sổ này.</p></body>`
+    );
+  } catch (e: any) {
+    console.error('[FB] OAuth callback error:', e.message);
+    res.status(500).send(`Lỗi khi lấy token: ${e.message}`);
   }
 });
 
