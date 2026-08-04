@@ -12,7 +12,7 @@ const router = Router();
 router.get('/', async (req, res) => {
   const {
     status, channel, label, search,
-    pinned_only, unread_only,
+    pinned_only, unread_only, peer_kind,
     page = '1', limit = '30',
   } = req.query;
 
@@ -22,6 +22,16 @@ router.get('/', async (req, res) => {
     .eq('is_deleted', false)
     .order('is_pinned', { ascending: false })
     .order('last_message_at', { ascending: false, nullsFirst: false });
+
+  // Bình luận trên bài viết Page (FB/YT, peer_kind='comment') được bot auto-reply nhưng
+  // KHÔNG hiện trong hộp thư tin nhắn — chúng không phải hội thoại DM 1-1. Mặc định loại
+  // comment; truyền ?peer_kind=comment để lấy riêng cho tab "Bình luận" tương lai.
+  // DM/nhóm thật có peer_kind 'direct'/'group'. .or(...is.null...) an toàn cho row cũ null.
+  if (String(peer_kind) === 'comment') {
+    query = query.eq('peer_kind', 'comment');
+  } else {
+    query = query.or('peer_kind.is.null,peer_kind.neq.comment');
+  }
 
   if (channel) query = query.eq('channel_name', String(channel));
   if (label) query = query.eq('label', String(label));
