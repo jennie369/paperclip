@@ -89,4 +89,9 @@ export const ZALO_API = {
   STABLE_THRESHOLD: 60_000,
   MAX_MESSAGE_LENGTH: 2000,
   MAX_FILE_SIZE: 25 * 1024 * 1024,
+  // Zalo's photo_original/upload rejects any single-chunk body over 512K
+  // (error_code 201 "Dung lượng chunk upload không được vượt quá 512K").
+  // uploadImage() always sends totalChunk=1, so the WHOLE file must fit here —
+  // MAX_FILE_SIZE above is a separate, much looser sanity cap, not this limit.
+  MAX_CHUNK_SIZE: 500 * 1024,
 } as const;

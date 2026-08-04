@@ -751,7 +751,10 @@ export class ZaloPersonalChannel {
       : await sendDMImage(this.session, threadId, filePath, caption);
 
     // Lưu URL servable vào `media` → inbox hiển thị ảnh THẬT (không placeholder).
-    const mediaUrl = result.success ? buildOutboundMediaUrl(filePath) : null;
+    // Ghi CẢ KHI THẤT BẠI (vd Zalo trả error_code 201 vượt 512K/chunk): admin cần
+    // thấy ẢNH ĐÃ CỐ GỬI, không chỉ text "[Hình ảnh]" trơ — file cục bộ tồn tại
+    // độc lập với việc Zalo có chấp nhận hay không (§P12, 2026-08-04).
+    const mediaUrl = buildOutboundMediaUrl(filePath);
     await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,
       thread_id: threadId,

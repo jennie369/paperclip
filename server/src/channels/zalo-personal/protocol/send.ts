@@ -299,6 +299,39 @@ async function readImageMeta(filePath: string): Promise<{ width: number; height:
 }
 
 /**
+ * Zalo rejects any upload body over MAX_CHUNK_SIZE (uploadImage always sends
+ * totalChunk=1, so the whole file IS the one chunk). Real photos (phone
+ * camera, screenshots) routinely exceed 512K, so without this every such
+ * image silently failed with error_code 201 — this re-encodes/downscales
+ * until the JPEG buffer fits, instead of uploading the raw file untouched.
+ */
+async function prepareUploadBuffer(
+  filePath: string,
+  width: number,
+  height: number,
+  totalSize: number,
+): Promise<{ buffer: Buffer; width: number; height: number; totalSize: number }> {
+  if (totalSize <= ZALO_API.MAX_CHUNK_SIZE) {
+    return { buffer: fs.readFileSync(filePath), width, height, totalSize };
+  }
+
+  let w = width;
+  let quality = 80;
+  let buffer = await sharp(filePath).resize({ width: w, withoutEnlargement: true }).jpeg({ quality }).toBuffer();
+
+  // Step down dimensions + quality together until it fits; bounded attempts
+  // so a pathological source can't loop forever.
+  for (let attempt = 0; attempt < 6 && buffer.length > ZALO_API.MAX_CHUNK_SIZE; attempt++) {
+    w = Math.round(w * 0.8);
+    quality = Math.max(40, quality - 10);
+    buffer = await sharp(filePath).resize({ width: w, withoutEnlargement: true }).jpeg({ quality }).toBuffer();
+  }
+
+  const outMeta = await sharp(buffer).metadata();
+  return { buffer, width: outMeta.width || w, height: outMeta.height || height, totalSize: buffer.length };
+}
+
+/**
  * Upload an image to Zalo's CDN.
  *
  * Step 1 of the 2-step image-send protocol (zca-js photo_original flow):
@@ -337,9 +370,14 @@ export async function uploadImage(
     return { success: false, error: `File not found: ${filePath}` };
   }
 
-  const { width, height, totalSize } = await readImageMeta(filePath);
-  if (totalSize > ZALO_API.MAX_FILE_SIZE) {
-    return { success: false, error: `File too large: ${totalSize} > ${ZALO_API.MAX_FILE_SIZE}` };
+  const meta = await readImageMeta(filePath);
+  if (meta.totalSize > ZALO_API.MAX_FILE_SIZE) {
+    return { success: false, error: `File too large: ${meta.totalSize} > ${ZALO_API.MAX_FILE_SIZE}` };
+  }
+
+  const { buffer, width, height, totalSize } = await prepareUploadBuffer(filePath, meta.width, meta.height, meta.totalSize);
+  if (totalSize > ZALO_API.MAX_CHUNK_SIZE) {
+    return { success: false, error: `Image still too large after compression: ${totalSize} > ${ZALO_API.MAX_CHUNK_SIZE}` };
   }
 
   const fileName = path.basename(filePath);
@@ -372,7 +410,7 @@ export async function uploadImage(
 
   const FD = (await import('form-data')).default;
   const form = new FD();
-  form.append('chunkContent', fs.createReadStream(filePath), {
+  form.append('chunkContent', buffer, {
     filename: fileName,
     contentType: 'application/octet-stream',
   });
