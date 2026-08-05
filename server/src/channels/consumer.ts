@@ -1084,8 +1084,14 @@ async function processResolved(
     }
   } else {
     // No agent → leave for a human in the inbox (skipped, not handled by a bot).
-    console.log(`${logPrefix} ✅ Saved to inbox (${suppressAutoReply ? 'group, no @mention' : 'no AI agent assigned'})`);
-    await markBatch('human', 'skipped', suppressAutoReply ? 'group_no_mention' : 'no_agent_assigned');
+    // GIỮ lý do CỤ THỂ từ resolveAgent (`_skipReason`) — markBatch ở Step 7 đã ghi nó,
+    // nhưng lần ghi này chạy SAU nên sẽ ĐÈ. Không giữ = mọi ca bị gộp thành
+    // 'no_agent_assigned' → mất dấu vết vì-sao (comment_no_realtime / ignored_chat /
+    // override_ignore / agent_disabled) → probe dò theo lý do trả 0 = âm tính giả.
+    const noAgentReason = (merged as any)._skipReason
+      || (suppressAutoReply ? 'group_no_mention' : 'no_agent_assigned');
+    console.log(`${logPrefix} ✅ Saved to inbox (${suppressAutoReply ? 'group, no @mention' : noAgentReason})`);
+    await markBatch('human', 'skipped', noAgentReason);
   }
 
   // Schedule AI summary after idle (5 min) - run for both AI-handled and Human-handled messages.
