@@ -658,10 +658,15 @@ async function processResolved(
 
   // ── Step 6b: CRM — Resolve customer + cancel pending summary ──
   // BUG 3 FIX: Check save_contacts_to_crm before creating CRM records
-  const saveContact = channelConfig.save_contacts_to_crm !== false;
+  // COMMENT GUARD (2026-08-05): người bình luận trên bài viết KHÔNG phải khách nhắn
+  // tin — senderId của comment là id comment-scoped của Graph API, KHÁC PSID
+  // Messenger, nên hồ sơ CRM tạo từ nó không bao giờ khớp hội thoại nào (rác thuần).
+  // Comment do agent hẹn-giờ `comment-responder` xử lý, không đi qua CRM.
+  const isComment = merged.peerKind === 'comment';
+  const saveContact = channelConfig.save_contacts_to_crm !== false && !isComment;
   let customerId: string | undefined;
   try {
-    const crmResult = await customerResolver.resolve(
+    const crmResult = isComment ? null : await customerResolver.resolve(
       merged.senderId,
       merged.senderName,
       merged.channelType,

@@ -82,6 +82,22 @@ async function gateEnabledSlug(msg: InboundMessage, slug: string): Promise<strin
 }
 
 export async function resolveAgent(msg: InboundMessage): Promise<string> {
+  // ── Tier 0: COMMENT never gets a real-time agent reply ──
+  // Bình luận trên bài viết (FB `facebook/webhook.ts` handleCommentEvent +
+  // `youtube/comments.ts` poller — 2 producer duy nhất của peerKind='comment')
+  // KHÔNG do agent kênh trả real-time. Chúng thuộc agent hẹn-giờ `comment-responder`
+  // (wake 08:00/20:00 HCM) quét + trả BATCH qua Graph API
+  // (scripts/facebook_api/fb_comments.py · scripts/youtube_api/yt_comments.py) —
+  // đường đó đọc thẳng Graph API, KHÔNG phụ thuộc pipeline này.
+  // Trả '' = "no agent" (cùng pattern gateEnabledSlug) → consumer vẫn lưu session
+  // cho hộp thư người, KHÔNG gửi gì ra ngoài. DM/group thật đi tiếp Tier 1-3.
+  // Lý do: sales-closer (agent mặc định kênh fb-*) đã trả 54 bình luận công khai,
+  // gồm câu lỗi "Xin lỗi, em không thể xử lý yêu cầu này." (2026-08-05).
+  if (msg.peerKind === 'comment') {
+    (msg as any)._skipReason = 'comment_no_realtime';
+    return '';
+  }
+
   // ── Tier 1: Check ignored chats ──
   const { data: ignored } = await supabase
     .from('chat_ignored')
