@@ -983,7 +983,7 @@ async function fetchProjectedCrons(
 ): Promise<TimetableRow[]> {
   const conditions = [
     eq(agents.companyId, companyId),
-    eq(agents.status, "active"),
+    or(eq(agents.status, "idle"), eq(agents.status, "busy"), eq(agents.status, "running")),
   ];
   if (agentId) conditions.push(eq(agents.id, agentId));
 
