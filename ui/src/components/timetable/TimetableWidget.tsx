@@ -22,6 +22,7 @@ import { AddManualRowModal } from "./AddManualRowModal";
 import { TimetableCalendarView } from "./TimetableCalendarView";
 import { SortMenu, GroupMenu, ColumnMenu, FilterMenu } from "./TimetableMenus";
 import { SmartSearch } from "./SmartSearch";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { TimetableSort, TimetableGroup } from "@/types/timetable";
 import {
   sortRows,
@@ -362,7 +363,11 @@ export default function TimetableWidget() {
       {/* Body */}
       <div className="overflow-x-auto">
         {isLoading ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">Đang tải lịch…</div>
+          <div className="flex flex-col gap-2 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[52px] w-full rounded-md" />
+            ))}
+          </div>
         ) : error ? (
           <div className="px-4 py-8 text-center text-sm text-destructive">
             Lỗi tải lịch: {(error as Error).message || "unknown"}
