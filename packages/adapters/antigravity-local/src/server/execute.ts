@@ -973,9 +973,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // agy `-p` (print mode) self-terminates after `--print-timeout` (default 5m0s) → a
   // long heartbeat SOP run ("chạy full flow SOP") gets cut off mid-work with NO final
-  // result (transcript ends abruptly, nothing to report to the issue). Give it a
-  // generous cap. Override via config.printTimeout (Go duration string, e.g. "20m"/"1h").
-  const agyPrintTimeout = asString(config.printTimeout, "30m").trim() || "30m";
+  // result (transcript ends abruptly, nothing to report to the issue).
+  // Chị Jennie 06/08: "bỏ trần thời gian các agent, không giới hạn" — sau incident
+  // growth-seeder-01 (run 75d79f4e) bị cắt ~28-30m khi đang cày KPI mới (≥10 comment +
+  // ≥4 post ≈ 30-45m). Nâng 5m→30m (25/06) → 30m→24h (06/08): 24h = KHÔNG giới hạn thực
+  // tế cho MỌI wake (không wake nào chạy tới 24h), CHỈ còn là lưới reap process TREO thật
+  // sau 1 ngày (reaper reapOrphanedRuns dung thứ pid còn sống → an toàn).
+  // Override per-agent via config.printTimeout (Go duration string, e.g. "20m"/"1h"/"24h").
+  const agyPrintTimeout = asString(config.printTimeout, "24h").trim() || "24h";
 
   const buildArgs = (conversationId: string) => {
     const args: string[] = ["-p", pointerPrompt, "--dangerously-skip-permissions"];
