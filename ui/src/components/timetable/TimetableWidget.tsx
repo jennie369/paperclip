@@ -153,7 +153,6 @@ export default function TimetableWidget() {
     const centerOnNow =
       sort.field === "time" &&
       sort.dir === "asc" &&
-      visibleCount === DEFAULT_VISIBLE &&
       sorted.length > visibleCount;
     let capped;
     if (centerOnNow) {
@@ -167,10 +166,12 @@ export default function TimetableWidget() {
           nearestIdx = i;
         }
       }
-      const PAST_ROWS = 2;
+      // Keep 2 past rows by default. When expanding, distribute extra rows
+      // roughly equally between past and future.
+      const pastRows = Math.max(2, Math.floor((visibleCount - 4) / 2));
       const start = Math.max(
         0,
-        Math.min(sorted.length - visibleCount, nearestIdx - PAST_ROWS),
+        Math.min(sorted.length - visibleCount, nearestIdx - pastRows),
       );
       capped = sorted.slice(start, start + visibleCount);
     } else {
