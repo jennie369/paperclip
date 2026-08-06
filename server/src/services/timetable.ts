@@ -992,6 +992,7 @@ async function fetchProjectedCrons(
       id: agents.id,
       name: agents.name,
       adapterConfig: agents.adapterConfig,
+      runtimeConfig: agents.runtimeConfig,
       metadata: agents.metadata,
     })
     .from(agents)
@@ -1003,7 +1004,8 @@ async function fetchProjectedCrons(
   for (const agent of activeAgents) {
     const meta = agent.metadata as any;
     const config = agent.adapterConfig as any;
-    const schedule = meta?.schedule || config?.heartbeat?.cronExpression;
+    const runtime = agent.runtimeConfig as any;
+    const schedule = meta?.schedule || runtime?.heartbeat?.cronExpression || config?.heartbeat?.cronExpression;
 
     if (!schedule || typeof schedule !== "string") continue;
     if (schedule === "Không cố định") continue;
