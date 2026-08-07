@@ -50,11 +50,11 @@ export function MessageBubble({ message: msg }: Props) {
           }`}
         >
           {/* Media/images */}
-          {msg.media && msg.media.length > 0 && (
+          {Array.isArray(msg.media) && msg.media.length > 0 && (
             <div className="mb-1.5 space-y-1">
               {msg.media.map((url, i) => (
                 <div key={i}>
-                  {/\.(jpg|jpeg|png|gif|webp)$/i.test(url) ? (
+                  {typeof url === "string" && /\.(jpg|jpeg|png|gif|webp)$/i.test(url) ? (
                     <img
                       src={url}
                       alt="attachment"
@@ -62,7 +62,7 @@ export function MessageBubble({ message: msg }: Props) {
                       data-lightbox=""
                       onClick={() => openImage(url, "Hình ảnh")}
                     />
-                  ) : (
+                  ) : typeof url === "string" ? (
                     <a
                       href={url}
                       target="_blank"
@@ -71,7 +71,7 @@ export function MessageBubble({ message: msg }: Props) {
                     >
                       📎 {url.split("/").pop()}
                     </a>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -80,8 +80,8 @@ export function MessageBubble({ message: msg }: Props) {
           {/* Smart content render */}
           <MessageRenderer
             body={msg.content || ""}
-            content_type={msg.contentType}
-            extra_data={Array.isArray(msg.media) ? undefined : (msg.media ?? msg.extraData) as Record<string, unknown> | undefined}
+            content_type={msg.contentType || msg.content_type}
+            extra_data={Array.isArray(msg.media) ? undefined : (msg.media ?? msg.extraData ?? msg.extra_data) as Record<string, unknown> | undefined}
           />
 
           {/* Skipped indicator */}
