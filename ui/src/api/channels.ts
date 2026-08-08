@@ -48,6 +48,12 @@ export interface PendingMessage {
   extra_data?: Record<string, unknown>;
   ts: string;
   created_at: string;
+  // Thu hồi / sửa tin CSKH. Snake_case vì server trải thẳng row DB ra (`...m`).
+  // ⚠️ Hộp thư (ChatPanel) đọc kiểu NÀY, không phải ConversationMessage — thiếu ở đây
+  // là TypeScript chặn ngay, và đó chính là cách em phát hiện mình khai nhầm kiểu.
+  is_recalled?: boolean;
+  recalled_at?: string | null;
+  edited_at?: string | null;
   starred?: boolean;
   pinned?: boolean;
 }
@@ -115,6 +121,10 @@ export interface ConversationMessage {
   timestamp: string;
   extra_data?: Record<string, unknown>;
   extraData?: Record<string, unknown>;
+  // Thu hồi / sửa tin CSKH. Snake_case vì server trải thẳng row DB ra (`...m`).
+  is_recalled?: boolean;
+  recalled_at?: string | null;
+  edited_at?: string | null;
   starred?: boolean;
   pinned?: boolean;
 }

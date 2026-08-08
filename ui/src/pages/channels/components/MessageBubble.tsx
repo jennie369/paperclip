@@ -21,6 +21,23 @@ export function MessageBubble({ message: msg }: Props) {
   const { openImage } = useImageLightbox();
   const isOutbound = msg.direction === "outbound";
 
+  // Tin đã thu hồi: chặn TRƯỚC mọi nhánh — không dựng ảnh (`msg.media`), không đọc nội dung.
+  // Giữ nguyên chỗ đứng và giờ gửi để mạch hội thoại không đứt quãng.
+  if (msg.is_recalled) {
+    return (
+      <div className={`flex ${isOutbound ? "justify-end" : "justify-start"} mb-1.5`}>
+        <div className="max-w-[70%]">
+          <div className={`flex items-center gap-1.5 mb-0.5 ${isOutbound ? "justify-end" : ""}`}>
+            <span className="text-[10px] text-muted-foreground">{formatTime(msg.timestamp)}</span>
+          </div>
+          <div className="rounded-xl border border-dashed border-border px-3 py-2 text-[12px] italic text-muted-foreground">
+            Tin nhắn đã được thu hồi
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex ${isOutbound ? "justify-end" : "justify-start"} mb-1.5`}>
       <div className={`max-w-[70%] group ${isOutbound ? "items-end" : "items-start"}`}>

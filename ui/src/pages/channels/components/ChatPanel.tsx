@@ -482,7 +482,14 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                       </div>
                     )}
 
-                    {/* Bubble */}
+                    {/* Tin đã THU HỒI: bong bóng gạch-nét-đứt, KHÔNG dựng ảnh, KHÔNG đọc nội dung.
+                        Chặn ở đây vì ChatPanel là nơi hộp thư thật sự vẽ tin (MessageBubble.tsx
+                        là mã chết — 0 nơi gọi, đã đo bằng grep toàn kho ui/src). */}
+                    {msg.is_recalled ? (
+                      <div className="rounded-2xl border border-dashed border-border px-3.5 py-2 text-sm italic text-muted-foreground">
+                        Tin nhắn đã được thu hồi
+                      </div>
+                    ) : (
                     <div
                       className={`rounded-2xl px-3.5 py-2 text-sm font-medium leading-relaxed ${
                         isOutbound
@@ -530,7 +537,12 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                           />
                         )
                       )}
+                      {/* Nhãn "đã chỉnh sửa" (OD-4) — CSKH cần thấy tin nào đã bị sửa lại. */}
+                      {msg.edited_at && (
+                        <span className="mt-0.5 block text-[10px] italic opacity-70">đã chỉnh sửa</span>
+                      )}
                     </div>
+                    )}
 
                     {/* Pin / star indicators (operator-side flags) */}
                     {(isPinned || isStarred) && (

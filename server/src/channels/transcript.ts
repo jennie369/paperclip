@@ -15,7 +15,9 @@ import { supabase } from './zalo-personal/supabase.js';
 /** Cột CÓ THẬT trên channel_pending_messages (union nhu cầu của cả 2 endpoint). */
 const INBOUND_COLS =
   'id, channel_name, thread_id, thread_type, from_uid, sender_name, message_id, body, ' +
-  'content_type, media, status, handled_by, skip_reason, ts, created_at, session_key, agent_slug';
+  'content_type, media, status, handled_by, skip_reason, ts, created_at, session_key, agent_slug, ' +
+  // Cờ thu hồi: thiếu ở đây thì hộp thư vẫn hiện tin admin đã gỡ như tin thật.
+  'is_recalled, recalled_at';
 
 /**
  * Cột CÓ THẬT trên channel_sent_messages. Bảng này chỉ có 14 cột:
@@ -24,7 +26,8 @@ const INBOUND_COLS =
  * ⚠️ KHÔNG có `session_key`, KHÔNG có `metadata` — dùng 2 cột đó = lỗi câm (bug gốc).
  */
 const OUTBOUND_COLS =
-  'id, channel_name, thread_id, thread_type, to_uid, body, content_type, media, status, sent_by, created_at';
+  'id, channel_name, thread_id, thread_type, to_uid, body, content_type, media, status, sent_by, created_at, ' +
+  'is_recalled, recalled_at, edited_at';
 
 export interface ParsedSessionKey {
   channel: string;

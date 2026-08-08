@@ -145,3 +145,78 @@ export async function resumeCskhChannel(): Promise<void> {
   bus.subscribeRealtime();
   console.log('[cskh] Channel resumed (realtime ingestion active)');
 }
+
+/**
+ * POST /api/channels/cskh/messages/:id/recall  — thu hồi 1 tin
+ * POST /api/channels/cskh/messages/:id/edit    — sửa 1 tin (chỉ tin phía CSKH)
+ *
+ * `:id` là id row bên KHO PAPERCLIP (channel_sent/pending_messages) — đó là thứ hộp thư
+ * hiển thị. Hai hàm máy chủ lại nhận id bên KHO KHÁCH (cskh_messages), nên phải tra ngược
+ * qua dây nối `origin_message_id`. Tin CŨ chưa ghép dây → báo rõ để CSKH gỡ từ app, KHÔNG
+ * đoán bừa theo thời gian (ghép nhầm là gỡ oan tin khác).
+ *
+ * Người làm: `PAPERCLIP_CSKH_ACTOR_ID` (uuid một admin có thật). Hàm máy chủ tự kiểm lại
+ * người đó CÓ phải admin không. Đây là LỜI KHAI chứ không phải danh tính đã xác minh —
+ * chị Jennie đã chốt chấp nhận mức này (OD-5); sổ kiểm toán ghi 'service_role_claimed'.
+ */
+async function resolveCskhMessageId(paperclipRowId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('cskh_messages')
+    .select('id')
+    .eq('origin_message_id', paperclipRowId)
+    .maybeSingle();
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+function actorOrError(res: any): string | null {
+  const actor = process.env.PAPERCLIP_CSKH_ACTOR_ID;
+  if (!actor) {
+    res.status(500).json({
+      success: false,
+      error: 'Chưa cấu hình PAPERCLIP_CSKH_ACTOR_ID (uuid admin) trong server/.env',
+    });
+    return null;
+  }
+  return actor;
+}
+
+cskhRouter.post('/messages/:id/recall', async (req, res) => {
+  const actor = actorOrError(res);
+  if (!actor) return;
+  const cskhId = await resolveCskhMessageId(req.params.id);
+  if (!cskhId) {
+    return res.status(404).json({
+      success: false,
+      error: 'Tin này chưa có dây nối sang kho khách (tin cũ). Gỡ giúp em từ app Hộp thư hỗ trợ.',
+    });
+  }
+  const { data, error } = await supabase.rpc('cskh_admin_recall_message', {
+    p_message_id: cskhId,
+    p_actor_id: actor,
+  });
+  if (error) return res.status(400).json({ success: false, error: error.message });
+  return res.json({ success: true, ...(data as Record<string, unknown>) });
+});
+
+cskhRouter.post('/messages/:id/edit', async (req, res) => {
+  const { body: newBody } = req.body as { body?: string };
+  if (!newBody || !newBody.trim()) {
+    return res.status(400).json({ success: false, error: 'Nội dung mới không được để trống' });
+  }
+  const actor = actorOrError(res);
+  if (!actor) return;
+  const cskhId = await resolveCskhMessageId(req.params.id);
+  if (!cskhId) {
+    return res.status(404).json({
+      success: false,
+      error: 'Tin này chưa có dây nối sang kho khách (tin cũ). Sửa giúp em từ app Hộp thư hỗ trợ.',
+    });
+  }
+  const { data, error } = await supabase.rpc('cskh_admin_edit_message', {
+    p_message_id: cskhId,
+    p_new_body: newBody.trim(),
+    p_actor_id: actor,
+  });
+  if (error) return res.status(400).json({ success: false, error: error.message });
+  return res.json({ success: true, ...(data as Record<string, unknown>) });
+});
