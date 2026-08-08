@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, X, ChevronDown, SmilePlus, Bot, Reply, MoreHorizontal, Copy, Pin, Star, ListChecks, RotateCcw, Trash2, Check } from "lucide-react";
+import { Search, X, ChevronDown, SmilePlus, Bot, Reply, MoreHorizontal, Copy, Pin, Star, ListChecks, RotateCcw, Trash2, Check, Pencil } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
 import { is4xx } from "@/api/client";
 import { useImageLightbox } from "@/components/ImageLightbox";
@@ -102,6 +102,10 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null); // tin đang mở full reaction picker
   const [menuMsgId, setMenuMsgId] = useState<string | null>(null); // tin đang mở menu "..." (copy/ghim/thu hồi...)
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null); // feedback "Đã copy"
+  // Sửa tin CSKH ngay tại chỗ. KHÔNG dùng Radix Dialog (crash ở dự án này) và
+  // KHÔNG dùng prompt() — sửa ngay trong bong bóng thì thấy được ngữ cảnh xung quanh.
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
 
   // D7: Scroll to bottom button
@@ -240,6 +244,46 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
       await channelsApi.setMessageFlag(msgId, { ...patch, session_key: conv.session_key });
     } catch (e) {
       console.error("setMessageFlag failed", e);
+    }
+    refetch();
+  };
+
+  // ── Thu hồi / Sửa tin CSKH ─────────────────────────────────────────────────
+  // Chốt chặn THẬT nằm ở máy chủ (hàm cskh_admin_*_message + quyền UPDATE đã thu);
+  // ẩn/hiện nút ở đây chỉ là lớp lịch sự. Chị Jennie chốt 08/08: KHÔNG hộp thoại
+  // xác nhận, KHÔNG báo kết quả — bấm là gỡ, chỉ nổ khi HỎNG.
+  // `:id` truyền lên là id kho PAPERCLIP; máy chủ tra ngược sang kho khách qua dây nối.
+  const isCskh = !!conv.channel_name?.startsWith("cskh");
+
+  const recallMessage = async (msgId: string) => {
+    setMenuMsgId(null);
+    try {
+      const r = await fetch(`/api/channels/cskh/messages/${msgId}/recall`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d?.success === false) throw new Error(d?.error || `HTTP ${r.status}`);
+    } catch (e) {
+      // Chỉ nổ khi hỏng — im lặng lúc hỏng mới là thứ nguy hiểm.
+      alert(`Không thu hồi được: ${(e as Error).message}`);
+    }
+    refetch();
+  };
+
+  const saveEdit = async () => {
+    const id = editingMsgId;
+    const text = editDraft.trim();
+    if (!id || !text) return;
+    setEditingMsgId(null);
+    setEditDraft("");
+    try {
+      const r = await fetch(`/api/channels/cskh/messages/${id}/edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: text }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d?.success === false) throw new Error(d?.error || `HTTP ${r.status}`);
+    } catch (e) {
+      alert(`Không sửa được: ${(e as Error).message}`);
     }
     refetch();
   };
@@ -427,7 +471,26 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                       />
                       <MenuItem icon={<ListChecks />} label="Chọn nhiều tin nhắn" soon />
                       <div className="my-1 border-t border-border/60" />
-                      {isOutbound && <MenuItem icon={<RotateCcw />} label="Thu hồi" soon danger />}
+                      {/* CSKH: admin gỡ được MỌI tin (kể cả tin khách) — chị Jennie chốt 08/08.
+                          Kênh khác giữ nguyên trạng thái "sắp có". */}
+                      {isCskh && !msg.is_recalled && (
+                        <MenuItem
+                          icon={<RotateCcw />}
+                          label="Thu hồi"
+                          danger
+                          onClick={() => recallMessage(msgId)}
+                        />
+                      )}
+                      {/* Sửa: CHỈ tin do phía CSKH gửi. Máy chủ cũng từ chối tin của khách (42501),
+                          đây chỉ là lớp lịch sự để chị không bấm vào rồi mới báo lỗi. */}
+                      {isCskh && isOutbound && !msg.is_recalled && (
+                        <MenuItem
+                          icon={<Pencil />}
+                          label="Sửa nội dung"
+                          onClick={() => { setMenuMsgId(null); setEditingMsgId(msgId); setEditDraft(bodyText); }}
+                        />
+                      )}
+                      {!isCskh && isOutbound && <MenuItem icon={<RotateCcw />} label="Thu hồi" soon danger />}
                       <MenuItem
                         icon={<Trash2 />}
                         label="Xóa chỉ ở phía tôi"
@@ -488,6 +551,36 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
                     {msg.is_recalled ? (
                       <div className="rounded-2xl border border-dashed border-border px-3.5 py-2 text-sm italic text-muted-foreground">
                         Tin nhắn đã được thu hồi
+                      </div>
+                    ) : editingMsgId === msgId ? (
+                      <div className="rounded-2xl border border-primary/50 bg-background p-2">
+                        <textarea
+                          autoFocus
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") { setEditingMsgId(null); setEditDraft(""); }
+                            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void saveEdit(); }
+                          }}
+                          rows={3}
+                          className="w-full resize-none rounded-lg bg-muted/40 px-2.5 py-1.5 text-sm outline-none"
+                        />
+                        <div className="mt-1.5 flex items-center justify-end gap-2 text-xs">
+                          <span className="mr-auto text-muted-foreground">Enter để lưu · Esc để huỷ</span>
+                          <button
+                            className="rounded-md px-2 py-1 text-muted-foreground hover:bg-muted"
+                            onClick={() => { setEditingMsgId(null); setEditDraft(""); }}
+                          >
+                            Huỷ
+                          </button>
+                          <button
+                            className="rounded-md bg-primary px-2.5 py-1 font-medium text-primary-foreground disabled:opacity-40"
+                            disabled={!editDraft.trim()}
+                            onClick={() => void saveEdit()}
+                          >
+                            Lưu
+                          </button>
+                        </div>
                       </div>
                     ) : (
                     <div
