@@ -758,7 +758,10 @@ router.post('/send', async (req, res) => {
       const fwdRes = await fetch(forwardUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel_name, thread_id, message, thread_type, skip_db_log: true }),
+        // `sent_row_id`: row channel_sent_messages do CHÍNH handler này tạo ở bước 1.
+        // Sub-handler CSKH cần nó để nối bản-cho-khách với bản-cho-inbox, nhờ vậy thu hồi
+        // 1 tin đánh dấu được cả hai kho. Sub-handler khác bỏ qua trường thừa này.
+        body: JSON.stringify({ channel_name, thread_id, message, thread_type, skip_db_log: true, sent_row_id: rowId ?? null }),
       });
       const ok = fwdRes.ok;
       if (rowId) {

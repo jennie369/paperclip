@@ -65,11 +65,14 @@ export interface DeliverResult {
 export async function deliverReplyOnce(
   dedupeKey: string | null | undefined,
   logRow: SentLogRow,
-  deliverFn: () => Promise<DeliverResult>,
+  // `sentRowId` = id của chính row channel_sent_messages vừa claim. CSKH cần nó để nối
+  // bản-cho-khách (cskh_messages.origin_message_id) với bản-cho-inbox ⇒ thu hồi 1 tin
+  // đánh dấu được CẢ HAI kho. `null` = đường không-claim (gửi tay), chưa có bản song sinh.
+  deliverFn: (sentRowId: string | null) => Promise<DeliverResult>,
 ): Promise<DeliverOutcome> {
   // No key → not a gated bot reply; deliver once without a DB claim.
   if (!dedupeKey) {
-    await deliverFn();
+    await deliverFn(null);
     return 'sent';
   }
 
@@ -89,7 +92,7 @@ export async function deliverReplyOnce(
 
   const rowId = (data as { id: string }).id;
   try {
-    const { platformMessageId } = await deliverFn();
+    const { platformMessageId } = await deliverFn(rowId);
     await supabase
       .from('channel_sent_messages')
       .update({ status: 'sent', platform_message_id: platformMessageId ?? null })

@@ -21,10 +21,14 @@ const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
  * customer is an anonymous visitor (mirror by visitor_id, no push).
  */
 cskhRouter.post('/send', async (req, res) => {
-  const { channel_name, thread_id, message } = req.body as {
+  const { channel_name, thread_id, message, sent_row_id } = req.body as {
     channel_name?: string;
     thread_id?: string;
     message?: string;
+    // Do `/api/channels/send` (routes.ts) chuyển xuống: id row channel_sent_messages
+    // mà NÓ đã tạo trước khi forward. Có nó thì mirror nối được dây sang kho Paperclip;
+    // thiếu (gọi thẳng sub-handler) → mirror ghi 'local_only', vẫn hợp lệ.
+    sent_row_id?: string | null;
   };
   if (!thread_id || !message) {
     return res.status(400).json({ error: 'thread_id và message là bắt buộc' });
@@ -41,13 +45,13 @@ cskhRouter.post('/send', async (req, res) => {
 
   if (channel !== 'cskh-internal') {
     // S-routes: visitor ẩn danh (cskh-shopify / cskh-web) — mirror visitor_id, no push.
-    await mirrorReplyToVisitor(id, 'human', message, null, channel);
+    await mirrorReplyToVisitor(id, 'human', message, sent_row_id ?? null, null, channel);
     // P1: email-notif nếu khách offline (edge tự gate offline + debounce; fire-and-forget).
     const preview = message.length > 80 ? message.slice(0, 80) + '…' : message;
     // Qua edge-call: client dùng chung cầm service_role → cổng 'secret' từ chối 401 (28/07).
     void goiEdgeGemral('cskh-notify-offline', { visitor_id: id, channel, preview });
   } else {
-    await mirrorReplyToCustomer(id, 'human', message, null);
+    await mirrorReplyToCustomer(id, 'human', message, sent_row_id ?? null, null);
     await pushSupportReply(id, message);
   }
   return res.json({ success: true });
@@ -90,21 +94,23 @@ cskhRouter.post('/upload', uploadMem.single('file'), async (req, res) => {
 
     // 2. Log outbound cho inbox Paperclip: ẢNH→content_type='image'+media[url]; TỆP→'file'+body-JSON (FileMsg).
     const sentBody = isImage ? (text || '[Hình ảnh]') : JSON.stringify({ fileName: attachFileName, href: attachmentUrl });
-    await supabase.from('channel_sent_messages').insert({
+    const { data: sentRow, error: sentErr } = await supabase.from('channel_sent_messages').insert({
       channel_name: channel, thread_id: id, thread_type: 'dm', to_uid: id,
       body: sentBody, content_type: attachmentType,
       media: isImage ? [attachmentUrl] : null,
       status: 'sent', sent_by: 'manual',
-    });
+    }).select('id').single();
+    if (sentErr) console.error('[cskh/upload] sent log failed:', sentErr.message);
+    const uploadSentId = (sentRow as { id: string } | null)?.id ?? null;
 
     // 3. Mirror sang cskh_messages (role='human' — KHÁC bot 'assistant') → KHÁCH NHẬN + báo khách.
     const preview = isImage ? '📷 Hình ảnh' : '📎 Tệp đính kèm';
     if (channel !== 'cskh-internal') {
-      await mirrorReplyToVisitor(id, 'human', text, null, channel, attachmentUrl, attachmentType);
+      await mirrorReplyToVisitor(id, 'human', text, uploadSentId, null, channel, attachmentUrl, attachmentType);
       // Qua edge-call (28/07): khoá đúng + KHÔNG nuốt lỗi im lặng như `.catch(()=>{})` cũ.
       void goiEdgeGemral('cskh-notify-offline', { visitor_id: id, channel, preview });
     } else {
-      await mirrorReplyToCustomer(id, 'human', text, null, attachmentUrl, attachmentType);
+      await mirrorReplyToCustomer(id, 'human', text, uploadSentId, null, attachmentUrl, attachmentType);
       await pushSupportReply(id, preview);
     }
 

@@ -74,15 +74,17 @@ export class CskhChannel implements Channel {
     // reads that table), NOT channel_sent_messages. So the mirror is what deliverFn
     // must do + assert. push (notify) is best-effort: if push fails but the mirror
     // succeeded the customer still sees the reply in-app → stay 'sent'.
-    const doMirrorAndPush = async (): Promise<{ platformMessageId: string | null }> => {
+    // `sentRowId` do deliverReplyOnce truyền xuống = id row channel_sent_messages nó vừa claim.
+    // Đường không-claim (gửi tay) truyền null ⇒ mirror ghi origin_store='local_only'.
+    const doMirrorAndPush = async (sentRowId: string | null): Promise<{ platformMessageId: string | null }> => {
       if (isVisitor) {
-        const r = await mirrorReplyToVisitor(threadId, 'assistant', msg.content, agentSlug, msg.channel);
+        const r = await mirrorReplyToVisitor(threadId, 'assistant', msg.content, sentRowId, agentSlug, msg.channel);
         if (r.error) throw new Error(`cskh mirror failed: ${r.error}`);  // F1: don't mark 'sent' on lost reply
         const preview = msg.content.length > 80 ? msg.content.slice(0, 80) + '…' : msg.content;
         // Qua edge-call: client dùng chung cầm service_role → cổng 'secret' từ chối 401 (28/07).
         void goiEdgeGemral('cskh-notify-offline', { visitor_id: threadId, channel: msg.channel, preview });
       } else {
-        const r = await mirrorReplyToCustomer(threadId, 'assistant', msg.content, agentSlug);
+        const r = await mirrorReplyToCustomer(threadId, 'assistant', msg.content, sentRowId, agentSlug);
         if (r.error) throw new Error(`cskh mirror failed: ${r.error}`);  // F1
         try { await pushSupportReply(threadId, msg.content); } catch (e: any) { console.error('[cskh] push failed (best-effort):', e?.message || e); }
       }
@@ -102,9 +104,10 @@ export class CskhChannel implements Channel {
         );
         if (outcome !== 'sent') return;  // failed OR duplicate → skip media too
       } else {
-        // Manual/human path (no idempotency key): unchanged (log + mirror + push).
-        await this.logSentMessage(msg.channel, threadId, msg.content, sentBy);
-        await doMirrorAndPush();
+        // Manual/human path (no idempotency key): log + mirror + push.
+        // logSentMessage nay TRẢ VỀ id row để mirror nối được sang kho Paperclip.
+        const manualSentId = await this.logSentMessage(msg.channel, threadId, msg.content, sentBy);
+        await doMirrorAndPush(manualSentId);
       }
     }
 
@@ -161,22 +164,24 @@ export class CskhChannel implements Channel {
 
     // Log inbox Paperclip (ảnh→content_type='image'+media[url]; tệp→'file'+body-JSON → FileMsg).
     const sentBody = isImg ? '[Hình ảnh]' : JSON.stringify({ fileName: attachFileName, href: publicUrl });
-    await supabase.from('channel_sent_messages').insert({
+    const { data: sentRow, error: sentErr } = await supabase.from('channel_sent_messages').insert({
       channel_name: channel, thread_id: threadId, thread_type: 'dm', to_uid: threadId,
       body: sentBody, content_type: attachmentType,
       media: isImg ? [publicUrl] : null,
       status: 'sent', sent_by: sentBy,
-    });
+    }).select('id').single();
+    if (sentErr) console.error('[cskh] media sent log failed:', sentErr.message);
+    const mediaSentId = (sentRow as { id: string } | null)?.id ?? null;
 
     // Mirror cho khách (role='assistant' = BOT, KHÁC operator 'human'). KHÔNG leak item.caption
     // (LLM meta = description trong media-library, không phải customer-facing; incident Zalo 2026-05-01).
     const preview = isImg ? '📷 Hình ảnh' : '📎 Tệp đính kèm';
     if (isVisitor) {
-      await mirrorReplyToVisitor(threadId, 'assistant', '', agentSlug, channel, publicUrl, attachmentType);
+      await mirrorReplyToVisitor(threadId, 'assistant', '', mediaSentId, agentSlug, channel, publicUrl, attachmentType);
       // Qua edge-call (28/07): khoá đúng + KHÔNG nuốt lỗi im lặng như `.catch(()=>{})` cũ.
       void goiEdgeGemral('cskh-notify-offline', { visitor_id: threadId, channel, preview });
     } else {
-      await mirrorReplyToCustomer(threadId, 'assistant', '', agentSlug, publicUrl, attachmentType);
+      await mirrorReplyToCustomer(threadId, 'assistant', '', mediaSentId, agentSlug, publicUrl, attachmentType);
       await pushSupportReply(threadId, preview);
     }
   }
@@ -203,8 +208,9 @@ export class CskhChannel implements Channel {
     }
   }
 
-  private async logSentMessage(channelName: string, threadId: string, body: string, sentBy: string): Promise<void> {
-    const { error } = await supabase.from('channel_sent_messages').insert({
+  /** Trả về id row vừa ghi (hoặc null nếu ghi hụt) để mirror nối dây sang kho khách. */
+  private async logSentMessage(channelName: string, threadId: string, body: string, sentBy: string): Promise<string | null> {
+    const { data, error } = await supabase.from('channel_sent_messages').insert({
       channel_name: channelName,
       thread_id: threadId,
       thread_type: 'dm',
@@ -213,8 +219,9 @@ export class CskhChannel implements Channel {
       content_type: 'text',
       status: 'sent',
       sent_by: sentBy,
-    });
-    if (error) console.error('[cskh] logSentMessage failed:', error.message);
+    }).select('id').single();
+    if (error) { console.error('[cskh] logSentMessage failed:', error.message); return null; }
+    return (data as { id: string }).id;
   }
 }
 
