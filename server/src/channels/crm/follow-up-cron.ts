@@ -98,11 +98,15 @@ export function startFollowUpCron(): void {
   log(`Khởi động — quét mỗi ${CRON_INTERVAL_MS / 60000} phút`);
 
   // Run once immediately on startup, then on interval
-  void runAndRecord('followup-scan', runScanCycle);
+  void runAndRecord('node-follow-up-cron', runScanCycle);
 
   cronTimer = setInterval(() => {
-    void runAndRecord('followup-scan', runScanCycle);
-    void runAndRecord('followup-queue', processQueueCycle);
+    // `cronId` must match the id registered in cron-registry.ts NODE_TIMER_SEEDS
+    // ('node-follow-up-cron') — recordCronRun() no-ops silently on unknown ids
+    // (bug found 2026-08-09: 'followup-scan'/'followup-queue' were never
+    // registered, so last_run_at was never actually written).
+    void runAndRecord('node-follow-up-cron', runScanCycle);
+    void runAndRecord('node-follow-up-cron', processQueueCycle);
   }, CRON_INTERVAL_MS);
 }
 

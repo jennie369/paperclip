@@ -52,6 +52,7 @@ import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { trainingRouter, setupTrainingWebSocket } from "./training/training-routes.js";
 import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService, scheduledIssueWakeupService } from "./services/index.js";
+import { markAlive } from "./services/liveness-tracker.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -611,6 +612,13 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "heartbeat timer tick failed");
+        })
+        .finally(() => {
+          // Mark alive on settle (success OR failure), not on invocation — a
+          // hung promise that never settles is exactly the failure mode this
+          // is meant to catch (incident 2026-08-09: HTTP+DB stayed healthy
+          // while this tick silently stopped completing for ~6.5h).
+          markAlive("heartbeat-scheduler-tick");
         });
 
       void routines

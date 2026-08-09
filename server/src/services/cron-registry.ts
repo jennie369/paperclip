@@ -801,7 +801,7 @@ const NODE_TIMER_SEEDS: NodeTimerSeed[] = [
   {
     id: 'node-zalo-health-check',
     display_name: 'Zalo Personal Channel Health Check',
-    cron_expression: 'every 60s',
+    cron_expression: 'every 120s',
     category: 'zalo',
     owner_ref: 'paperclip_server',
     description: 'Monitors Zalo WebSocket connection health and auto-reconnects',
@@ -812,7 +812,7 @@ const NODE_TIMER_SEEDS: NodeTimerSeed[] = [
       writes_tables: ['channel_instances'],
       notify_channels: ['telegram:jennie (on disconnect)'],
       output_endpoint: 'UPDATE channel_instances SET status, last_heartbeat_at',
-      description_detail: 'Mỗi 60s kiểm tra WebSocket connection tới Zalo Server có alive không. Nếu đã disconnect > 2 lần liên tiếp → auto reconnect bằng cookies đã lưu → nếu reconnect fail → update `channel_instances.status=error` + gửi Telegram alert cho Jennie để re-scan QR.',
+      description_detail: 'Mỗi 120s kiểm tra WebSocket connection tới Zalo Server có alive không. Nếu đã disconnect > 2 lần liên tiếp → auto reconnect bằng cookies đã lưu → nếu reconnect fail → update `channel_instances.status=error` + gửi Telegram alert cho Jennie để re-scan QR.',
     },
   },
   {

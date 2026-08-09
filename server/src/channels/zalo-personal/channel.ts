@@ -13,6 +13,7 @@ import type { OutboundMessage, MediaFile } from '../types.js';
 // SSOT resolve/download/isImage cho outbound media (dùng chung Zalo + CSKH). MEDIA_PROJECT_ROOT
 // giữ ở đây (buildOutboundMediaUrl + ALLOWED_MEDIA_ROOTS cần) — re-export từ media-util.
 import { MEDIA_PROJECT_ROOT, downloadMediaToTemp, isImageMedia } from '../media-util.js';
+import { markAlive } from '../../services/liveness-tracker.js';
 import https from 'https';
 import { rmSync, existsSync, statSync } from 'fs';
 import { join as pathJoin, basename as pathBasename, isAbsolute as pathIsAbsolute, resolve as pathResolve, relative as pathRelative } from 'path';
@@ -305,6 +306,7 @@ export class ZaloPersonalChannel {
   private _startHealthCheck(): void {
     if (this._healthCheckInterval) return;
     this._healthCheckInterval = setInterval(() => {
+      markAlive('zalo-health-check');
       if (this._stopped) return;
       if (!this._isConnected && !this._reconnectTimer) {
         console.log(`${this.tag} Health check: not connected + no pending reconnect → scheduling reconnect`);

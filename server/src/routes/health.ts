@@ -6,6 +6,7 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-server-status.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { serverVersion } from "../version.js";
+import { getLivenessSnapshot, getActionableStaleness } from "../services/liveness-tracker.js";
 
 export function healthRoutes(
   db?: Db,
@@ -85,8 +86,18 @@ export function healthRoutes(
       });
     }
 
+    // Background setInterval loops (ZaloListener ping, Zalo health-check,
+    // heartbeat scheduler tick) can silently stop while HTTP+DB stay healthy
+    // (incident 2026-08-09: watcher never noticed for ~6.5h). Only
+    // non-connection-gated loops drive `degraded` — Zalo loops go stale
+    // whenever the channel is legitimately disconnected, which must NOT
+    // trigger a restart loop that fixes nothing.
+    const livenessLoops = getLivenessSnapshot();
+    const staleActionable = getActionableStaleness();
+    const status = staleActionable.length > 0 ? "degraded" : "ok";
+
     res.json({
-      status: "ok",
+      status,
       version: serverVersion,
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
@@ -96,6 +107,7 @@ export function healthRoutes(
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
+      livenessLoops,
       ...(devServer ? { devServer } : {}),
     });
   });
