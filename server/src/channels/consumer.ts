@@ -90,29 +90,18 @@ interface BatchCtx {
 async function setAgentTyping(sessionKey: string): Promise<void> {
   const until = new Date(Date.now() + TYPING_TTL_MS).toISOString();
   try {
-    // metadata jsonb merge is shallow at the DB level; we only touch typing_until.
-    const { data } = await supabase
-      .from('channel_sessions')
-      .select('metadata')
-      .eq('session_key', sessionKey)
-      .maybeSingle();
-    const metadata = { ...((data?.metadata as Record<string, any>) || {}), typing_until: until };
-    await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
+    // ATOMIC jsonb-merge ở DB (RPC) — KHÔNG read-merge-write cả object (đọc snapshot cũ rồi
+    // ghi đè = clobber bot_paused nếu owner bấm Dừng Bot xen giữa; class SSOT-drift, plan
+    // 2026-08-10-CSKH-BOT-PAUSE-CLOBBER). Chỉ chạm đúng key typing_until.
+    await supabase.rpc('channel_session_merge_meta', { p_session_key: sessionKey, p_patch: { typing_until: until } });
   } catch { /* best-effort — typing is cosmetic */ }
 }
 
 /** Clear the typing indicator for a session. */
 async function clearAgentTyping(sessionKey: string): Promise<void> {
   try {
-    const { data } = await supabase
-      .from('channel_sessions')
-      .select('metadata')
-      .eq('session_key', sessionKey)
-      .maybeSingle();
-    if (!data) return;
-    const metadata = { ...((data.metadata as Record<string, any>) || {}) };
-    delete metadata.typing_until;
-    await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
+    // ATOMIC del-key ở DB (RPC) — chỉ xoá typing_until, giữ nguyên bot_paused/last_source/...
+    await supabase.rpc('channel_session_del_meta_keys', { p_session_key: sessionKey, p_keys: ['typing_until'] });
   } catch { /* best-effort */ }
 }
 
@@ -183,65 +172,54 @@ async function surfacePausedState(ctx: BatchCtx, sessionKey: string): Promise<vo
 }
 
 /**
- * Re-drain a session's still-pending messages (2026-07-16). Called when an owner turns
- * the bot back ON after a takeover (manual re-enable — no auto-resume, per OD-1). Derives
- * the batch ctx from a still-pending row (same pattern as the startup reschedule) and
- * schedules a quiet-window so the bot answers the messages that arrived while paused.
- * No-op if nothing is pending. Exported so conversation-routes (Paperclip toggle) can
- * call it directly; the channel_sessions realtime subscription covers the edge/mobile
- * toggle path.
+ * Dọn backlog khi BẬT BOT LẠI (2026-08-10, thay `reschedulePendingSession` re-drain). Chị Jennie
+ * chốt: bật lại thì bot IM cho đến khi khách nhắn tin MỚI SAU mốc bật — KHÔNG nhai lại tin cũ chị
+ * đã trả tay. Cơ chế chống-replay CHÍNH nằm ở DRAIN-FILTER trong runSessionBatch (`.gt('created_at',
+ * bot_unpaused_at)`); hàm này chỉ ĐÁNH DẤU tin cũ (created ≤ mốc) thành 'skipped' với actor RIÊNG
+ * (`system_unpause_tombstone` ≠ 'human') để: (a) clear badge "N tin chờ"; (b) giữ audit phân biệt
+ * "chị trả tay" vs "hệ auto-dọn"; (c) tránh dead-letter câm. Idempotent (WHERE status='pending').
+ * Exported cho conversation-routes (Paperclip toggle) gọi trực tiếp; realtime bridge phủ đường
+ * edge/mobile toggle. Plan 2026-08-10-CSKH-BOT-PAUSE-CLOBBER (Codex 3 vòng).
  */
-export async function reschedulePendingSession(sessionKey: string): Promise<void> {
+export async function markPendingSkippedBeforeUnpause(sessionKey: string): Promise<void> {
   try {
-    // Parser CHUNG với transcript.ts (25/07) — trước đây file này có luật riêng đòi 2 dấu ':'
-    // và `return` CÂM với key 2 phần ⇒ mầm drift (cùng gốc bug gem-master 400).
     const parsed = parseSessionKey(sessionKey);
     if (!parsed) return;
-    // Channel single-party (gem-master) có ENGINE TRẢ LỜI RIÊNG (gemini-proxy) và chỉ được
-    // MIRROR sang đây để xem. Cho nó đi tiếp = consumer lên lịch bot trả lời lần 2 ⇒ trả lời
-    // kép cho khách + gửi qua đường fallback sai. Trước khi gộp parser, nhánh này bị chặn
-    // NGẪU NHIÊN bởi luật parse cũ; giờ phải chặn CÓ CHỦ Ý.
+    // Chỉ áp cho hội thoại có người-gửi thật (DM) hoặc group; single-party gem-master có engine riêng.
     if (!parsed.filterSender && !parsed.isGroup) return;
     const { channel, threadId, senderPart, isGroup } = parsed;
 
+    // Mốc = bot_unpaused_at hiện tại của session (set atomic bởi cskh_toggle_bot lúc unpause).
+    const { data: sess } = await supabase
+      .from('channel_sessions')
+      .select('bot_unpaused_at')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+    const boundary = (sess as any)?.bot_unpaused_at as string | null | undefined;
+    if (!boundary) return; // chưa có mốc unpause → không có gì để dọn
+
     let q = supabase
       .from('channel_pending_messages')
-      .select('from_uid, sender_name, peer_kind, metadata')
+      .update({ status: 'skipped', handled_by: 'system_unpause_tombstone', skip_reason: 'arrived_before_unpause', handled_at: new Date().toISOString() })
       .eq('channel_name', channel)
       .eq('thread_id', threadId)
       .eq('status', 'pending')
       .is('handled_by', null)
-      .order('created_at', { ascending: true })
-      .limit(1);
+      .lte('created_at', boundary);
     if (!isGroup) q = q.eq('from_uid', senderPart);
-    const { data } = await q;
-    if (!data || data.length === 0) return; // nothing waiting → nothing to re-drain
-    const row = data[0] as any;
-    const cfg = await getChannelConfig(channel);
-    if (!cfg || !cfg.enabled) return;
-    scheduleQuietWindow(sessionKey, {
-      channel,
-      channelType: 'zalo_personal', // placeholder — routing uses channel, not channelType (mirror startup)
-      threadId,
-      senderId: isGroup ? row.from_uid : senderPart,
-      senderName: row.sender_name || undefined,
-      peerKind: (row.peer_kind || 'direct') as InboundMessage['peerKind'],
-      groupName: (row.metadata as any)?.groupName,
-      channelConfig: cfg,
-    }, 1_500);
-    console.log(`[Consumer] Re-drained paused session ${sessionKey} after bot unpause`);
+    const { error } = await q;
+    if (error) { console.error(`[Consumer] markPendingSkippedBeforeUnpause ${sessionKey} failed:`, error.message); return; }
+    console.log(`[Consumer] Dọn backlog paused-window cho ${sessionKey} (mốc ${boundary})`);
   } catch (err: any) {
-    console.error(`[Consumer] reschedulePendingSession ${sessionKey} failed:`, err?.message || err);
+    console.error(`[Consumer] markPendingSkippedBeforeUnpause ${sessionKey} error:`, err?.message || err);
   }
 }
 
-// Re-drain-on-unpause realtime bridge (2026-07-16). Listens for channel_sessions UPDATE
-// where bot_unpaused_at advances (an owner turned the bot back on via the edge/mobile
-// toggle, which can't call the consumer directly) → reschedule that session's waiting
-// pending. Guards: (a) singleton subscription; (b) act only on a NEW bot_unpaused_at
-// value per session (dedupe) AND not currently paused → cosmetic metadata UPDATEs
-// (typing_until/last_source) never trigger a re-drain. NEW row is always full under
-// default replica identity (we only need NEW, not OLD → no REPLICA IDENTITY FULL).
+// Unpause realtime bridge (2026-07-16, đổi hành vi 2026-08-10). Listens for channel_sessions UPDATE
+// where bot_unpaused_at advances (owner bật bot qua edge/mobile toggle — không gọi consumer trực tiếp
+// được) → DỌN backlog paused-window (KHÔNG re-drain replay như bản cũ). Guards: (a) singleton;
+// (b) chỉ act trên bot_unpaused_at MỚI/session (dedupe) AND không đang paused → UPDATE cosmetic
+// (typing_until/last_source) không kích. NEW row đủ dưới default replica identity.
 let sessionUnpauseChannel: ReturnType<typeof supabase.channel> | null = null;
 const lastUnpauseHandled = new Map<string, string>();
 function subscribeSessionUnpause(): void {
@@ -261,8 +239,8 @@ function subscribeSessionUnpause(): void {
           if (lastUnpauseHandled.get(sessionKey) === upa) return; // already handled this unpause
           lastUnpauseHandled.set(sessionKey, upa);
           if (lastUnpauseHandled.size > 5000) lastUnpauseHandled.clear(); // bound memory
-          console.log(`[Consumer] channel_sessions unpause ${sessionKey} @ ${upa} — re-draining`);
-          void reschedulePendingSession(sessionKey);
+          console.log(`[Consumer] channel_sessions unpause ${sessionKey} @ ${upa} — dọn backlog (no replay)`);
+          void markPendingSkippedBeforeUnpause(sessionKey);
         } catch { /* best-effort */ }
       },
     )
@@ -519,6 +497,18 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
     const isGroup = ctx.peerKind === 'group';
     const nowIso = new Date().toISOString();
 
+    // ── UNPAUSE BOUNDARY (2026-08-10, Bug 2 fix) ──
+    // Chống-replay CHÍNH: sau khi bật bot lại, CHỈ trả tin đến SAU mốc bật gần nhất
+    // (`bot_unpaused_at`). Tin đến TRƯỚC mốc = "trong lúc paused" → chị đã trả tay → KHÔNG nhai lại.
+    // Đánh giá ở DRAIN (answer-time) nên không có race enqueue-order. `created_at` default = now()
+    // = thời điểm khách gửi. Plan 2026-08-10-CSKH-BOT-PAUSE-CLOBBER (Codex vòng 2-3).
+    const { data: unpauseRow } = await supabase
+      .from('channel_sessions')
+      .select('bot_unpaused_at')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+    const botUnpausedAt = (unpauseRow as any)?.bot_unpaused_at as string | null | undefined;
+
     // ── DRAIN (bounded): every still-pending message for this thread ──
     let drainQ = supabase
       .from('channel_pending_messages')
@@ -530,6 +520,7 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
       .lte('created_at', nowIso)          // snapshot — don't swallow later arrivals
       .order('created_at', { ascending: true })
       .limit(MAX_COALESCE);
+    if (botUnpausedAt) drainQ = drainQ.gt('created_at', botUnpausedAt);  // Bug 2: bỏ tin trong-lúc-paused
     if (!isGroup) drainQ = drainQ.eq('from_uid', ctx.senderId);  // DM: don't merge two customers on one thread
     const { data: drained } = await drainQ;
     if (!drained || drained.length === 0) { await clearAgentTyping(sessionKey); return; }
@@ -763,16 +754,19 @@ async function processResolved(
   // Record the app/web origin of the latest message on the session so the inbox
   // list + chat header can show a "📱 App" / "🌐 Web" badge. Merge into the
   // existing metadata jsonb (shallow) so we don't clobber bot_paused/typing/etc.
-  if (merged.metadata?.source) {
-    sessionUpdate.metadata = { ...((sess as any).metadata || {}), last_source: merged.metadata.source };
-  }
   // Link CRM customer to session (required for order/ticket creation in chat).
   // NOT for groups: a group session is shared by many members, so linking it to
   // whoever sent last would thrash the CRM linkage between members.
   if (customerId && merged.peerKind !== 'group') {
     sessionUpdate.customer_id = customerId;
   }
+  // sessionUpdate KHÔNG còn chạm `metadata` (cột non-jsonb thường). last_source ghi RIÊNG qua
+  // RPC atomic để KHÔNG clobber bot_paused (cửa sổ race lớn nhất — mỗi tin khách 1 lần, đọc
+  // snapshot dòng getOrCreate rồi ghi đè sau CRM-resolve/context-build ~1-3s). Plan 2026-08-10.
   try { await supabase.from('channel_sessions').update(sessionUpdate).eq('session_key', sessionKey); } catch {}
+  if (merged.metadata?.source) {
+    try { await supabase.rpc('channel_session_merge_meta', { p_session_key: sessionKey, p_patch: { last_source: merged.metadata.source } }); } catch {}
+  }
 
   // Get history for agent context
   const historyLimit = channelConfig.history_limit || 50;

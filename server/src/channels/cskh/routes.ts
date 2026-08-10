@@ -37,11 +37,10 @@ cskhRouter.post('/send', async (req, res) => {
   const id = thread_id;
   const sessionKey = `${channel}:${id}:${id}`;
 
-  // Engage human takeover: pause the bot for this session.
-  const { data: sess } = await supabase
-    .from('channel_sessions').select('metadata').eq('session_key', sessionKey).single();
-  const metadata = { ...((sess?.metadata as Record<string, unknown>) || {}), bot_paused: true };
-  await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
+  // Engage human takeover: pause the bot for this session (ATOMIC RPC — KHÔNG read-merge-write
+  // clobber bot_paused; plan 2026-08-10). Là side-effect của reply tay: hụt thì LOG (không chặn reply).
+  const { data: pausedRows, error: pauseErr } = await supabase.rpc('cskh_toggle_bot', { p_session_key: sessionKey, p_paused: true });
+  if (pauseErr || !pausedRows) console.error('[cskh/send] takeover pause failed:', pauseErr?.message || 'session not found', sessionKey);
 
   if (channel !== 'cskh-internal') {
     // S-routes: visitor ẩn danh (cskh-shopify / cskh-web) — mirror visitor_id, no push.
@@ -114,10 +113,9 @@ cskhRouter.post('/upload', uploadMem.single('file'), async (req, res) => {
       await pushSupportReply(id, preview);
     }
 
-    // 4. Engage takeover (pause bot cho session này).
-    const { data: sess } = await supabase.from('channel_sessions').select('metadata').eq('session_key', sessionKey).single();
-    const metadata = { ...((sess?.metadata as Record<string, unknown>) || {}), bot_paused: true };
-    await supabase.from('channel_sessions').update({ metadata }).eq('session_key', sessionKey);
+    // 4. Engage takeover (pause bot cho session này) — ATOMIC RPC (plan 2026-08-10).
+    const { data: pausedRows, error: pauseErr } = await supabase.rpc('cskh_toggle_bot', { p_session_key: sessionKey, p_paused: true });
+    if (pauseErr || !pausedRows) console.error('[cskh/upload] takeover pause failed:', pauseErr?.message || 'session not found', sessionKey);
 
     return res.json({ success: true });
   } catch (err: any) {

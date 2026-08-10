@@ -67,25 +67,17 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
   // escalations as part of testing, we don't want to lock the session.
   if (!isTraining) {
     try {
-      const { data: sessionRow } = await supabase
-        .from('channel_sessions')
-        .select('metadata')
-        .eq('session_key', ctx.sessionKey)
-        .single();
-
-      const existingMeta = (sessionRow?.metadata as Record<string, unknown>) || {};
-      const updatedMeta = {
-        ...existingMeta,
-        bot_paused: true,
-        bot_paused_at: new Date().toISOString(),
-        bot_paused_reason: ctx.reason,
-        escalation_priority: ctx.priority,
-      };
-
-      await supabase
-        .from('channel_sessions')
-        .update({ metadata: updatedMeta })
-        .eq('session_key', ctx.sessionKey);
+      // ATOMIC jsonb-merge (RPC) — KHÔNG read-merge-write cả object (clobber các key khác /
+      // bị writer khác clobber ngược; plan 2026-08-10). Gộp bot_paused + escalation fields 1 patch.
+      await supabase.rpc('channel_session_merge_meta', {
+        p_session_key: ctx.sessionKey,
+        p_patch: {
+          bot_paused: true,
+          bot_paused_at: new Date().toISOString(),
+          bot_paused_reason: ctx.reason,
+          escalation_priority: ctx.priority,
+        },
+      });
 
       console.log(`${logPrefix} ✓ Session paused (metadata.bot_paused=true)`);
     } catch (err: any) {

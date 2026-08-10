@@ -296,18 +296,16 @@ async function insertFollowup(
     return false;
   }
 
-  const meta = (sess.metadata as Record<string, unknown>) || {};
-  await supabase
-    .from('channel_sessions')
-    .update({
-      metadata: {
-        ...meta,
-        followup_count: prevCount + 1,
-        last_followup_at: new Date().toISOString(),
-        last_followup_stage: stage,
-      },
-    })
-    .eq('session_key', sess.session_key);
+  // ATOMIC jsonb-merge (RPC) — KHÔNG read-merge-write cả object (clobber bot_paused nếu owner
+  // pause xen giữa scan→write; plan 2026-08-10). Chỉ chạm 3 key follow-up.
+  await supabase.rpc('channel_session_merge_meta', {
+    p_session_key: sess.session_key,
+    p_patch: {
+      followup_count: prevCount + 1,
+      last_followup_at: new Date().toISOString(),
+      last_followup_stage: stage,
+    },
+  });
 
   const stuckH = Math.round((Date.now() - new Date(sess.last_message_at).getTime()) / 3600000);
   const customerName = await getCustomerName(sess.customer_id);

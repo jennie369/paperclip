@@ -81,35 +81,16 @@ export async function persistPurchaseStage(args: {
   const logPrefix = `[Stage/${args.agentSlug}]`;
 
   // ── 1. Update channel_sessions.metadata.purchase_stage ──────────────────
+  // ATOMIC RPC chuyên biệt — append purchase_stage_history (giữ last-20) + set stage TRONG DB,
+  // KHÔNG read-merge-write cả object (clobber bot_paused; shallow-merge không diễn tả được append).
+  // No-op cùng stage + giữ last-20 xử lý bên trong RPC. Plan 2026-08-10-CSKH-BOT-PAUSE-CLOBBER.
   try {
-    const { data: row } = await supabase
-      .from('channel_sessions')
-      .select('metadata')
-      .eq('session_key', args.sessionKey)
-      .single();
-
-    const existingMeta = (row?.metadata as Record<string, unknown>) || {};
-    const previousStage = existingMeta.purchase_stage as PurchaseStage | undefined;
-
-    // No-op if same stage (avoid log spam + redundant DB writes)
-    if (previousStage === args.newStage) return;
-
-    const updatedMeta = {
-      ...existingMeta,
-      purchase_stage: args.newStage,
-      purchase_stage_updated_at: new Date().toISOString(),
-      purchase_stage_history: [
-        ...((existingMeta.purchase_stage_history as Array<unknown>) || []),
-        { stage: args.newStage, at: new Date().toISOString() },
-      ].slice(-20), // keep last 20 transitions
-    };
-
-    await supabase
-      .from('channel_sessions')
-      .update({ metadata: updatedMeta })
-      .eq('session_key', args.sessionKey);
-
-    console.log(`${logPrefix} ✓ stage ${previousStage || '(none)'} → ${args.newStage}`);
+    const { error } = await supabase.rpc('channel_session_set_purchase_stage', {
+      p_session_key: args.sessionKey,
+      p_stage: args.newStage,
+    });
+    if (error) console.error(`${logPrefix} ✗ session update failed: ${error.message}`);
+    else console.log(`${logPrefix} ✓ stage → ${args.newStage}`);
   } catch (err: any) {
     console.error(`${logPrefix} ✗ session update failed: ${err.message}`);
   }

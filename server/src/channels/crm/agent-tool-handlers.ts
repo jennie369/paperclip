@@ -226,15 +226,13 @@ export async function handleVerifyCustomerIdentity(
   // gemral_user_id stayed null forever and the agent could not see the
   // customer's real profile/courses/orders. Fix: write identity back here.
   let chatCustomerId: string | null = null;
-  let existingMeta: Record<string, unknown> = {};
   if (ctx.sessionKey) {
     const { data: sess } = await ctx.supabase
       .from('channel_sessions')
-      .select('customer_id, metadata')
+      .select('customer_id')
       .eq('session_key', ctx.sessionKey)
       .maybeSingle();
     chatCustomerId = (sess as any)?.customer_id || null;
-    existingMeta = ((sess as any)?.metadata as Record<string, unknown>) || {};
   }
 
   // Fallback ordering when there is no chat customer (e.g. save_contacts off):
@@ -270,20 +268,18 @@ export async function handleVerifyCustomerIdentity(
     }
   }
 
-  // Persist verification into channel_sessions (MERGE — do not clobber
-  // purchase_stage / bot_paused / followup_count that live in the same jsonb).
+  // Persist verification into channel_sessions — ATOMIC jsonb-merge (RPC) do not clobber
+  // purchase_stage / bot_paused / followup_count. Read-merge-write JS cũ dùng snapshot existingMeta
+  // cũ → có thể xoá bot_paused nếu owner pause xen giữa (plan 2026-08-10). verified_* là key phẳng.
   if (ctx.sessionKey) {
-    await ctx.supabase
-      .from('channel_sessions')
-      .update({
-        metadata: {
-          ...existingMeta,
-          verified_customer_id: customerId,
-          verified_at: new Date().toISOString(),
-          verified_via: { phone: !!phone, email: !!email, order_number: !!orderNumber, via_profile: !!matchedProfileId },
-        } as any,
-      })
-      .eq('session_key', ctx.sessionKey);
+    await ctx.supabase.rpc('channel_session_merge_meta', {
+      p_session_key: ctx.sessionKey,
+      p_patch: {
+        verified_customer_id: customerId,
+        verified_at: new Date().toISOString(),
+        verified_via: { phone: !!phone, email: !!email, order_number: !!orderNumber, via_profile: !!matchedProfileId },
+      },
+    });
   }
 
   ctx.verifiedCustomerId = customerId;
