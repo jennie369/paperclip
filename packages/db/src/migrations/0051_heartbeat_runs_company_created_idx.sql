@@ -1,0 +1,15 @@
+-- heartbeat_runs cần index (company_id, created_at DESC) — không index nào hiện có khớp
+-- mẫu "WHERE company_id=$1 ORDER BY created_at DESC" (4 index cũ đều đòi thêm cột
+-- agent_id/status/liveness_state). Không có index này, câu truy vấn phải seq-scan
+-- rồi sort tường minh — với width ~1744 byte/dòng (30 cột, gồm stdout_excerpt TOAST)
+-- vượt work_mem 3.5MB, Postgres tràn ra "Sort Method: external merge" ghi/đọc đĩa tạm.
+-- Đo thật 10/08 (tạo index tạm rồi DROP để so EXPLAIN ANALYZE): có index loại bỏ hẳn
+-- bước sort-tràn-đĩa này — đúng cơ chế khuếch đại khi đĩa đang chịu áp lực I/O
+-- (RAM overcommit + swap liên tục quan sát được cùng ngày trên Supabase Dashboard).
+-- Xem: crypto-pattern-scanner/docs/plans_reports/2026-08-10-DB-MEMORY-PRESSURE-HEAVY-QUERIES-FIX_ARCHITECTURE_PLAN.md
+--
+-- KHÔNG dùng CONCURRENTLY: migration runner của paperclip (applyPendingMigrationsManually)
+-- bọc mọi statement trong 1 transaction (BEGIN/COMMIT) — CREATE INDEX CONCURRENTLY không
+-- chạy được trong transaction block. Bảng chỉ 2,983 dòng/54MB nên CREATE INDEX thường
+-- (khoá ghi ngắn, dưới 1 giây) đủ an toàn ở quy mô hiện tại.
+CREATE INDEX IF NOT EXISTS "heartbeat_runs_company_created_idx" ON "heartbeat_runs" ("company_id","created_at" DESC);
