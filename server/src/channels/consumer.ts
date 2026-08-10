@@ -509,6 +509,11 @@ async function runSessionBatch(sessionKey: string, ctx: BatchCtx): Promise<void>
       .maybeSingle();
     const botUnpausedAt = (unpauseRow as any)?.bot_unpaused_at as string | null | undefined;
 
+    // Dọn INLINE (Codex vòng-3 F2 — dead-letter guard): mọi lần batch chạy cho session có mốc
+    // unpause, tự đánh dấu nốt tin created<=mốc còn sót 'pending' (self-heal nếu lần dọn lúc
+    // unpause bị miss/lỗi/restart — không cần đợi 1 lần unpause khác mới dọn). Idempotent.
+    if (botUnpausedAt) await markPendingSkippedBeforeUnpause(sessionKey);
+
     // ── DRAIN (bounded): every still-pending message for this thread ──
     let drainQ = supabase
       .from('channel_pending_messages')
