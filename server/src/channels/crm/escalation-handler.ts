@@ -37,6 +37,14 @@ export interface EscalationContext {
   trainingSessionId?: string;
   /** Turn number in training (for ticket metadata) */
   trainingTurnNo?: number;
+  /**
+   * Optional metadata patch for Step 1 instead of the default bot_paused patch.
+   * Gem Master corrupted-output containment passes { agy_disabled_until, ... }:
+   * bot_paused would strand the customer (no operator watches the gem-master
+   * inbox), while agy_disabled_until lets the edge fn skip the agy branch and
+   * serve the customer via the Gemini fallback for a bounded window.
+   */
+  pausePatch?: Record<string, unknown>;
 }
 
 export interface EscalationResult {
@@ -71,7 +79,7 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
       // bị writer khác clobber ngược; plan 2026-08-10). Gộp bot_paused + escalation fields 1 patch.
       await supabase.rpc('channel_session_merge_meta', {
         p_session_key: ctx.sessionKey,
-        p_patch: {
+        p_patch: ctx.pausePatch ?? {
           bot_paused: true,
           bot_paused_at: new Date().toISOString(),
           bot_paused_reason: ctx.reason,
@@ -79,7 +87,9 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
         },
       });
 
-      console.log(`${logPrefix} ✓ Session paused (metadata.bot_paused=true)`);
+      console.log(
+        `${logPrefix} ✓ Session containment applied (${ctx.pausePatch ? Object.keys(ctx.pausePatch).join(',') : 'bot_paused=true'})`,
+      );
     } catch (err: any) {
       console.error(`${logPrefix} ✗ Failed to pause session: ${err.message}`);
     }

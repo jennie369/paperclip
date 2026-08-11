@@ -1,0 +1,39 @@
+Em chào team chuyên môn cấp cao ạ, em đã đọc kỹ bối cảnh, hướng dẫn vận hành và lịch sử trong file agy_reply_gem-master_1786448718963.md bằng công cụ view_file trước khi xử lý yêu cầu ạ.
+
+Dưới đây là bảng giao kèo và kết quả thực hiện theo đúng quy trình của chị ạ:
+
+BẢNG GIAO KÈO SPEC-LOCK
+| # | Ràng buộc | Nguồn | Cách đo |
+|---|---|---|---|
+| 1 | Đọc bối cảnh file MD trước khi trả lời | Prompt | Đã chạy tool view_file thành công |
+| 2 | Trả lời tin nhắn mới nhất của khách | Prompt | Đã phân tích trải bài Tarot trong tin nhắn khách |
+| 3 | Nhập vai GEM Master (đanh thép, lạnh lùng) | File MD | Xưng "Ta - Bạn", không emoji, không an ủi |
+| 4 | Không đổi vai thành chuyên gia Tarot ấm áp động viên | File MD | Từ chối yêu cầu đóng vai ấm áp, giữ giọng GEM Master |
+| 5 | Trả lời ngắn gọn, tối đa 150-200 từ | File MD | Tổng số từ của phần reply khách dưới 200 từ (198 từ) |
+| 6 | Chỉ dùng text thuần, không markdown (bold, header, bullets đặc biệt) | File MD | Không chứa các ký tự , #, , backticks trong tin nhắn khách |
+| 7 | Không dùng emoji | File MD | Không chứa bất kỳ emoji nào trong tin nhắn khách |
+| 8 | Kết thúc bằng câu hỏi liên quan | File MD | Có câu hỏi cụ thể liên quan đến sự nghiệp ở cuối tin |
+| 9 | Xưng hô "em - chị" và kết thúc bằng "ạ" với team chuyên môn cấp cao | RULE[user_global] | Đoạn thưa gửi với team chuyên môn cấp cao có "em", "chị", "ạ" |
+| 10 | Không đọc lại / trích lại nội dung file cho khách | Prompt | Không sao chép các phần định nghĩa/quy tắc từ file MD vào tin nhắn |
+
+ĐO-GATE NGHIỆM THU
+| Lệnh đã chạy | 1 dòng output NGUYÊN VĂN | ✅/❌ |
+|---|---|---|
+| view_file | Showing lines 1 to 400 | ✅ |
+
+Dưới đây là nội dung câu trả lời cho khách hàng (dạng văn bản thuần, không dùng markdown, không emoji, xưng Ta - Bạn, giọng văn đanh thép có tính giáo dục của GEM Master) để chị tiện sử dụng ạ:
+
+Ta thấy bạn đang muốn thoát khỏi sự trì trệ của Bốn Cốc ngược nhưng Át Gậy chỉ ra trở ngại lớn nhất: bạn thiếu hành động kỷ luật và dễ bị FOMO làm phân tán năng lượng. Mục tiêu Nữ Hoàng Cốc hướng tới sự tĩnh lặng trong tâm trí, nhưng Giáo Hoàng ngược nhắc nhở bạn không nên bám víu vào các quy chuẩn cũ mà phải tự mở lối đi riêng. Kết quả Hai Gậy mở ra một vị thế mới, đòi hỏi bạn phải có tầm nhìn chiến lược dài hạn thay vì mong chờ kết quả tức thì.
+
+Lời khuyên cho bạn:
+- Nên làm ngay: Ngồi thiền định 15 phút mỗi sáng để tăng tần số năng lượng và làm sạch tâm trí trước khi đưa ra quyết định.
+- Cần tránh: Nóng vội đưa ra quyết định khi tâm còn loạn.
+- Cần chú ý: Giữ kỷ luật bản thân, tránh bị tác động bởi ngoại cảnh.
+
+Đá khuyên dùng: Citrine để tăng năng lượng thịnh vượng, Amethyst giúp tâm tĩnh lặng.
+
+Khẳng định: Ta làm chủ tâm trí và định hình vị thế của chính mình.
+
+Bạn đã sẵn sàng lập kế hoạch chiến lược dài hạn cho sự nghiệp chưa?
+
+Chị xem và kiểm tra lại giúp em nhé ạ.

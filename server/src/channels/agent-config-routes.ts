@@ -10,6 +10,7 @@ import { mkdtempSync } from 'fs';
 import { supabase } from './zalo-personal/supabase.js';
 import * as AgentRouter from './router.js';
 import type { AgentConfig } from './types.js';
+import { handleEscalation } from './crm/escalation-handler.js';
 
 // Agent files directory — crypto-pattern-scanner/agents/
 // NOTE: fallback MUST include /agents to match buildSystemPrompt (router.ts),
@@ -1672,6 +1673,119 @@ type TestMediaInput = {
   filename?: string;
 };
 
+// ── Gem Master corrupted-output containment (2026-08-11 operator-report leak) ──
+// The gem-master PRODUCTION path runs through this /test endpoint (edge fn
+// gemini-proxy → tunnel → here, header x-training-session-id: gemmaster:<userId>).
+// When postProcessReply refuses a corrupted reply we must do more than swallow
+// it: disable the agy branch for a bounded window (metadata.agy_disabled_until —
+// NOT bot_paused, which would strand the customer since nobody staffs the
+// gem-master inbox; the edge falls back to Gemini instead) + ticket + CS ping.
+// In-process cross-customer storm cooldown: >3 corrupted escalations / 15 min →
+// one aggregated ping instead of a flood (a bad rule-file edit hits EVERY user).
+const GM_DISABLE_MINUTES = 30;
+const GM_STORM_WINDOW_MS = 15 * 60 * 1000;
+const GM_STORM_THRESHOLD = 3;
+const gmCorruptedTimestamps: number[] = [];
+
+async function containGemMasterCorruptedOutput(
+  userId: string,
+  triggerMessage: string,
+  escalation: { reason: string; priority: 'low' | 'normal' | 'high' | 'urgent'; summary?: string },
+): Promise<void> {
+  const sessionKey = `gem-master:${userId}`;
+  const nowIso = new Date().toISOString();
+  const untilIso = new Date(Date.now() + GM_DISABLE_MINUTES * 60 * 1000).toISOString();
+
+  // Skip entirely when a disable window is already active (repeat turns of the
+  // same broken agent must not re-ticket/re-ping).
+  try {
+    const { data: sess } = await supabase
+      .from('channel_sessions')
+      .select('metadata')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+    const until = (sess?.metadata as Record<string, unknown> | null)?.agy_disabled_until;
+    if (typeof until === 'string' && Date.parse(until) > Date.now()) {
+      console.warn(`[GM-contain] ${sessionKey}: agy already disabled until ${until} — skip re-escalation`);
+      return;
+    }
+  } catch { /* best-effort — continue */ }
+
+  // ① Session shell upsert — FULL mirror column shape (chat_id is NOT NULL and
+  // the column is channel_name; schema verified 2026-08-11). First-turn safe:
+  // the edge mirror only creates this row AFTER it receives a reply, so the
+  // corrupted first turn would otherwise have nothing to patch.
+  try {
+    await supabase.from('channel_sessions').upsert(
+      {
+        session_key: sessionKey,
+        channel_name: 'gem-master',
+        agent_slug: 'gem-master',
+        peer_kind: 'direct',
+        chat_id: userId,
+        sender_id: userId,
+        status: 'active',
+        last_message_at: nowIso,
+      },
+      { onConflict: 'session_key' },
+    );
+    // ② Metadata via atomic jsonb-merge RPC — never read-merge-write the whole
+    // object (BUG-081 clobber class) and never inline metadata in the upsert
+    // (would overwrite unrelated keys).
+    await supabase.rpc('channel_session_merge_meta', {
+      p_session_key: sessionKey,
+      p_patch: {
+        agy_disabled_until: untilIso,
+        agy_disabled_reason: escalation.reason,
+        agy_disabled_at: nowIso,
+      },
+    });
+    console.warn(`[GM-contain] ${sessionKey}: agy disabled until ${untilIso} (${escalation.reason})`);
+  } catch (err) {
+    console.error(`[GM-contain] ${sessionKey}: containment write failed`, err);
+  }
+
+  // ③ Ticket + Telegram ping — fire-and-forget (this sits on the edge's 40s
+  // budget; never await network side-effects here). Storm cooldown: past the
+  // threshold, one aggregated warning instead of per-customer pings.
+  const now = Date.now();
+  gmCorruptedTimestamps.push(now);
+  while (gmCorruptedTimestamps.length && now - gmCorruptedTimestamps[0] > GM_STORM_WINDOW_MS) {
+    gmCorruptedTimestamps.shift();
+  }
+  const stormHits = gmCorruptedTimestamps.length;
+  const summary = (escalation.summary || 'Bot lộ báo cáo nội bộ — đã chặn gửi.')
+    .replace(/\[PAPERCLIP_REPLY_CHANNEL\]/g, '');
+  if (stormHits > GM_STORM_THRESHOLD) {
+    console.error(
+      `[GM-contain] STORM: ${stormHits} corrupted-output escalations in 15min — suppressing per-customer ping (session ${sessionKey})`,
+    );
+    return;
+  }
+  void handleEscalation({
+    agentSlug: 'gem-master',
+    sessionKey,
+    channelName: 'gem-master',
+    chatId: userId,
+    customerId: userId,
+    customerName: null,
+    reason: escalation.reason,
+    priority: escalation.priority || 'high',
+    summary:
+      stormHits === GM_STORM_THRESHOLD
+        ? `${summary} ⚠️ Ca thứ ${stormHits}/15 phút — nghi lỗi hàng loạt, các ca sau sẽ không ping lẻ.`
+        : summary,
+    triggerMessage: triggerMessage.substring(0, 1000),
+    agentReply: '(bị guard chặn — không gửi cho khách)',
+    mode: 'live', // MUST stay 'live': 'training' skips the containment step entirely
+    pausePatch: {
+      agy_disabled_until: untilIso,
+      agy_disabled_reason: escalation.reason,
+      agy_disabled_at: nowIso,
+    },
+  }).catch((err) => console.error(`[GM-contain] ${sessionKey}: handleEscalation failed`, err));
+}
+
 router.post('/:slug/test', async (req, res) => {
   const { slug } = req.params;
   const { message, media, contentType } = req.body as {
@@ -1788,8 +1902,26 @@ router.post('/:slug/test', async (req, res) => {
         }
       | undefined;
 
+    // Gem Master corrupted-output containment (2026-08-11). Discriminator is the
+    // RAW header value (gemmaster:<userId>) — NOT sessionKey, which the server
+    // prefixes to `training:gem-master:gemmaster:<userId>`. Ordinary Training
+    // Room / UI tests carry no gemmaster: header and are untouched.
+    let finalReply = reply;
+    if (escalation?.reason === 'agent_output_corrupted' && trainingSessionId?.startsWith('gemmaster:')) {
+      const gmUserId = trainingSessionId.slice('gemmaster:'.length).trim();
+      if (gmUserId) {
+        void containGemMasterCorruptedOutput(gmUserId, message || '', escalation).catch((err) =>
+          console.error('[GM-contain] async containment failed', err),
+        );
+        // Empty reply → edge callAntigravityAgent() returns null → gemini-proxy
+        // falls back to the Gemini branch, so the customer still gets a REAL
+        // answer instead of the generic handoff line.
+        finalReply = '';
+      }
+    }
+
     res.json({
-      reply,
+      reply: finalReply,
       agent: slug,
       provider: config.provider,
       model: config.model,
