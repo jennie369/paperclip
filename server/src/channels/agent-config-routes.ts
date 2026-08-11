@@ -1767,7 +1767,11 @@ async function containGemMasterCorruptedOutput(
     sessionKey,
     channelName: 'gem-master',
     chatId: userId,
-    customerId: userId,
+    // crm_tickets.customer_id FK → crm_customers(id); the gem-master userId is a
+    // profiles/auth uuid, NOT a crm_customers id — passing it fails the insert
+    // for REAL users too (verified 2026-08-11 E2E). The user stays traceable via
+    // ticket metadata.chat_id + source_session_key.
+    customerId: null,
     customerName: null,
     reason: escalation.reason,
     priority: escalation.priority || 'high',
