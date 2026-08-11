@@ -196,7 +196,7 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
   // ticket. Training tickets are prefixed with [TRAINING] in the message so
   // she can distinguish at a glance.
   try {
-    await pingTelegramBoard({
+    const pinged = await pingTelegramBoard({
       reason: ctx.reason,
       priority: ctx.priority,
       summary: ctx.summary,
@@ -208,7 +208,11 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
       triggerMessage: ctx.triggerMessage,
       isTraining,
     });
-    console.log(`${logPrefix} ✓ Telegram ping sent`);
+    if (pinged) {
+      console.log(`${logPrefix} ✓ Telegram ping sent`);
+    } else {
+      console.warn(`${logPrefix} ⊘ Telegram ping NOT sent (no token) — ticket exists but nobody was pinged`);
+    }
   } catch (err: any) {
     console.error(`${logPrefix} ✗ Telegram ping failed: ${err.message}`);
   }
@@ -278,11 +282,17 @@ interface TelegramPingArgs {
   isTraining?: boolean;
 }
 
-async function pingTelegramBoard(args: TelegramPingArgs): Promise<void> {
+/**
+ * Sends the escalation ping to the ops Telegram board.
+ * Returns `true` only when a message was actually delivered; returns `false`
+ * when the ping was skipped (no token configured) so the caller does not log a
+ * misleading "ping sent". Throws on a real Telegram API failure.
+ */
+async function pingTelegramBoard(args: TelegramPingArgs): Promise<boolean> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
-    console.warn('[Escalation/telegram] TELEGRAM_BOT_TOKEN not set, skipping ping');
-    return;
+    console.warn('[Escalation/telegram] TELEGRAM_BOT_TOKEN not set — skipping ping (ticket still created)');
+    return false;
   }
 
   const emoji = args.priority === 'urgent' ? '🚨🚨🚨'
@@ -327,4 +337,5 @@ async function pingTelegramBoard(args: TelegramPingArgs): Promise<void> {
     const errBody = await res.text();
     throw new Error(`Telegram API ${res.status}: ${errBody.substring(0, 200)}`);
   }
+  return true;
 }
