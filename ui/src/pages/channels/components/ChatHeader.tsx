@@ -30,10 +30,18 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
   // Per-conversation bot pause (metadata.bot_paused). Lets the operator take over
   // a single thread instantly — agent goes silent for THIS customer only,
   // messages still arrive. Channel-wide pause lives in Cài đặt kênh.
-  const botPaused = (conv.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true;
+  const meta = (conv.metadata || {}) as {
+    bot_paused?: boolean; paused_pending_count?: number;
+    bot_paused_reason?: string; bot_paused_at?: string;
+    human_takeover_at?: string;
+  };
+  const botPaused = meta.bot_paused === true;
   // Số tin khách CHỜ trong lúc bot tắt (consumer stash khi tin chạm gate paused, 2026-07-16)
   // → nhắc operator nhớ bật bot lại (chống case "quên bật 3 tuần" của khách yinyangmasters).
-  const pausedWaiting = (conv.metadata as { paused_pending_count?: number } | undefined)?.paused_pending_count ?? 0;
+  const pausedWaiting = meta.paused_pending_count ?? 0;
+  // C4 (plan CSKH-BOT-PAUSE-UX): badge nói RÕ lý do dừng — "bạn đang trực" vs "máy tự dừng"
+  // + mốc giờ, để chị không đọc "BOT ĐANG DỪNG" trơ thành "kẹt".
+  const pauseLabel = buildPauseLabel(meta);
 
   // Agent options for the inline per-chat picker (always loaded — lets the operator
   // turn the bot ON with a chosen agent even on a channel that has no default agent).
@@ -167,10 +175,14 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
                 className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-amber-500/20 text-amber-600 font-bold ring-1 ring-amber-500/40"
               >
                 <PauseCircle className="h-3.5 w-3.5" />
-                BOT ĐANG DỪNG — bạn đang trực{pausedWaiting > 0 ? ` · ${pausedWaiting} tin chờ` : ""}
+                {pauseLabel}{pausedWaiting > 0 ? ` · ${pausedWaiting} tin chờ` : ""}
               </span>
             )}
-            {conv.agent_slug && (
+            {/* C6 (plan CSKH-BOT-PAUSE-UX): nút "Bật Bot" LUÔN hiện khi đang paused, KỂ CẢ
+                hội thoại "— Không bot —" (agent_slug=null) — trước đây gate agent_slug làm badge
+                hiện mà KHÔNG có nút bật = "kẹt" theo nghĩa đen. Nút "Dừng Bot" vẫn cần agent_slug
+                (không có agent thì dừng bot vô nghĩa). */}
+            {(botPaused || conv.agent_slug) && (
               <button
                 onClick={() => quickAction(() => channelsApi.setBotPaused(conv.session_key, !botPaused))}
                 title={botPaused
@@ -196,6 +208,38 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, cha
 
     </>
   );
+}
+
+// C4: dựng câu badge "BOT ĐANG DỪNG" nói rõ AI dừng + LÝ DO + MỐC giờ (HCM).
+// Ưu tiên human_takeover_at (chị đang trực) → kèm phụ chú máy tự dừng nếu có reason escalation.
+const REASON_VN: Record<string, string> = {
+  customer_hostile: "khách bức xúc",
+  prolonged_frustration: "khách bức xúc kéo dài",
+  refund_dispute: "tranh chấp hoàn tiền",
+  fraud_allegation: "khách tố gian lận",
+  legal_threat: "khách doạ pháp lý",
+  mental_health_concern: "lo ngại tâm lý khách",
+  manual_takeover: "",
+};
+function gioHCM(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const hcm = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+  return `${String(hcm.getUTCHours()).padStart(2, "0")}:${String(hcm.getUTCMinutes()).padStart(2, "0")}`;
+}
+function buildPauseLabel(meta: {
+  bot_paused_reason?: string; bot_paused_at?: string; human_takeover_at?: string;
+}): string {
+  const reasonRaw = meta.bot_paused_reason || "";
+  const reasonVN = REASON_VN[reasonRaw] ?? reasonRaw;
+  const mayTuDung = reasonRaw && reasonRaw !== "manual_takeover";
+  if (meta.human_takeover_at) {
+    let s = `BOT ĐANG DỪNG — bạn đang trực (từ ${gioHCM(meta.human_takeover_at)})`;
+    if (mayTuDung) s += ` · máy tự dừng ${gioHCM(meta.bot_paused_at)} vì ${reasonVN}`;
+    return s;
+  }
+  if (mayTuDung) return `BOT ĐANG DỪNG — máy tự dừng: ${reasonVN} (${gioHCM(meta.bot_paused_at)})`;
+  return "BOT ĐANG DỪNG — bạn đang trực"; // data cũ / không rõ nguồn → giữ chữ hiện tại
 }
 
 // Header action button — icon + short label, larger hit area for easy clicking.

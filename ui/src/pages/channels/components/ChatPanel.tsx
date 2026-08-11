@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Search, X, ChevronDown, SmilePlus, Bot, Reply, MoreHorizontal, Copy, Pin, Star, ListChecks, RotateCcw, Trash2, Check, Pencil } from "lucide-react";
 import { channelsApi, type ChannelSession, type PendingMessage } from "@/api/channels";
 import { is4xx } from "@/api/client";
+import { isHumanSent } from "@/lib/sent-by";
 import { useImageLightbox } from "@/components/ImageLightbox";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
 import { ChatHeader } from "./ChatHeader";
@@ -387,7 +388,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
 
             // D9: agent-sent messages get a Bot icon (rendered at the sender label,
             // not baked into the string — keeps reply-quote previews clean).
-            const isAgentMsg = isOutbound && !!msg.sent_by && msg.sent_by !== "manual";
+            const isAgentMsg = isOutbound && !!msg.sent_by && !isHumanSent(msg.sent_by);
             const senderLabel = isOutbound
               ? (isAgentMsg ? (msg.sent_by as string) : "Bạn")
               : (msg.sender_name || "Khách");

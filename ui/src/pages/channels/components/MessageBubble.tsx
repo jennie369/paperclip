@@ -3,6 +3,7 @@
 
 import { Bot } from "lucide-react";
 import { type ConversationMessage } from "@/api/channels";
+import { isHumanSent } from "@/lib/sent-by";
 import { useImageLightbox } from "@/components/ImageLightbox";
 import { MessageRenderer } from "./MessageRenderer";
 
@@ -48,7 +49,7 @@ export function MessageBubble({ message: msg }: Props) {
               {msg.senderName || "Khách"}
             </span>
           )}
-          {isOutbound && msg.handledBy && msg.handledBy !== "manual" && (
+          {isOutbound && msg.handledBy && !isHumanSent(msg.handledBy) && (
             <span className="text-[11px] font-medium text-violet-500 inline-flex items-center gap-1">
               <Bot className="h-3 w-3 shrink-0" /> {msg.handledBy}
             </span>
