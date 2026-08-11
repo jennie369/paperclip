@@ -268,6 +268,27 @@ async function insertFollowup(
     return false;
   }
 
+  // Track A / A4 (plan CSKH-BOT-PAUSE-UX): nếu nhân viên đã trả lời TAY sau tin cuối của khách
+  // → đang xử tay, template cứng không biết gì → KHÔNG nag "còn đó không". last_message_at =
+  // mốc hoạt động cuối của KHÁCH (outbound không bump), nên manual > mốc = nhân viên đã vào sau.
+  const threadId = sess.session_key.split(':')[1];
+  if (threadId) {
+    const { data: recentManual } = await supabase
+      .from('channel_sent_messages')
+      .select('created_at')
+      .eq('channel_name', sess.channel_name)
+      .eq('thread_id', threadId)
+      .like('sent_by', 'manual%')
+      .gt('created_at', sess.last_message_at)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentManual) {
+      log(`⏭ Bỏ follow-up "${sess.session_key.substring(0, 25)}": nhân viên đã trả tay sau tin khách`);
+      return false;
+    }
+  }
+
   const { data: channelInstance } = await supabase
     .from('channel_instances')
     .select('id')

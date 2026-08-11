@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { ZaloPersonalChannel } from './channel.js';
 import { supabase } from './supabase.js';
+import { isHumanSent } from '../sent-by-utils.js';
 
 // Configure multer for temp file uploads
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || '/tmp/paperclip-uploads');
@@ -377,7 +378,7 @@ router.get('/:name/messages', async (req, res) => {
       ...m,
       direction: 'outbound',
       from_uid: '',
-      sender_name: m.sent_by && m.sent_by !== 'manual' ? `🤖 ${m.sent_by}` : 'Bạn',
+      sender_name: (!m.sent_by || isHumanSent(m.sent_by)) ? 'Bạn' : `🤖 ${m.sent_by}`,
       ts: m.created_at,
       status: m.status,
     })),

@@ -5,6 +5,7 @@ import { Router } from 'express';
 import { supabase } from './zalo-personal/supabase.js';
 import { clearConfigCache } from './consumer.js';
 import { fetchTranscript } from './transcript.js';
+import { isHumanSent } from './sent-by-utils.js';
 import { approvePairing } from './policy.js';
 import { streamEvents, clearAgentCache } from './router.js';
 
@@ -128,7 +129,7 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
       ...m,
       direction: 'outbound' as const,
       from_uid: '',
-      sender_name: m.sent_by && m.sent_by !== 'manual' ? `🤖 ${m.sent_by}` : 'Bạn',
+      sender_name: (!m.sent_by || isHumanSent(m.sent_by)) ? 'Bạn' : `🤖 ${m.sent_by}`,
       ts: m.created_at,
     })),
   ].sort((a, b) => {

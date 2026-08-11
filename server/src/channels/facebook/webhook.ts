@@ -116,8 +116,15 @@ router.post('/webhook', async (req: Request, res: Response) => {
 async function handleMessagingEvent(pageId: string, channelName: string, event: any): Promise<void> {
   const senderId: string = event.sender?.id;
 
-  // Skip messages sent BY the page (echo)
-  if (event.message?.is_echo) return;
+  // ── ECHO = tin do PAGE gửi (bot Send API / chị gõ tay Messenger / facebook-web / Business Suite) ──
+  // Track B (plan CSKH-BOT-PAUSE-UX): trước đây nuốt SẠCH → tin chị gõ tay Messenger vô hình với agent.
+  // Ghi sổ 'manual_fb' để Track A tiêm cho agent thấy (KHÔNG auto-pause — OD-2). Phân loại phòng thủ
+  // nhiều lớp (app_id KHÔNG đủ: facebook-web dùng BUSINESS_APP_ID trùng Page inbox — vòng 1 ROLL-F2).
+  if (event.message?.is_echo) {
+    await handleEchoEvent(channelName, event).catch((err) =>
+      console.error('[FB echo] handler failed:', err?.message || err));
+    return;
+  }
 
   // Skip if no message content and no postback
   if (!event.message && !event.postback) return;
@@ -172,6 +179,73 @@ async function handleMessagingEvent(pageId: string, channelName: string, event: 
   };
 
   await bus.publishInbound(inbound);
+}
+
+/** Postgres unique-violation (idx_csm_platform_mid) — race 2 webhook cùng mid → 1 thắng, bỏ qua. */
+function isDupErr(err: { code?: string } | null | undefined): boolean {
+  return err?.code === '23505';
+}
+
+/**
+ * Xử lý ECHO của Facebook (tin do Page gửi). Ghi 'manual_fb' CHỈ khi là tin NGƯỜI gõ tay,
+ * KHÔNG ghi cho tin bot (Send API / facebook-web / Business Suite auto-reply).
+ * ⚠️ Cần bật field webhook `message_echoes` ở App Dashboard mỗi Page, nếu không echo không về.
+ */
+async function handleEchoEvent(channelName: string, event: any): Promise<void> {
+  const threadId: string | undefined = event.recipient?.id; // ECHO: recipient = KHÁCH (sender = Page!)
+  const mid: string | undefined = event.message?.mid;
+  if (!threadId || !mid) return;
+
+  const text: string = event.message?.text || '';
+  const attachments: any[] = event.message?.attachments || [];
+  const appId: string | null = event.message?.app_id != null ? String(event.message.app_id) : null;
+  const body = text || (attachments.length ? '[đính kèm]' : '');
+
+  // Lớp (b) — LƯỚI CHÍNH: đối chiếu tin hệ-thống-mình vừa gửi theo (thread_id, body, 5') trên MỌI
+  // channel (bot Send API đã stamp mid, bot facebook-web, auto-reply Business Suite). Không phụ thuộc app_id.
+  const since = new Date(Date.now() - 5 * 60_000).toISOString();
+  const { data: recent } = await supabase
+    .from('channel_sent_messages')
+    .select('id, platform_message_id')
+    .eq('thread_id', threadId)
+    .eq('body', body)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (recent && recent.length > 0) {
+    // Tin của hệ thống mình → chỉ stamp mid nếu chưa có (để echo sau tra trúng), KHÔNG insert bản thứ 2.
+    const row = recent[0] as { id: string; platform_message_id: string | null };
+    if (!row.platform_message_id) {
+      const { error } = await supabase.from('channel_sent_messages')
+        .update({ platform_message_id: mid }).eq('id', row.id);
+      if (error && !isDupErr(error)) console.warn('[FB echo] stamp mid failed:', error.message);
+    }
+    return;
+  }
+
+  // Lớp (a) — DỰ PHÒNG: app_id trùng app bot Send API của mình mà body-match trượt (chưa kịp ghi row)
+  //           → vẫn coi là bot, KHÔNG ghi manual. facebook-web/Business Suite đã do lớp (b) bắt.
+  if (appId && FB_APP_ID && appId === FB_APP_ID) {
+    console.log(`[FB echo] app_id=${appId} khớp app bot Send API (body-match trượt) → coi là bot, skip`);
+    return;
+  }
+
+  // Lớp (c) — còn lại = chị/nhân viên GÕ TAY trong Messenger/Page inbox → ghi sổ manual_fb cho Track A.
+  const media = attachments.filter((a: any) => a.payload?.url).map((a: any) => a.payload.url as string);
+  const { error } = await supabase.from('channel_sent_messages').insert({
+    channel_name: channelName,
+    thread_id: threadId,
+    thread_type: 'dm',
+    to_uid: threadId,
+    body: body || '[Tin nhân viên]',
+    content_type: attachments.length > 0 && !text ? 'image' : 'text',
+    media: media.length > 0 ? media : null,
+    status: 'sent',
+    sent_by: 'manual_fb',
+    platform_message_id: mid,
+  });
+  if (error && !isDupErr(error)) console.error('[FB echo] insert manual_fb failed:', error.message);
+  else if (!error) console.log(`[FB echo] ✓ manual_fb logged thread=${threadId}: ${body.slice(0, 50)}`);
 }
 
 /**
@@ -294,7 +368,9 @@ router.post('/send', async (req: Request, res: Response) => {
       return;
     }
 
-    // Log to channel_sent_messages for audit trail (non-blocking)
+    // Log to channel_sent_messages for audit trail (non-blocking).
+    // B5 (Track B): STAMP platform_message_id = mid Send API trả về → khi echo của tin BOT này
+    // về, lớp (b) body-match / unique index tra trúng, KHÔNG ghi nhầm thành 'manual_fb' (vòng 1 RACE-F15).
     void supabase.from('channel_sent_messages').insert({
       channel_name: PAGE_CHANNEL[page_id] || `fb-${page_id}`,
       thread_id: recipient_id,
@@ -304,6 +380,7 @@ router.post('/send', async (req: Request, res: Response) => {
       content_type: 'text',
       status: 'sent',
       sent_by: 'api',
+      platform_message_id: result.message_id || null,
     }).then(() => {}, () => {});
 
     res.json({ success: true, message_id: result.message_id });

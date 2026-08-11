@@ -16,6 +16,7 @@ import { ContextBuilder } from './crm/context-builder.js';
 import { AISummarizer } from './crm/ai-summarizer.js';
 import { handleEscalation, isSessionPaused, type EscalationContext } from './crm/escalation-handler.js';
 import { persistPurchaseStage, type PurchaseStage } from './crm/purchase-stage-handler.js';
+import { buildHumanReplyBlock } from './human-reply-block.js';
 import { extractEntitiesAsync } from './kg-extractor.js';
 import type {
   InboundMessage,
@@ -837,9 +838,21 @@ async function processResolved(
     }
   }
 
-  // Build enriched message with CRM context
-  const enrichedMessage = customerContext
-    ? `${customerContext}\n\n[TIN NHẮN MỚI]\n${merged.content}`
+  // ── Track A: block "nhân viên đã trả lời tay" (VÔ ĐIỀU KIỆN — kể cả visitor không có CRM) ──
+  // Tiêm TRƯỚC [TIN NHẮN MỚI] để bot biết chị/nhân viên đã xử lý gì trong lúc takeover
+  // (fix bug "agent mù tin human → nhai lại việc cũ", mọi kênh DM). Chỉ áp cho DM
+  // (group không có luồng takeover-tay). watermark nhích SAU runAgent thành công (bên dưới).
+  let humanBlock = { block: '', watermark: null as string | null };
+  if (merged.peerKind !== 'group') {
+    humanBlock = await buildHumanReplyBlock(merged.channel, merged.chatId, sessionKey, history);
+  }
+
+  // Build enriched message: [HỒ SƠ KHÁCH]? + [block nhân viên]? + [TIN NHẮN MỚI] + tin khách.
+  // BẮT BUỘC có marker [TIN NHẮN MỚI] khi có bất kỳ prefix nào — nếu thiếu, strip-logic
+  // /chat-history gắn _contextOnly rồi XOÁ cả row tin khách (vòng 1 ROLL-F3).
+  const contextPrefix = customerContext ? `${customerContext}\n\n` : '';
+  const enrichedMessage = (contextPrefix || humanBlock.block)
+    ? `${contextPrefix}${humanBlock.block}[TIN NHẮN MỚI]\n${merged.content}`
     : merged.content;
 
   // ── Step 8c: Attach structured CRM data for buildSystemPrompt ──
@@ -912,6 +925,20 @@ async function processResolved(
       // publishing this reply; a new message becomes a fresh cohort/batch.
       if (batchSessionKey && controller && sessionRun.get(batchSessionKey)?.controller === controller) {
         sessionRun.set(batchSessionKey, { controller, phase: 'publishing' });
+      }
+
+      // ── Track A: nhích watermark human_seen_until (SAU runAgent thành công) ──
+      // runAgent trả về không ném lỗi ⇒ block tin-nhân-viên ĐÃ vào history + phiên CLI.
+      // Nhích watermark = created_at tin manual mới nhất đã render → không tiêm lại lượt sau.
+      // Đặt ở ĐÂY (không ở router — router không biết watermark): kể cả reply bị drop
+      // (empty/paused-mid-flight) bên dưới, block vẫn đã được agent "thấy" → không re-inject.
+      if (humanBlock.watermark) {
+        try {
+          await supabase.rpc('channel_session_merge_meta', {
+            p_session_key: sessionKey,
+            p_patch: { human_seen_until: humanBlock.watermark },
+          });
+        } catch { /* best-effort — lần sau tiêm lại, vô hại */ }
       }
 
       // NOTE: assistant reply is persisted to channel_sessions.history inside

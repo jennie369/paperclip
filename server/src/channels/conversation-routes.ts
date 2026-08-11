@@ -163,7 +163,10 @@ router.post('/:key/bot', async (req, res) => {
   // Atomic jsonb-merge RPC — không read-merge-write JS (clobber bot_paused/typing_until).
   // RETURNS integer (rowcount) → FAIL-CLOSED: nếu lỗi HOẶC 0 row (session không tồn tại) thì
   // BÁO operator, KHÔNG trả success giả (class fail-open silent-misroute). Plan 2026-08-10.
-  const { data: rowcount, error } = await supabase.rpc('cskh_toggle_bot', { p_session_key: req.params.key, p_paused: !!paused });
+  // reason/actor (v2): nút "Dừng Bot" = takeover-người → badge "bạn đang trực". Unpause bỏ qua 2 field này.
+  const { data: rowcount, error } = await supabase.rpc('cskh_toggle_bot', {
+    p_session_key: req.params.key, p_paused: !!paused, p_reason: 'manual_takeover', p_actor: 'operator:paperclip',
+  });
   if (error) {
     console.error('[Conversations] toggle bot failed:', error.message);
     return res.status(500).json({ error: 'Không đổi được trạng thái bot — thử lại' });

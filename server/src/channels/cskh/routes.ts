@@ -39,7 +39,10 @@ cskhRouter.post('/send', async (req, res) => {
 
   // Engage human takeover: pause the bot for this session (ATOMIC RPC — KHÔNG read-merge-write
   // clobber bot_paused; plan 2026-08-10). Là side-effect của reply tay: hụt thì LOG (không chặn reply).
-  const { data: pausedRows, error: pauseErr } = await supabase.rpc('cskh_toggle_bot', { p_session_key: sessionKey, p_paused: true });
+  // reason/actor (v2): badge UI hiện "bạn đang trực" + phân biệt takeover-người vs máy tự dừng.
+  const { data: pausedRows, error: pauseErr } = await supabase.rpc('cskh_toggle_bot', {
+    p_session_key: sessionKey, p_paused: true, p_reason: 'manual_takeover', p_actor: 'operator:paperclip',
+  });
   if (pauseErr || !pausedRows) console.error('[cskh/send] takeover pause failed:', pauseErr?.message || 'session not found', sessionKey);
 
   if (channel !== 'cskh-internal') {
@@ -113,8 +116,10 @@ cskhRouter.post('/upload', uploadMem.single('file'), async (req, res) => {
       await pushSupportReply(id, preview);
     }
 
-    // 4. Engage takeover (pause bot cho session này) — ATOMIC RPC (plan 2026-08-10).
-    const { data: pausedRows, error: pauseErr } = await supabase.rpc('cskh_toggle_bot', { p_session_key: sessionKey, p_paused: true });
+    // 4. Engage takeover (pause bot cho session này) — ATOMIC RPC (plan 2026-08-10) + reason/actor (v2).
+    const { data: pausedRows, error: pauseErr } = await supabase.rpc('cskh_toggle_bot', {
+      p_session_key: sessionKey, p_paused: true, p_reason: 'manual_takeover', p_actor: 'operator:paperclip',
+    });
     if (pauseErr || !pausedRows) console.error('[cskh/upload] takeover pause failed:', pauseErr?.message || 'session not found', sessionKey);
 
     return res.json({ success: true });

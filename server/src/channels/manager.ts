@@ -402,7 +402,10 @@ function wrapLegacyChannel(
         ? `${msg.content}\n\n${urlAppends.join('\n')}`
         : msg.content;
 
-      const result = await legacy.send(msg.chatId, finalContent, threadType);
+      // Truyền agentSlug (Track A, plan CSKH-BOT-PAUSE-UX): thiếu → reply BOT rơi về fallback
+      // sent_by='manual' → block "nhân viên đã trả lời" tự nuốt chính reply bot (vòng 1 ROLL-F12/COR-F8,
+      // verify-on-source: đây là caller DUY NHẤT drop slug; các nhánh image/file trên ĐÃ truyền).
+      const result = await legacy.send(msg.chatId, finalContent, threadType, agentSlug);
       if (!result.success) {
         throw new Error(result.error || 'Send failed');
       }

@@ -11,6 +11,7 @@ import { supabase } from './zalo-personal/supabase.js';
 import * as AgentRouter from './router.js';
 import type { AgentConfig } from './types.js';
 import { handleEscalation } from './crm/escalation-handler.js';
+import { isHumanSent } from './sent-by-utils.js';
 
 // Agent files directory — crypto-pattern-scanner/agents/
 // NOTE: fallback MUST include /agents to match buildSystemPrompt (router.ts),
@@ -723,7 +724,7 @@ router.get('/sessions/activity', async (req, res) => {
       channel_raw: m.channel_name,
       thread_id: m.thread_id,
       sender_id: m.to_uid,
-      sender_name: m.sent_by !== 'manual' ? `Agent: ${m.sent_by}` : 'Manual',
+      sender_name: (!m.sent_by || isHumanSent(m.sent_by)) ? 'Manual' : `Agent: ${m.sent_by}`,
       body: m.body,
       status: m.status === 'sent' ? 'done' : m.status,
       handled_by: m.sent_by,
