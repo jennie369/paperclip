@@ -90,9 +90,10 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
       }
     } else {
       // CSKH/channel escalation: pause qua cskh_toggle_bot v2 (1 cửa ghi + owner-window C2/OD-1).
-      // Chị đã bật bot trong 24h → KHÔNG tự pause đè lệnh chị (rowcount=0), TRỪ ca rủi ro (OD-1b).
+      // OD-1 (chị chốt 12/08): lệnh chị thắng máy TRỌN 24h — KHÔNG ngoại lệ (bỏ OD-1b). Trong 24h
+      // kể từ khi chị bật bot, escalation KHÔNG tự pause đè (mọi reason/priority) — vẫn ghi ticket + ping.
       try {
-        const respectWindow = shouldRespectOwnerWindow(ctx.reason, ctx.priority) ? '24 hours' : null;
+        const respectWindow = '24 hours';
         const { data: rc, error: rpcErr } = await supabase.rpc('cskh_toggle_bot', {
           p_session_key: ctx.sessionKey,
           p_paused: true,
@@ -271,17 +272,6 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
   }
 
   return { ticketId, ticketDisplayId };
-}
-
-/**
- * OD-1/OD-1b: escalation có được tự pause đè lệnh chị (trong 24h chị bật bot) không?
- * Mặc định KHÔNG (respect window) — TRỪ ca rủi ro thật để bot tự chạy nguy hiểm hơn:
- * priority='urgent' hoặc reason ∈ {legal_threat, mental_health_concern}.
- */
-function shouldRespectOwnerWindow(reason: string, priority: string): boolean {
-  if (priority === 'urgent') return false;             // khẩn → vẫn được pause
-  if (reason === 'legal_threat' || reason === 'mental_health_concern') return false;
-  return true;                                          // còn lại: lệnh chị thắng trong 24h
 }
 
 const PING_THROTTLE_MS = 30 * 60 * 1000;
