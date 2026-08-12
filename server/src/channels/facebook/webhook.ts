@@ -641,7 +641,9 @@ router.get('/oauth/callback', async (req: Request, res: Response) => {
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ subscribed_fields: ['messages', 'messaging_postbacks', 'feed'] }),
+            // +message_echoes (Track B): nhận bản sao tin Page gửi ra (kể cả chị gõ tay Messenger)
+            // → agent thấy nhân viên đã trả gì. Giữ trong code để OAuth re-subscribe không rớt field.
+            body: JSON.stringify({ subscribed_fields: ['messages', 'messaging_postbacks', 'feed', 'message_echoes'] }),
           }
         );
         const sub = await subRes.json();
