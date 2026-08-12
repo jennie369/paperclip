@@ -213,7 +213,9 @@ function AddFieldInline({ onAdd }: { onAdd: (label: string, value: string) => vo
 }
 
 // Tóm tắt AI — click để sửa inline (textarea) → lưu crm_customers.ai_summary.
-function EditableSummary({ value, onSave, pending }: { value: string; onSave: (v: string) => void; pending?: boolean }) {
+// Exported: dùng chung với CustomerDetailPage (SSOT — trước đây page đó render <p> tĩnh
+// riêng, drift khỏi component này — xem CustomerDetailPage.tsx tab Tổng quan + Memory).
+export function EditableSummary({ value, onSave, pending }: { value: string; onSave: (v: string) => void; pending?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const save = () => { onSave(draft.trim()); setEditing(false); };

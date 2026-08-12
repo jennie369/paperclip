@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LeadScoreBadge } from "./components/LeadScoreBadge";
 import { crmApi } from "@/api/crm";
 import { CustomerNotes } from "./components/CustomerNotes";
+import { EditableSummary } from "../channels/components/CustomerSidebar";
 
 function formatVND(n: number): string {
   return new Intl.NumberFormat('vi-VN').format(n || 0) + '₫';
@@ -292,10 +293,14 @@ export function CustomerDetailPage() {
           {/* TAB: Tổng quan */}
           {activeTab === 'overview' && (
             <div className="space-y-4">
-              {c.ai_summary && (
+              {c?.id && (
                 <Card className="p-4">
                   <h3 className="text-sm font-medium mb-2">Tóm tắt AI</h3>
-                  <p className="text-sm text-muted-foreground">{c.ai_summary}</p>
+                  <EditableSummary
+                    value={String(c.ai_summary || "")}
+                    pending={updateMut.isPending}
+                    onSave={(v) => updateMut.mutate({ ai_summary: v || null })}
+                  />
                   {(c as any).ai_summary_updated_at && <p className="text-xs text-muted-foreground mt-1">Cập nhật: {timeAgo((c as any).ai_summary_updated_at)}</p>}
                 </Card>
               )}
@@ -509,14 +514,13 @@ export function CustomerDetailPage() {
                 <p className="text-sm text-muted-foreground mb-3">
                   Thông tin AI ghi nhớ từ các cuộc hội thoại trước. Agent sẽ tự động sử dụng memory này khi chat với khách.
                 </p>
-                {c.ai_summary ? (
-                  <div className="rounded-lg bg-muted/30 p-4 text-sm whitespace-pre-wrap">{c.ai_summary}</div>
-                ) : (
-                  <div className="py-8 text-center">
-                    <History className="h-10 w-10 mx-auto text-muted-foreground/30 mb-2" />
-                    <p className="text-sm text-muted-foreground">Chưa có memory nào.</p>
-                    <p className="text-xs text-muted-foreground mt-1">Memory sẽ được tạo tự động sau khi agent chat với khách.</p>
-                  </div>
+                <EditableSummary
+                  value={String(c.ai_summary || "")}
+                  pending={updateMut.isPending}
+                  onSave={(v) => updateMut.mutate({ ai_summary: v || null })}
+                />
+                {!c.ai_summary && (
+                  <p className="text-xs text-muted-foreground mt-1">Memory sẽ được tạo tự động sau khi agent chat với khách, hoặc bấm để tự nhập.</p>
                 )}
               </Card>
               <Card className="p-4">
