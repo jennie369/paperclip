@@ -86,11 +86,22 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     "gemini-2.0-flash",
   ],
   antigravity: [
-    "Gemini 3.1 Pro (High)",
-    "Gemini 3.1 Pro (Low)",
+    // ⚠️ ORDER IS BEHAVIOUR HERE (unlike the other two copies): AgentEditPage's
+    // handleProviderChange assigns PROVIDER_MODELS[provider][0] when the user
+    // switches provider, so element 0 is the default model for reply agents.
+    // 2026-08-15: +3.7 Flash x3, +3.6 Flash x3 — 3.7 (High) placed first so
+    // switching to Antigravity defaults to the newest fast model.
+    "Gemini 3.7 Flash (High)",
+    "Gemini 3.7 Flash (Medium)",
+    "Gemini 3.7 Flash (Low)",
+    "Gemini 3.6 Flash (High)",
+    "Gemini 3.6 Flash (Medium)",
+    "Gemini 3.6 Flash (Low)",
     "Gemini 3.5 Flash (High)",
     "Gemini 3.5 Flash (Medium)",
     "Gemini 3.5 Flash (Low)",
+    "Gemini 3.1 Pro (High)",
+    "Gemini 3.1 Pro (Low)",
     "Claude Sonnet 4.6 (Thinking)",
     "Claude Opus 4.6 (Thinking)",
     "GPT-OSS 120B (Medium)",

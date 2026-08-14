@@ -6,14 +6,34 @@ export const label = "Antigravity CLI (Gemini 3.1 Pro)";
 // đoán sai tên model Antigravity expose.
 export const DEFAULT_ANTIGRAVITY_MODEL = "Gemini 3.1 Pro (High)";
 
-// Full Antigravity model picker (verified from the agy IDE model dropdown 15/06).
-// Pass the string VERBATIM via `--model "<id>"`. Default = Gemini 3.1 Pro (High).
+// Full Antigravity model picker. Pass the string VERBATIM via `--model "<id>"`.
+// Default = DEFAULT_ANTIGRAVITY_MODEL above.
+//
+// SOURCE OF TRUTH = `agy models` (second column = the display string agy accepts).
+// The slug column (`gemini-3.7-flash-high`) is NOT accepted by --model; passing an
+// unknown value makes agy print "invalid model selection" and list these exact
+// display strings. Verified 15/08/2026 by passing a bogus --model on purpose.
+//
+// This list is a hand-kept COPY of a live source, so it drifts whenever agy ships
+// new models. `scripts/paperclip_model_list_audit.py --provider antigravity
+// --against-agy` (crypto-pattern-scanner repo) diffs `agy models` against this list
+// plus the two PROVIDER_MODELS.antigravity copies, so the drift gets reported
+// instead of silently sitting here.
+//
+// 2026-08-15: +Gemini 3.7 Flash (High/Medium/Low) +Gemini 3.6 Flash (High/Medium/Low)
+// — agy had shipped them but all three lists still stopped at 3.5.
 export const models = [
-  { id: "Gemini 3.1 Pro (High)", label: "Gemini 3.1 Pro (High)" },
-  { id: "Gemini 3.1 Pro (Low)", label: "Gemini 3.1 Pro (Low)" },
+  { id: "Gemini 3.7 Flash (High)", label: "Gemini 3.7 Flash (High) — Fast" },
+  { id: "Gemini 3.7 Flash (Medium)", label: "Gemini 3.7 Flash (Medium) — Fast" },
+  { id: "Gemini 3.7 Flash (Low)", label: "Gemini 3.7 Flash (Low) — Fast" },
+  { id: "Gemini 3.6 Flash (High)", label: "Gemini 3.6 Flash (High) — Fast" },
+  { id: "Gemini 3.6 Flash (Medium)", label: "Gemini 3.6 Flash (Medium) — Fast" },
+  { id: "Gemini 3.6 Flash (Low)", label: "Gemini 3.6 Flash (Low) — Fast" },
   { id: "Gemini 3.5 Flash (High)", label: "Gemini 3.5 Flash (High) — Fast" },
   { id: "Gemini 3.5 Flash (Medium)", label: "Gemini 3.5 Flash (Medium) — Fast" },
   { id: "Gemini 3.5 Flash (Low)", label: "Gemini 3.5 Flash (Low) — Fast" },
+  { id: "Gemini 3.1 Pro (High)", label: "Gemini 3.1 Pro (High)" },
+  { id: "Gemini 3.1 Pro (Low)", label: "Gemini 3.1 Pro (Low)" },
   { id: "Claude Sonnet 4.6 (Thinking)", label: "Claude Sonnet 4.6 (Thinking)" },
   { id: "Claude Opus 4.6 (Thinking)", label: "Claude Opus 4.6 (Thinking)" },
   { id: "GPT-OSS 120B (Medium)", label: "GPT-OSS 120B (Medium)" },

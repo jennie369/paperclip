@@ -252,11 +252,23 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     'gemini-2.0-flash',
   ],
   antigravity: [
-    'Gemini 3.1 Pro (High)',
-    'Gemini 3.1 Pro (Low)',
+    // Display strings accepted verbatim by `agy --model` (see `agy models`, col 2).
+    // Keep in sync with packages/adapters/antigravity-local/src/index.ts `models`
+    // and ui/src/api/agentConfigs.ts PROVIDER_MODELS.antigravity — the audit probe
+    // `paperclip_model_list_audit.py --provider antigravity --against-agy` diffs
+    // agy's live list against all three copies.
+    // 2026-08-15: +3.7 Flash x3, +3.6 Flash x3 (agy had them, all lists stopped at 3.5).
+    'Gemini 3.7 Flash (High)',
+    'Gemini 3.7 Flash (Medium)',
+    'Gemini 3.7 Flash (Low)',
+    'Gemini 3.6 Flash (High)',
+    'Gemini 3.6 Flash (Medium)',
+    'Gemini 3.6 Flash (Low)',
     'Gemini 3.5 Flash (High)',
     'Gemini 3.5 Flash (Medium)',
     'Gemini 3.5 Flash (Low)',
+    'Gemini 3.1 Pro (High)',
+    'Gemini 3.1 Pro (Low)',
     'Claude Sonnet 4.6 (Thinking)',
     'Claude Opus 4.6 (Thinking)',
     'GPT-OSS 120B (Medium)',
