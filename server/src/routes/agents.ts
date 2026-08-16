@@ -245,6 +245,31 @@ export function agentRoutes(db: Db) {
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
+  /**
+   * Who may force-wake another agent's heartbeat (`/wakeup`, `/heartbeat/invoke`).
+   * Boundary = chain of command ONLY (fork policy, plan CEO-SELF-HEAL 2026-08-16, Codex R1/R2):
+   *   - board actors: unchanged (company access already asserted)
+   *   - agent actor === target: unchanged (self-invoke)
+   *   - agent actor is an ancestor of target in `reportsTo` chain (manager → report): allowed
+   *   - NO shortcut on `role === "ceo"` (self-declared label), NO `canCreateAgents`/`agents:create`
+   *     (config-admin right ≠ right to consume another agent's runs). Peers should assign an issue
+   *     instead — assignment already wakes the assignee (issue-assignment-wakeup.ts).
+   */
+  async function assertCanInvokeAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "agent") return;
+    if (!req.actor.agentId) throw forbidden("Agent authentication required");
+    if (req.actor.agentId === targetAgent.id) return;
+
+    const actorAgent = await svc.getById(req.actor.agentId);
+    if (!actorAgent || actorAgent.companyId !== targetAgent.companyId) {
+      throw forbidden("Agent key cannot access another company");
+    }
+    const chain = await svc.getChainOfCommand(targetAgent.id);
+    if (chain.some((manager) => manager.id === actorAgent.id)) return;
+    throw forbidden("Agent can only invoke itself or its reports");
+  }
+
   async function assertCanReadAgent(req: Request, targetAgent: { companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") return;
@@ -2003,12 +2028,7 @@ export function agentRoutes(db: Db) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
-
-    if (req.actor.type === "agent" && req.actor.agentId !== id) {
-      res.status(403).json({ error: "Agent can only invoke itself" });
-      return;
-    }
+    await assertCanInvokeAgent(req, agent);
 
     const run = await heartbeat.wakeup(id, {
       source: req.body.source,
@@ -2053,12 +2073,7 @@ export function agentRoutes(db: Db) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
-
-    if (req.actor.type === "agent" && req.actor.agentId !== id) {
-      res.status(403).json({ error: "Agent can only invoke itself" });
-      return;
-    }
+    await assertCanInvokeAgent(req, agent);
 
     const run = await heartbeat.invoke(
       id,
