@@ -52,6 +52,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   EyeOff,
   Hexagon,
@@ -209,7 +210,7 @@ function ActorIdentity({ evt, agentMap }: { evt: ActivityEvent; agentMap: Map<st
 }
 
 export function IssueDetail() {
-  const { issueId } = useParams<{ issueId: string }>();
+  const { issueId, companyPrefix } = useParams<{ issueId: string; companyPrefix?: string }>();
   const { selectedCompanyId } = useCompany();
   const { openPanel, closePanel, panelVisible, setPanelVisible } = usePanel();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -227,6 +228,7 @@ export function IssueDetail() {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [optimisticComments, setOptimisticComments] = useState<OptimisticIssueComment[]>([]);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastMarkedReadIssueIdRef = useRef<string | null>(null);
 
@@ -292,8 +294,8 @@ export function IssueDetail() {
     [activeRun, liveRuns],
   );
   const sourceBreadcrumb = useMemo(
-    () => readIssueDetailBreadcrumb(location.state, location.search) ?? { label: "Issues", href: "/issues" },
-    [location.state, location.search],
+    () => readIssueDetailBreadcrumb(location.state, location.search, companyPrefix) ?? { label: "Issues", href: companyPrefix ? `/${companyPrefix}/issues` : "/issues" },
+    [location.state, location.search, companyPrefix],
   );
 
   // Filter out runs already shown by the live widget to avoid duplication
@@ -443,8 +445,19 @@ export function IssueDetail() {
       });
     }
     return threadComments.map((comment) => {
+      let nextComment: IssueDetailComment = { ...comment };
+
+      const metaMatch = comment.body.match(/<!--\s*paperclip-run:([a-zA-Z0-9_-]+)\s+agent:([a-zA-Z0-9_-]+)\s*-->/);
+      if (metaMatch) {
+        nextComment.runId = metaMatch[1];
+        nextComment.runAgentId = metaMatch[2];
+      }
+
       const meta = runMetaByCommentId.get(comment.id);
-      const nextComment: IssueDetailComment = meta ? { ...comment, ...meta } : { ...comment };
+      if (meta) {
+        nextComment = { ...nextComment, ...meta };
+      }
+
       if (
         isQueuedIssueComment({
           comment: nextComment,
@@ -784,9 +797,9 @@ export function IssueDetail() {
     if (issue?.assigneeAgentId) {
       const agent = agents?.find((a) => a.id === issue.assigneeAgentId);
       if (agent) {
-        crumbs.push({ label: agent.name, href: `/agents/${agent.id}` });
+        crumbs.push({ label: agent.name, href: `/${companyPrefix}/agents/${agent.id}` });
       } else {
-        crumbs.push({ label: issue.assigneeAgentId.slice(0, 8), href: `/agents/${issue.assigneeAgentId}` });
+        crumbs.push({ label: issue.assigneeAgentId.slice(0, 8), href: `/${companyPrefix}/agents/${issue.assigneeAgentId}` });
       }
     }
     crumbs.push({ label: hasLiveRuns ? `🔵 ${titleLabel}` : titleLabel });
@@ -797,12 +810,12 @@ export function IssueDetail() {
   // Redirect to identifier-based URL if navigated via UUID
   useEffect(() => {
     if (issue?.identifier && issueId !== issue.identifier) {
-      navigate(createIssueDetailPath(issue.identifier, location.state, location.search), {
+      navigate(createIssueDetailPath(issue.identifier, location.state, location.search, companyPrefix), {
         replace: true,
         state: location.state,
       });
     }
-  }, [issue, issueId, navigate, location.state, location.search]);
+  }, [issue, issueId, navigate, location.state, location.search, companyPrefix]);
 
   // Scroll to top on navigation or reload
   useEffect(() => {
@@ -923,7 +936,7 @@ export function IssueDetail() {
             <span key={ancestor.id} className="flex items-center gap-1">
               {i > 0 && <ChevronRight className="h-3 w-3 shrink-0" />}
               <Link
-                to={createIssueDetailPath(ancestor.identifier ?? ancestor.id, location.state, location.search)}
+                to={createIssueDetailPath(ancestor.identifier ?? ancestor.id, location.state, location.search, companyPrefix)}
                 state={location.state}
                 className="hover:text-foreground transition-colors truncate max-w-[200px]"
                 title={ancestor.title}
@@ -1085,19 +1098,50 @@ export function IssueDetail() {
           className="text-xl font-bold"
         />
 
-        <InlineEditor
-          value={issue.description ?? ""}
-          onSave={(description) => updateIssue.mutateAsync({ description })}
-          as="p"
-          className="text-[15px] leading-7 text-foreground"
-          placeholder="Add a description..."
-          multiline
-          mentions={mentionOptions}
-          imageUploadHandler={async (file) => {
-            const attachment = await uploadAttachment.mutateAsync(file);
-            return attachment.contentPath;
-          }}
-        />
+        {(() => {
+          const descText = issue.description ?? "";
+          const descLineCount = descText.split("\n").length;
+          const isLongDescription = descText.length > 300 || descLineCount > 5;
+
+          return (
+            <div onFocusCapture={() => setDescriptionExpanded(true)}>
+              <InlineEditor
+                value={descText}
+                onSave={(description) => updateIssue.mutateAsync({ description })}
+                as="p"
+                className={cn(
+                  "text-[15px] leading-7 text-foreground",
+                  !descriptionExpanded && isLongDescription ? "line-clamp-5" : ""
+                )}
+                placeholder="Add a description..."
+                multiline
+                mentions={mentionOptions}
+                imageUploadHandler={async (file) => {
+                  const attachment = await uploadAttachment.mutateAsync(file);
+                  return attachment.contentPath;
+                }}
+              />
+              {isLongDescription && (
+                <button
+                  onClick={() => setDescriptionExpanded(!descriptionExpanded)}
+                  className="flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors"
+                >
+                  {descriptionExpanded ? (
+                    <>
+                      <ChevronUp className="h-3.5 w-3.5" />
+                      Thu gọn
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-3.5 w-3.5" />
+                      Xem thêm
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       <PluginSlotOutlet
@@ -1306,7 +1350,7 @@ export function IssueDetail() {
               {childIssues.map((child) => (
                 <Link
                   key={child.id}
-                  to={createIssueDetailPath(child.identifier ?? child.id, location.state, location.search)}
+                  to={createIssueDetailPath(child.identifier ?? child.id, location.state, location.search, companyPrefix)}
                   state={location.state}
                   className="flex items-center justify-between px-3 py-2 text-sm hover:bg-accent/20 transition-colors"
                 >

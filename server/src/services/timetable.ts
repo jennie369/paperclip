@@ -12,6 +12,7 @@ import {
   TIMETABLE_SOURCE_TABLES,
   type TimetableSourceTable,
 } from "@paperclipai/db";
+import { CronExpressionParser } from "cron-parser";
 
 // Raw Supabase client for cc_scripts (no Drizzle schema — see
 // paperclip-dashboard/architecture/FEATURE SPECS/TIMETABLE.md Deferred).
@@ -46,6 +47,7 @@ export interface TimetableRow {
     id: string;
     name: string;
     model: string | null;
+    schedule?: string | null;
   } | null;
   kind: string;                  // heartbeat | task | post | reel | email | reply | routine | manual_task | meeting | reminder
   title: string;
@@ -125,13 +127,14 @@ export function timetableService(db: Db) {
       const { startUtc, endUtc } = hcmDayRange(date);
 
       // Parallel fetch all sources
-      const [heartbeats, issueRows, routineRunRows, manualRows, ccScriptRows, notes] = await Promise.all([
+      const [heartbeats, issueRows, routineRunRows, manualRows, ccScriptRows, notes, projectedRows] = await Promise.all([
         fetchHeartbeatRuns(db, companyId, startUtc, endUtc, filters.agentId),
         fetchIssueRows(db, companyId, startUtc, endUtc, filters.agentId),
         fetchRoutineRuns(db, companyId, startUtc, endUtc),
         fetchManualRows(db, companyId, startUtc, endUtc, filters.agentId),
         filters.agentId ? [] : fetchCcScriptsRows(startUtc, endUtc),
         fetchRowNotes(db, companyId),
+        fetchProjectedCrons(db, companyId, startUtc, endUtc, filters.agentId),
       ]);
 
       // Build lookup for notes by (sourceTable, sourceId)
@@ -151,12 +154,23 @@ export function timetableService(db: Db) {
         return row;
       };
 
+      const filteredProjectedRows = projectedRows.filter(p => {
+        const pTime = new Date(p.startsAt).getTime();
+        return !heartbeats.some(h => {
+          if (h.agent?.id !== p.agent?.id) return false;
+          const hTime = new Date(h.startsAt).getTime();
+          // Filter out if there's a heartbeat within 5 minutes
+          return Math.abs(hTime - pTime) < 5 * 60 * 1000;
+        });
+      });
+
       let rows: TimetableRow[] = [
         ...heartbeats.map(attachNote),
         ...issueRows.map(attachNote),
         ...routineRunRows.map(attachNote),
         ...ccScriptRows.map(attachNote),
         ...manualRows,  // manual rows already have note column inline
+        ...filteredProjectedRows,
       ];
 
       // Filters
@@ -958,4 +972,87 @@ function summarizeResultJson(result: Record<string, unknown>): string | null {
   }
   if ("message" in result && typeof result.message === "string") return result.message.slice(0, 140);
   return null;
+}
+
+async function fetchProjectedCrons(
+  db: Db,
+  companyId: string,
+  startUtc: Date,
+  endUtc: Date,
+  agentId?: string,
+): Promise<TimetableRow[]> {
+  const conditions = [
+    eq(agents.companyId, companyId),
+    or(eq(agents.status, "idle"), eq(agents.status, "busy"), eq(agents.status, "running")),
+  ];
+  if (agentId) conditions.push(eq(agents.id, agentId));
+
+  const activeAgents = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      adapterConfig: agents.adapterConfig,
+      runtimeConfig: agents.runtimeConfig,
+      metadata: agents.metadata,
+    })
+    .from(agents)
+    .where(and(...conditions));
+
+  const projectedRows: TimetableRow[] = [];
+  const nowUtc = Date.now();
+
+  for (const agent of activeAgents) {
+    const meta = agent.metadata as any;
+    const config = agent.adapterConfig as any;
+    const runtime = agent.runtimeConfig as any;
+    const schedule = meta?.schedule || runtime?.heartbeat?.cronExpression || config?.heartbeat?.cronExpression;
+
+    if (!schedule || typeof schedule !== "string") continue;
+    if (schedule === "Không cố định") continue;
+
+    try {
+      const interval = CronExpressionParser.parse(schedule, {
+        currentDate: startUtc,
+        endDate: endUtc,
+        tz: "Asia/Ho_Chi_Minh",
+      });
+
+      while (interval.hasNext()) {
+        const obj = interval.next();
+        const date = obj.toDate();
+        if (date >= startUtc && date <= endUtc) {
+          // If the cron time is far in the past, it's missed, skip it
+          // Only show future crons (allow small grace period)
+          if (date.getTime() < nowUtc - 10 * 60 * 1000) continue;
+
+          projectedRows.push({
+            id: `projected_${agent.id}_${date.getTime()}`,
+            sourceTable: "heartbeat_runs" as TimetableSourceTable,
+            sourceId: `projected_${agent.id}_${date.getTime()}`,
+            startsAt: date.toISOString(),
+            endsAt: null,
+            agent: {
+              id: agent.id,
+              name: agent.name,
+              model: agentModel(agent.adapterConfig as Record<string, unknown>),
+              schedule,
+            },
+            kind: "heartbeat",
+            title: `Heartbeat · system`,
+            description: "Chạy tự động theo lịch heartbeat (Dự kiến)",
+            status: "scheduled",
+            statusExtra: null,
+            resultAuto: "Dự kiến chạy",
+            resultOverride: null,
+            note: null,
+            payload: {},
+            issueId: null,
+          });
+        }
+      }
+    } catch (err) {
+      // ignore invalid crons
+    }
+  }
+  return projectedRows;
 }

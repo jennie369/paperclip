@@ -2,7 +2,9 @@
 // Supports: text, markdown, images, stickers, files, calls, links, emojis, system messages
 // Gracefully handles JSON content and mojibake encoding
 
-import { useState } from "react";
+import { Component, useState, type ErrorInfo, type ReactNode } from "react";
+
+import { useImageLightbox } from "@/components/ImageLightbox";
 import {
   Phone, FileText, Download, AlertCircle, CheckCircle, Clock, Info, ChevronDown, ChevronUp,
   File, FileSpreadsheet, Presentation, Archive, Music, Video, Paperclip, Image, Link2, Palette
@@ -12,11 +14,26 @@ interface MessageContent {
   body: string;
   content_type?: string;
   extra_data?: Record<string, unknown>;
+  // onDark = bubble has a dark background (outbound zinc-800) → inner text elements
+  // (links, URLs, inline code, expand/collapse) must switch to light-on-dark colors.
+  // Default false = light bubble, keep brand `text-primary` accents.
+  onDark?: boolean;
 }
 
 type MsgType = "text" | "image" | "sticker" | "file" | "call" | "link" | "gif" | "reaction" | "system" | "typing";
 
-export function MessageRenderer({ body, content_type, extra_data }: MessageContent) {
+// Each message bubble renders inside an ErrorBoundary so one malformed message
+// (bad JSON, invalid URL, unexpected shape) degrades to plain text instead of
+// throwing during render and blanking the entire chat list.
+export function MessageRenderer({ body, content_type, extra_data, onDark }: MessageContent) {
+  return (
+    <MessageErrorBoundary body={body}>
+      <MessageBody body={body} content_type={content_type} extra_data={extra_data} onDark={onDark} />
+    </MessageErrorBoundary>
+  );
+}
+
+function MessageBody({ body, content_type, extra_data, onDark }: MessageContent) {
   const type = detectType({ body, content_type, extra_data });
 
   switch (type) {
@@ -39,7 +56,38 @@ export function MessageRenderer({ body, content_type, extra_data }: MessageConte
     case "reaction":
       return <ReactionMsg data={extra_data || tryParseJson(body)} />;
     default:
-      return <TextMsg content={body} />;
+      return <TextMsg content={body} onDark={onDark} />;
+  }
+}
+
+// Per-bubble error boundary. Fallback shows the raw body as plain text so the
+// operator still reads the content, instead of a throw unmounting the whole list.
+type MessageErrorBoundaryProps = { body: string; children: ReactNode };
+type MessageErrorBoundaryState = { hasError: boolean };
+
+class MessageErrorBoundary extends Component<MessageErrorBoundaryProps, MessageErrorBoundaryState> {
+  override state: MessageErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): MessageErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    console.error("MessageRenderer failed — falling back to plain text", {
+      error,
+      info: info.componentStack,
+    });
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground italic">
+          {this.props.body?.trim() || "[Không hiển thị được nội dung tin nhắn]"}
+        </div>
+      );
+    }
+    return this.props.children;
   }
 }
 
@@ -158,6 +206,7 @@ function TypingIndicator() {
 
 // ── Image ──
 function ImageMsg({ data }: { data: Record<string, unknown> }) {
+  const { openImage } = useImageLightbox();
   const src = (data?.href || data?.thumb || data?.url || "") as string;
   let params: Record<string, unknown> = {};
   if (typeof data?.params === "string") {
@@ -181,7 +230,9 @@ function ImageMsg({ data }: { data: Record<string, unknown> }) {
         alt="Hình ảnh"
         className="rounded-xl max-h-72 cursor-pointer hover:opacity-90 transition-opacity shadow-sm"
         loading="lazy"
-        onClick={() => window.open(fullSrc, "_blank")}
+        data-lightbox=""
+        data-lightbox-src={fullSrc}
+        onClick={() => openImage(fullSrc, "Hình ảnh")}
         onError={(e) => {
           const el = e.currentTarget;
           el.style.display = "none";
@@ -316,6 +367,16 @@ function CallMsg({ data }: { data: Record<string, unknown> }) {
 }
 
 // ── Link Preview ──
+// new URL() THROWS on empty / scheme-less / relative hrefs. An unguarded call in
+// render crashes the whole message list → white screen. Parse defensively.
+function safeHostname(href: string): string {
+  try {
+    return new URL(href).hostname;
+  } catch {
+    return href.replace(/^https?:\/\//i, "").split("/")[0] || href;
+  }
+}
+
 function LinkMsg({ data }: { data: Record<string, unknown> }) {
   const title = (data?.title || "") as string;
   const desc = (data?.description || "") as string;
@@ -337,7 +398,7 @@ function LinkMsg({ data }: { data: Record<string, unknown> }) {
         {desc && <div className="text-[12px] text-muted-foreground line-clamp-2 mt-0.5">{desc}</div>}
         <div className="text-[11px] text-primary truncate mt-1.5 flex items-center gap-1">
           <Link2 className="h-3 w-3" />
-          {new URL(href).hostname}
+          {safeHostname(href)}
         </div>
       </div>
     </a>
@@ -351,8 +412,20 @@ function ReactionMsg({ data }: { data: Record<string, unknown> }) {
 }
 
 // ── Text with markdown & emoji support ──
-function TextMsg({ content }: { content: string }) {
+function TextMsg({ content, onDark }: { content: string; onDark?: boolean }) {
   let fixed = content;
+
+  // Color variants keyed by bubble background. On a dark bubble (outbound zinc-800)
+  // brand `text-primary` + `bg-muted/50` are too dark to read → switch to light tones.
+  const linkCls = onDark
+    ? "text-sky-300 underline underline-offset-2 hover:text-sky-200"
+    : "text-primary underline underline-offset-2 hover:opacity-80";
+  const codeCls = onDark
+    ? "bg-white/15 text-zinc-50 px-1 py-0.5 rounded text-[13px] font-mono"
+    : "bg-muted/50 px-1 py-0.5 rounded text-[13px] font-mono";
+  const moreCls = onDark
+    ? "flex items-center gap-1 mt-1.5 text-[12px] text-zinc-300 hover:text-white transition-colors"
+    : "flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors";
 
   // Fix mojibake: replacement character U+FFFD (�)
   if (/\uFFFD/.test(fixed)) {
@@ -389,7 +462,7 @@ function TextMsg({ content }: { content: string }) {
       } else if (match[5]) {
         // Code: `code`
         result.push(
-          <code key={keyCounter++} className="bg-muted/50 px-1 py-0.5 rounded text-[13px] font-mono">
+          <code key={keyCounter++} className={codeCls}>
             {match[6]}
           </code>
         );
@@ -401,7 +474,7 @@ function TextMsg({ content }: { content: string }) {
             href={match[9]}
             target="_blank"
             rel="noreferrer"
-            className="text-primary underline underline-offset-2 hover:opacity-80"
+            className={linkCls}
           >
             {match[8]}
           </a>
@@ -414,7 +487,7 @@ function TextMsg({ content }: { content: string }) {
             href={match[10]}
             target="_blank"
             rel="noreferrer"
-            className="text-primary underline underline-offset-2 hover:opacity-80"
+            className={linkCls}
           >
             {match[10]}
           </a>
@@ -451,7 +524,7 @@ function TextMsg({ content }: { content: string }) {
       {isLong && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 mt-1.5 text-[12px] text-primary hover:text-primary/80 transition-colors"
+          className={moreCls}
         >
           {expanded ? (
             <>

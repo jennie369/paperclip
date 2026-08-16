@@ -29,6 +29,39 @@ function decryptResponse(session: ZaloSession, data: string): string {
 }
 
 /**
+ * Zalo trả LỖI ở HAI TẦNG. Tầng ngoài (`res.data.error_code`) hầu như luôn 0
+ * — nó chỉ nói "request tới được server". Lỗi thật (114 tham số không hợp lệ,
+ * 216 không phải bạn bè, ...) nằm trong payload ĐÃ GIẢI MÃ.
+ *
+ * Trước 2026-07-21 chỉ tầng ngoài được đọc ⇒ mọi lần gửi hỏng đều báo
+ * `success: true`, tin vẫn ghi vào lịch sử hội thoại như đã gửi, CSKH tưởng
+ * khách đã nhận. Đây là hỏng-CÂM, tệ hơn hỏng-báo-lỗi.
+ * Ca phát hiện: gửi tới hội thoại có chat_id là SỐ ĐIỆN THOẠI (không phải uid
+ * Zalo) → error_code 114, route vẫn trả success:true.
+ */
+function resolveSendResult(lastResult: any): { success: boolean; messageId?: string; error?: string } {
+  const outerCode = lastResult?.error_code;
+  const inner = lastResult?.decryptedData;
+  const innerCode = inner?.error_code;
+
+  // Tầng nào báo khác 0 cũng là THẤT BẠI.
+  const failedCode = outerCode !== 0
+    ? outerCode
+    : (innerCode !== undefined && innerCode !== 0 ? innerCode : undefined);
+
+  if (failedCode !== undefined) {
+    const msg = (outerCode !== 0 ? lastResult?.error_message : inner?.error_message)
+      || `Zalo tu choi (ma ${failedCode})`;
+    return { success: false, error: `[${failedCode}] ${msg}` };
+  }
+
+  return {
+    success: true,
+    messageId: inner?.msgId || inner?.data?.msgId || lastResult?.data?.msgId,
+  };
+}
+
+/**
  * Encrypt payload with session SecretKey (zpw_enk from getLoginInfo).
  * GoClaw: base64.decode(sess.SecretKey) → AES-CBC encrypt → base64 output
  * NOT the same as ZCID-based encryption used for getLoginInfo API.
@@ -151,11 +184,7 @@ export async function sendDMText(
     }
   }
 
-  return {
-    success: lastResult?.error_code === 0,
-    messageId: lastResult?.decryptedData?.msgId || lastResult?.data?.msgId,
-    error: lastResult?.error_code !== 0 ? lastResult?.error_message : undefined,
-  };
+  return resolveSendResult(lastResult);
 }
 
 /**
@@ -204,16 +233,22 @@ export async function sendGroupText(
         timeout: 30_000,
       });
       lastResult = res.data;
+      // Cùng bẫy 2 tầng như tin riêng: phải giải mã mới thấy lỗi thật (21/07).
+      if (lastResult?.error_code === 0 && typeof lastResult?.data === 'string') {
+        try {
+          const decrypted = decryptResponse(session, lastResult.data);
+          console.log(`[ZaloSend] Decrypted (group):`, decrypted.substring(0, 200));
+          lastResult.decryptedData = JSON.parse(decrypted);
+        } catch (decryptErr: any) {
+          console.warn(`[ZaloSend] Failed to decrypt group response:`, decryptErr.message);
+        }
+      }
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
-  return {
-    success: lastResult?.error_code === 0,
-    messageId: lastResult?.data?.msgId,
-    error: lastResult?.error_code !== 0 ? lastResult?.error_message : undefined,
-  };
+  return resolveSendResult(lastResult);
 }
 
 /**
@@ -264,6 +299,39 @@ async function readImageMeta(filePath: string): Promise<{ width: number; height:
 }
 
 /**
+ * Zalo rejects any upload body over MAX_CHUNK_SIZE (uploadImage always sends
+ * totalChunk=1, so the whole file IS the one chunk). Real photos (phone
+ * camera, screenshots) routinely exceed 512K, so without this every such
+ * image silently failed with error_code 201 — this re-encodes/downscales
+ * until the JPEG buffer fits, instead of uploading the raw file untouched.
+ */
+async function prepareUploadBuffer(
+  filePath: string,
+  width: number,
+  height: number,
+  totalSize: number,
+): Promise<{ buffer: Buffer; width: number; height: number; totalSize: number }> {
+  if (totalSize <= ZALO_API.MAX_CHUNK_SIZE) {
+    return { buffer: fs.readFileSync(filePath), width, height, totalSize };
+  }
+
+  let w = width;
+  let quality = 80;
+  let buffer = await sharp(filePath).resize({ width: w, withoutEnlargement: true }).jpeg({ quality }).toBuffer();
+
+  // Step down dimensions + quality together until it fits; bounded attempts
+  // so a pathological source can't loop forever.
+  for (let attempt = 0; attempt < 6 && buffer.length > ZALO_API.MAX_CHUNK_SIZE; attempt++) {
+    w = Math.round(w * 0.8);
+    quality = Math.max(40, quality - 10);
+    buffer = await sharp(filePath).resize({ width: w, withoutEnlargement: true }).jpeg({ quality }).toBuffer();
+  }
+
+  const outMeta = await sharp(buffer).metadata();
+  return { buffer, width: outMeta.width || w, height: outMeta.height || height, totalSize: buffer.length };
+}
+
+/**
  * Upload an image to Zalo's CDN.
  *
  * Step 1 of the 2-step image-send protocol (zca-js photo_original flow):
@@ -302,9 +370,14 @@ export async function uploadImage(
     return { success: false, error: `File not found: ${filePath}` };
   }
 
-  const { width, height, totalSize } = await readImageMeta(filePath);
-  if (totalSize > ZALO_API.MAX_FILE_SIZE) {
-    return { success: false, error: `File too large: ${totalSize} > ${ZALO_API.MAX_FILE_SIZE}` };
+  const meta = await readImageMeta(filePath);
+  if (meta.totalSize > ZALO_API.MAX_FILE_SIZE) {
+    return { success: false, error: `File too large: ${meta.totalSize} > ${ZALO_API.MAX_FILE_SIZE}` };
+  }
+
+  const { buffer, width, height, totalSize } = await prepareUploadBuffer(filePath, meta.width, meta.height, meta.totalSize);
+  if (totalSize > ZALO_API.MAX_CHUNK_SIZE) {
+    return { success: false, error: `Image still too large after compression: ${totalSize} > ${ZALO_API.MAX_CHUNK_SIZE}` };
   }
 
   const fileName = path.basename(filePath);
@@ -337,7 +410,7 @@ export async function uploadImage(
 
   const FD = (await import('form-data')).default;
   const form = new FD();
-  form.append('chunkContent', fs.createReadStream(filePath), {
+  form.append('chunkContent', buffer, {
     filename: fileName,
     contentType: 'application/octet-stream',
   });

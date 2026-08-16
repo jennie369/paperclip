@@ -34,10 +34,18 @@ const CHANNEL_TYPES: ChannelCardInfo[] = [
   },
   {
     type: "facebook",
-    label: "Facebook",
-    description: "Messenger & Facebook Page",
+    label: "Facebook (Webhook)",
+    description: "Messenger & Page qua Graph API webhook",
     icon: MessageCircle,
     color: "text-blue-600",
+    dotColor: "bg-gray-400",
+  },
+  {
+    type: "facebook_web",
+    label: "Facebook Web Login",
+    description: "Bypass App Review — Reverse Protocol",
+    icon: MessageCircle,
+    color: "text-blue-700",
     dotColor: "bg-gray-400",
   },
   {

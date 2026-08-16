@@ -42,6 +42,8 @@ export const DEFAULT_STATIC_ITEMS: Record<string, string[]> = {
     "/crm/orders",
     "/crm/campaigns",
     "/crm/knowledge-base",
+    "/crm-messaging",
+    "/crm-inbox",
   ],
   "work": [
     "/timetable",

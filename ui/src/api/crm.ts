@@ -25,7 +25,10 @@ export interface CRMCustomer {
   status: string;
   lead_score: number;
   lead_temperature: string;
+  lead_temperature_manual?: string | null;
   ai_summary?: string;
+  next_follow_up_at?: string | null;
+  metadata?: Record<string, any> | null;
   total_orders: number;
   total_revenue: number;
   total_conversations: number;
@@ -73,6 +76,34 @@ export const crmApi = {
 
   getPipeline: () => fetchJSON<Record<string, number>>(`${BASE}/pipeline`),
   getTags: () => fetchJSON<any[]>(`${BASE}/tags`),
+  createTag: (name: string, category?: string) =>
+    fetchJSON<{ id: string; name: string; category?: string }>(`${BASE}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ name, category }),
+    }),
+  addTag: (customerId: string, tag_id: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags`, { method: 'POST', body: JSON.stringify({ tag_id }) }),
+  removeTag: (customerId: string, tagId: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/tags/${tagId}`, { method: 'DELETE' }),
+  getCustomerSegments: (customerId: string) =>
+    fetchJSON<Array<{ id: string; name: string }>>(`${BASE}/customers/${customerId}/segments`),
+  // Notes CRUD
+  addNote: (customerId: string, content: string) =>
+    fetchJSON<any>(`${BASE}/customers/${customerId}/notes`, { method: 'POST', body: JSON.stringify({ content }) }),
+  updateNote: (customerId: string, noteId: string, data: { content?: string; pinned?: boolean }) =>
+    fetchJSON<any>(`${BASE}/customers/${customerId}/notes/${noteId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteNote: (customerId: string, noteId: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/notes/${noteId}`, { method: 'DELETE' }),
+  bulkDeleteNotes: (customerId: string, ids: string[]) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/customers/${customerId}/notes/bulk-delete`, { method: 'POST', body: JSON.stringify({ ids }) }),
+
+  // Interactions CRUD (timeline "Hoạt động gần đây" — crm_interactions)
+  addInteraction: (customerId: string, data: { title?: string; content?: string }) =>
+    fetchJSON<any>(`${BASE}/customers/${customerId}/interactions`, { method: 'POST', body: JSON.stringify(data) }),
+  updateInteraction: (id: string, data: { title?: string; content?: string }) =>
+    fetchJSON<any>(`${BASE}/interactions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteInteraction: (id: string) =>
+    fetchJSON<{ ok: boolean }>(`${BASE}/interactions/${id}`, { method: 'DELETE' }),
 
   // Gemral
   syncGemral: (customerId: string) =>

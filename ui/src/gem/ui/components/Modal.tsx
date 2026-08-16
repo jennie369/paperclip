@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { lockBodyScroll } from '../../../lib/body-scroll-lock';
 
 interface ModalProps {
   isOpen: boolean;
@@ -52,7 +53,7 @@ export function Modal({
     if (!isOpen) return;
 
     document.addEventListener('keydown', handleKeyDown);
-    document.body.style.overflow = 'hidden';
+    const releaseScroll = lockBodyScroll();
 
     // Tìm phần tử có thể focus đầu tiên
     const timer = setTimeout(() => {
@@ -68,7 +69,7 @@ export function Modal({
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = '';
+      releaseScroll();
       clearTimeout(timer);
     };
   }, [isOpen, handleKeyDown]);

@@ -60,7 +60,9 @@ function runGit(args: string[], cwd?: string): Promise<string> {
       reject(new Error(`git ${args[0]} timeout sau ${CLONE_TIMEOUT_MS}ms`));
     }, CLONE_TIMEOUT_MS);
 
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (c: Buffer) => { stderr += c.toString(); });
     proc.on('close', (code: number | null) => {
       clearTimeout(timer);

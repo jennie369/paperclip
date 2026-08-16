@@ -20,6 +20,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "agents-config",
   "war-room",
   "crm",
+  "crm-messaging",
+  "crm-inbox",
   "ops",
   "config",
   "console",

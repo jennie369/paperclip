@@ -10,9 +10,14 @@ import { mkdtempSync } from 'fs';
 import { supabase } from './zalo-personal/supabase.js';
 import * as AgentRouter from './router.js';
 import type { AgentConfig } from './types.js';
+import { handleEscalation } from './crm/escalation-handler.js';
+import { isHumanSent } from './sent-by-utils.js';
 
 // Agent files directory — crypto-pattern-scanner/agents/
-const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner');
+// NOTE: fallback MUST include /agents to match buildSystemPrompt (router.ts),
+// else the "Tệp Agent" viewer reads <root>/<slug> (nonexistent) and shows
+// every file as "chưa tạo" while the runtime correctly reads <root>/agents/<slug>.
+const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/agents');
 const ALLOWED_FILES = ['AGENTS.md', 'HEARTBEAT.md', 'SOUL.md', 'TOOLS.md'];
 
 const router = Router();
@@ -58,6 +63,7 @@ router.get('/', async (_req, res) => {
     history_limit: parseInt(pa.history_limit) || 50,
     session_timeout: parseInt(pa.session_timeout) || 1440,
     enabled: pa.enabled,
+    conversation_id: pa.conversation_id || null,
     created_at: pa.created_at,
     updated_at: pa.updated_at,
   }));
@@ -718,7 +724,7 @@ router.get('/sessions/activity', async (req, res) => {
       channel_raw: m.channel_name,
       thread_id: m.thread_id,
       sender_id: m.to_uid,
-      sender_name: m.sent_by !== 'manual' ? `Agent: ${m.sent_by}` : 'Manual',
+      sender_name: (!m.sent_by || isHumanSent(m.sent_by)) ? 'Manual' : `Agent: ${m.sent_by}`,
       body: m.body,
       status: m.status === 'sent' ? 'done' : m.status,
       handled_by: m.sent_by,
@@ -1304,6 +1310,7 @@ router.get('/:slug', async (req, res) => {
     history_limit: parseInt(pa.history_limit) || 50,
     session_timeout: parseInt(pa.session_timeout) || 1440,
     enabled: pa.enabled,
+    conversation_id: pa.conversation_id || null,
     created_at: pa.created_at,
     updated_at: pa.updated_at,
   });
@@ -1332,6 +1339,7 @@ router.post('/', async (req, res) => {
     history_limit,
     session_timeout,
     enabled,
+    conversation_id,
   } = req.body;
 
   if (!slug || !display_name) {
@@ -1365,10 +1373,11 @@ router.post('/', async (req, res) => {
       language: language || 'vi',
       tools: tools || [],
       can_escalate_to: can_escalate_to || [],
-      fallback_message: fallback_message || 'Xin lỗi, tôi không thể xử lý yêu cầu này.',
+      fallback_message: fallback_message || 'Xin lỗi, em không thể xử lý yêu cầu này.',
       history_limit: history_limit ?? 20,
       session_timeout: session_timeout ?? 3600,
       enabled: enabled ?? true,
+      conversation_id: conversation_id || null,
     })
     .select('*')
     .single();
@@ -1550,6 +1559,7 @@ router.patch('/:slug', async (req, res) => {
   if (req.body.effort_mode !== undefined) paUpdates.effort_mode = req.body.effort_mode;
   if (req.body.max_turns !== undefined) paUpdates.max_turns = parseInt(req.body.max_turns);
   if (req.body.enabled !== undefined) paUpdates.enabled = req.body.enabled;
+  if (req.body.conversation_id !== undefined) paUpdates.conversation_id = req.body.conversation_id || null;
 
   const { data, error } = await supabase
     .from('paperclip_agents')
@@ -1663,6 +1673,123 @@ type TestMediaInput = {
   mimeType?: string;
   filename?: string;
 };
+
+// ── Gem Master corrupted-output containment (2026-08-11 operator-report leak) ──
+// The gem-master PRODUCTION path runs through this /test endpoint (edge fn
+// gemini-proxy → tunnel → here, header x-training-session-id: gemmaster:<userId>).
+// When postProcessReply refuses a corrupted reply we must do more than swallow
+// it: disable the agy branch for a bounded window (metadata.agy_disabled_until —
+// NOT bot_paused, which would strand the customer since nobody staffs the
+// gem-master inbox; the edge falls back to Gemini instead) + ticket + CS ping.
+// In-process cross-customer storm cooldown: >3 corrupted escalations / 15 min →
+// one aggregated ping instead of a flood (a bad rule-file edit hits EVERY user).
+const GM_DISABLE_MINUTES = 30;
+const GM_STORM_WINDOW_MS = 15 * 60 * 1000;
+const GM_STORM_THRESHOLD = 3;
+const gmCorruptedTimestamps: number[] = [];
+
+async function containGemMasterCorruptedOutput(
+  userId: string,
+  triggerMessage: string,
+  escalation: { reason: string; priority: 'low' | 'normal' | 'high' | 'urgent'; summary?: string },
+): Promise<void> {
+  const sessionKey = `gem-master:${userId}`;
+  const nowIso = new Date().toISOString();
+  const untilIso = new Date(Date.now() + GM_DISABLE_MINUTES * 60 * 1000).toISOString();
+
+  // Skip entirely when a disable window is already active (repeat turns of the
+  // same broken agent must not re-ticket/re-ping).
+  try {
+    const { data: sess } = await supabase
+      .from('channel_sessions')
+      .select('metadata')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+    const until = (sess?.metadata as Record<string, unknown> | null)?.agy_disabled_until;
+    if (typeof until === 'string' && Date.parse(until) > Date.now()) {
+      console.warn(`[GM-contain] ${sessionKey}: agy already disabled until ${until} — skip re-escalation`);
+      return;
+    }
+  } catch { /* best-effort — continue */ }
+
+  // ① Session shell upsert — FULL mirror column shape (chat_id is NOT NULL and
+  // the column is channel_name; schema verified 2026-08-11). First-turn safe:
+  // the edge mirror only creates this row AFTER it receives a reply, so the
+  // corrupted first turn would otherwise have nothing to patch.
+  try {
+    await supabase.from('channel_sessions').upsert(
+      {
+        session_key: sessionKey,
+        channel_name: 'gem-master',
+        agent_slug: 'gem-master',
+        peer_kind: 'direct',
+        chat_id: userId,
+        sender_id: userId,
+        status: 'active',
+        last_message_at: nowIso,
+      },
+      { onConflict: 'session_key' },
+    );
+    // ② Metadata via atomic jsonb-merge RPC — never read-merge-write the whole
+    // object (BUG-081 clobber class) and never inline metadata in the upsert
+    // (would overwrite unrelated keys).
+    await supabase.rpc('channel_session_merge_meta', {
+      p_session_key: sessionKey,
+      p_patch: {
+        agy_disabled_until: untilIso,
+        agy_disabled_reason: escalation.reason,
+        agy_disabled_at: nowIso,
+      },
+    });
+    console.warn(`[GM-contain] ${sessionKey}: agy disabled until ${untilIso} (${escalation.reason})`);
+  } catch (err) {
+    console.error(`[GM-contain] ${sessionKey}: containment write failed`, err);
+  }
+
+  // ③ Ticket + Telegram ping — fire-and-forget (this sits on the edge's 40s
+  // budget; never await network side-effects here). Storm cooldown: past the
+  // threshold, one aggregated warning instead of per-customer pings.
+  const now = Date.now();
+  gmCorruptedTimestamps.push(now);
+  while (gmCorruptedTimestamps.length && now - gmCorruptedTimestamps[0] > GM_STORM_WINDOW_MS) {
+    gmCorruptedTimestamps.shift();
+  }
+  const stormHits = gmCorruptedTimestamps.length;
+  const summary = (escalation.summary || 'Bot lộ báo cáo nội bộ — đã chặn gửi.')
+    .replace(/\[PAPERCLIP_REPLY_CHANNEL\]/g, '');
+  if (stormHits > GM_STORM_THRESHOLD) {
+    console.error(
+      `[GM-contain] STORM: ${stormHits} corrupted-output escalations in 15min — suppressing per-customer ping (session ${sessionKey})`,
+    );
+    return;
+  }
+  void handleEscalation({
+    agentSlug: 'gem-master',
+    sessionKey,
+    channelName: 'gem-master',
+    chatId: userId,
+    // crm_tickets.customer_id FK → crm_customers(id); the gem-master userId is a
+    // profiles/auth uuid, NOT a crm_customers id — passing it fails the insert
+    // for REAL users too (verified 2026-08-11 E2E). The user stays traceable via
+    // ticket metadata.chat_id + source_session_key.
+    customerId: null,
+    customerName: null,
+    reason: escalation.reason,
+    priority: escalation.priority || 'high',
+    summary:
+      stormHits === GM_STORM_THRESHOLD
+        ? `${summary} ⚠️ Ca thứ ${stormHits}/15 phút — nghi lỗi hàng loạt, các ca sau sẽ không ping lẻ.`
+        : summary,
+    triggerMessage: triggerMessage.substring(0, 1000),
+    agentReply: '(bị guard chặn — không gửi cho khách)',
+    mode: 'live', // MUST stay 'live': 'training' skips the containment step entirely
+    pausePatch: {
+      agy_disabled_until: untilIso,
+      agy_disabled_reason: escalation.reason,
+      agy_disabled_at: nowIso,
+    },
+  }).catch((err) => console.error(`[GM-contain] ${sessionKey}: handleEscalation failed`, err));
+}
 
 router.post('/:slug/test', async (req, res) => {
   const { slug } = req.params;
@@ -1780,8 +1907,26 @@ router.post('/:slug/test', async (req, res) => {
         }
       | undefined;
 
+    // Gem Master corrupted-output containment (2026-08-11). Discriminator is the
+    // RAW header value (gemmaster:<userId>) — NOT sessionKey, which the server
+    // prefixes to `training:gem-master:gemmaster:<userId>`. Ordinary Training
+    // Room / UI tests carry no gemmaster: header and are untouched.
+    let finalReply = reply;
+    if (escalation?.reason === 'agent_output_corrupted' && trainingSessionId?.startsWith('gemmaster:')) {
+      const gmUserId = trainingSessionId.slice('gemmaster:'.length).trim();
+      if (gmUserId) {
+        void containGemMasterCorruptedOutput(gmUserId, message || '', escalation).catch((err) =>
+          console.error('[GM-contain] async containment failed', err),
+        );
+        // Empty reply → edge callAntigravityAgent() returns null → gemini-proxy
+        // falls back to the Gemini branch, so the customer still gets a REAL
+        // answer instead of the generic handoff line.
+        finalReply = '';
+      }
+    }
+
     res.json({
-      reply,
+      reply: finalReply,
       agent: slug,
       provider: config.provider,
       model: config.model,

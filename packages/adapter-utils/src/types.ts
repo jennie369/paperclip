@@ -330,6 +330,8 @@ export interface CreateConfigValues {
   adapterType: string;
   cwd: string;
   instructionsFilePath?: string;
+  /** Antigravity (agy) only: pre-seeded agy brain id to resume. */
+  conversationId?: string;
   promptTemplate: string;
   model: string;
   thinkingEffort: string;

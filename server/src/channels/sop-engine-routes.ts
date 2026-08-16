@@ -1243,10 +1243,12 @@ router.post('/batch-jobs/trigger', async (req, res) => {
       res.write(`event: batch:timeout\ndata: ${JSON.stringify({ after_ms: 600000 })}\n\n`);
     }, 600000);
 
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (chunk) => {
       const text = chunk.toString();
       res.write(`event: batch:stdout\ndata: ${JSON.stringify({ text })}\n\n`);
     });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (chunk) => {
       const text = chunk.toString();
       res.write(`event: batch:stderr\ndata: ${JSON.stringify({ text })}\n\n`);

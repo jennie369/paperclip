@@ -20,7 +20,7 @@ let _purify: ReturnType<typeof DOMPurify> | null = null;
 function getPurify() {
   if (!_purify) {
     const window = new JSDOM('').window;
-    _purify = DOMPurify(window as unknown as Window);
+    _purify = DOMPurify(window as any);
   }
   return _purify;
 }
@@ -48,14 +48,23 @@ function sanitizeEmailHtml(rawHtml: string): { clean: string; removed: number } 
   return { clean, removed: Math.max(0, before - clean.length) };
 }
 
-// Dedicated Realtime client — service_role key + realtime config
+// Dedicated Realtime client — service_role key + realtime config.
+// LAZY init: đọc key từ env lúc dùng lần đầu (sau khi dotenv nạp) + KHÔNG fallback hardcode.
 const REALTIME_URL = 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
-const REALTIME_KEY = process.env.GEMRAL_SUPABASE_SERVICE_KEY
-  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZmtiY256cW96emtvaHdiZ2JrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjE3NzUzNiwiZXhwIjoyMDc3NzUzNTM2fQ.pI9VjPhcl0sds1mcPsa5nnRv6ODDHbI29Q1ViMLoEQg';
-const realtimeClient = createClient(REALTIME_URL, REALTIME_KEY, {
-  realtime: { params: { eventsPerSecond: 5 } },
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+let _realtimeClient: ReturnType<typeof createClient> | null = null;
+function getRealtimeClient(): ReturnType<typeof createClient> {
+  if (!_realtimeClient) {
+    const key = process.env.GEMRAL_SUPABASE_SERVICE_KEY;
+    if (!key) {
+      throw new Error('[ops-routes] GEMRAL_SUPABASE_SERVICE_KEY chưa set — bắt buộc cho realtime client (service_role).');
+    }
+    _realtimeClient = createClient(REALTIME_URL, key, {
+      realtime: { params: { eventsPerSecond: 5 } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return _realtimeClient;
+}
 
 const router = Router();
 
@@ -135,7 +144,7 @@ async function handlePublishInsert(row: any) {
 function startPublishRealtime() {
   if (realtimeSub) return;
   try {
-    realtimeSub = realtimeClient
+    realtimeSub = getRealtimeClient()
       .channel('publish-queue-inserts')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'cc_publish_queue' },
@@ -456,10 +465,12 @@ router.post('/content-pipeline/execute/:script', (req, res) => {
 
   res.write(`data: ${JSON.stringify({ type: 'start', script: scriptKey, path: scriptPath })}\n\n`);
 
+  proc.stdout?.setEncoding("utf8");
   proc.stdout.on('data', (data) => {
     res.write(`data: ${JSON.stringify({ type: 'stdout', text: data.toString() })}\n\n`);
   });
 
+  proc.stderr?.setEncoding("utf8");
   proc.stderr.on('data', (data) => {
     res.write(`data: ${JSON.stringify({ type: 'stderr', text: data.toString() })}\n\n`);
   });
@@ -575,6 +586,10 @@ router.post('/content-pipeline/scripts', async (req, res) => {
       tags,
       notes,
       metadata,
+      // Content gating — tier tối thiểu + danh sách course được phép đọc.
+      // NULL = không khóa. Cột do migration 20260613120000 thêm vào cc_scripts.
+      required_tier,
+      required_course_ids,
     } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: 'Tiêu đề không được trống' });
     // cc_scripts NOT NULL columns without defaults: title, content_type, track,
@@ -595,15 +610,21 @@ router.post('/content-pipeline/scripts', async (req, res) => {
       writing_mode: writing_mode || 'mode_1_calm',
       brand_voice: brand_voice || 'jennie',
       status: status || 'draft',
-      publish_mode: publish_mode || 'scheduled',
+      publish_mode: publish_mode
+        || (content_type === 'push_notification' ? 'immediate' : 'scheduled'),
     };
-    if (posted_account !== undefined) insertRow.posted_account = posted_account;
+    const resolvedPostedAccount = posted_account
+      || (content_type === 'news' ? 'forum' : undefined)
+      || (content_type === 'push_notification' ? 'push' : undefined);
+    if (resolvedPostedAccount !== undefined) insertRow.posted_account = resolvedPostedAccount;
     if (posted_time_slot !== undefined) insertRow.posted_time_slot = posted_time_slot;
     if (scheduled_at !== undefined) insertRow.scheduled_at = scheduled_at;
     if (Array.isArray(image_urls)) insertRow.image_urls = image_urls;
     if (Array.isArray(tags)) insertRow.tags = tags;
     if (notes !== undefined) insertRow.notes = notes;
     if (metadata !== undefined) insertRow.metadata = metadata;
+    if (required_tier !== undefined) insertRow.required_tier = required_tier;
+    if (required_course_ids !== undefined) insertRow.required_course_ids = required_course_ids;
     const { data, error } = await supabase.from('cc_scripts').insert(insertRow).select('*').single();
     if (error) throw error;
     // Fire-and-forget: create matching Notion page in CONTENT PLANNER 2026 so
@@ -673,9 +694,10 @@ router.post('/content-pipeline/generate', async (req, res) => {
       extra_prompt,
     } = req.body || {};
     const ct: string = content_type || 'social_post';
-    // For DOC-* rows we want job_type = 'doc_tai_lieu' so batch_processor knows
-    // it's a knowledge-driven doc write. Other content_types keep legacy mapping.
-    const jobType = ct.startsWith('DOC-') ? 'doc_tai_lieu' : ct;
+    // For DOC-* and DST-* rows we want job_type = 'doc_tai_lieu' so batch_processor
+    // knows it's a knowledge-driven doc write. Other content_types keep legacy mapping.
+    // 2026-05-13: extended DST- (Daily SOP email sequences) — same semantic as DOC-ONB-*.
+    const jobType = (ct.startsWith('DOC-') || ct.startsWith('DST-')) ? 'doc_tai_lieu' : ct;
     // Default to 'gemini' — Claude is BLOCKED in batch_processor per Jennie's
     // directive (scripts/batch_processor.py line 3542 fallback). If UI doesn't
     // pass ai_provider, batch would default to 'claude' and fail. Keep BE default
@@ -809,7 +831,9 @@ router.post('/content-pipeline/delegate', (req, res) => {
     windowsHide: true,
   });
 
+  proc.stdout?.setEncoding("utf8");
   proc.stdout?.on('data', (chunk: Buffer) => { res.write(`data: ${JSON.stringify({ type: 'stdout', text: chunk.toString() })}\n\n`); });
+  proc.stderr?.setEncoding("utf8");
   proc.stderr?.on('data', (chunk: Buffer) => { res.write(`data: ${JSON.stringify({ type: 'stderr', text: chunk.toString() })}\n\n`); });
   proc.on('close', (code: number | null) => { res.write(`data: ${JSON.stringify({ type: 'exit', code, agent: agent_slug })}\n\n`); res.end(); });
   proc.on('error', (err: Error) => { res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`); res.end(); });
@@ -826,8 +850,14 @@ router.post('/content-pipeline/reload-agents', (_req, res) => {
 router.get('/content-pipeline/schedule', async (req, res) => {
   try {
     const { date } = req.query;
-    let query = supabase.from('cc_calendar_events').select('*').order('scheduled_at', { ascending: true });
-    if (date) query = query.gte('scheduled_at', `${date}T00:00:00`).lte('scheduled_at', `${date}T23:59:59`);
+    // Column is `scheduled_date` (a DATE) plus a separate `scheduled_time`; the old
+    // `scheduled_at` never existed, so PostgREST rejected every one of these queries.
+    let query = supabase
+      .from('cc_calendar_events')
+      .select('*')
+      .order('scheduled_date', { ascending: true })
+      .order('scheduled_time', { ascending: true, nullsFirst: true });
+    if (date) query = query.eq('scheduled_date', date as string);
     const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
@@ -996,7 +1026,7 @@ router.put('/content-pipeline/skills/:name', (req, res) => {
 
 router.post('/email/send', async (req, res) => {
   try {
-    const { from, to, subject, html } = req.body;
+    const { from, to, bcc, subject, html } = req.body;
     if (!to || !subject || !html) {
       return res.status(400).json({ success: false, error: 'Thiếu to, subject hoặc html' });
     }
@@ -1006,12 +1036,17 @@ router.post('/email/send', async (req, res) => {
       return res.status(500).json({ success: false, error: 'RESEND_API_KEY chưa được cấu hình' });
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       from: from || 'GEM <noreply@gemral.com>',
       to: Array.isArray(to) ? to : [to],
       subject,
       html,
     };
+    if (bcc) {
+      const bccList = Array.isArray(bcc) ? bcc : [bcc];
+      const cleaned = bccList.map((e: string) => e.trim()).filter(Boolean);
+      if (cleaned.length > 0) payload.bcc = cleaned;
+    }
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -1040,10 +1075,13 @@ router.post('/email/send', async (req, res) => {
 
 router.get('/affiliate/stats', async (_req, res) => {
   try {
-    const { data: profiles } = await supabase.from('affiliate_profiles').select('partnership_role, is_active, total_sales');
+    // Cột vai của affiliate_profiles là `role` (CHECK IN ('ctv','kol')).
+    // `partnership_role` là cột của `profiles`, KHÔNG có ở đây ⇒ query cột lạ thì
+    // PostgREST trả 400 và `catch` dưới đây nuốt thành 0/0/0 (đọc như "chưa có đối tác").
+    const { data: profiles } = await supabase.from('affiliate_profiles').select('role, is_active, total_sales');
     const all = profiles || [];
-    const ctv = all.filter(p => p.partnership_role === 'ctv' || !p.partnership_role).length;
-    const kol = all.filter(p => p.partnership_role === 'kol').length;
+    const ctv = all.filter(p => p.role === 'ctv' || !p.role).length;
+    const kol = all.filter(p => p.role === 'kol').length;
     const monthSales = all.reduce((s, p) => s + (parseFloat(p.total_sales) || 0), 0);
     const { count: pendingCount } = await supabase.from('partnership_applications').select('id', { count: 'exact', head: true }).eq('status', 'pending');
     res.json({ ctv, kol, pending: pendingCount || 0, month_sales: monthSales });
@@ -1062,7 +1100,7 @@ router.get('/affiliate/list', async (req, res) => {
     const { tier, role, active } = req.query;
     let query = supabase.from('affiliate_profiles').select('*').order('total_sales', { ascending: false });
     if (tier) query = query.eq('ctv_tier', String(tier));
-    if (role) query = query.eq('partnership_role', String(role));
+    if (role) query = query.eq('role', String(role));
     if (active === 'true') query = query.eq('is_active', true);
     if (active === 'false') query = query.eq('is_active', false);
     const { data } = await query;
@@ -1076,7 +1114,13 @@ router.post('/affiliate/:id/approve', async (req, res) => {
     if (!app) return res.status(404).json({ error: 'Không tìm thấy đơn' });
     await supabase.from('partnership_applications').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', req.params.id);
     if (app.user_id) {
-      await supabase.from('affiliate_profiles').upsert({ user_id: app.user_id, partnership_role: app.application_type || 'ctv', ctv_tier: 'bronze', is_active: true }, { onConflict: 'user_id' });
+      // `role` (KHÔNG phải `partnership_role`) + chặn giá trị ngoài CHECK: application_type
+      // cho phép 'affiliate' nhưng affiliate_profiles.role chỉ nhận ctv/kol — cùng guard với
+      // admin web (frontend ApplicationsPage/UsersPage). Thiếu `role` thì rơi vào DEFAULT và
+      // trước 2026-07-30 DEFAULT là 'affiliate' ⇒ 23514 câm.
+      const affRole = ['ctv', 'kol'].includes(app.application_type) ? app.application_type : 'ctv';
+      const { error: affErr } = await supabase.from('affiliate_profiles').upsert({ user_id: app.user_id, role: affRole, ctv_tier: 'bronze', is_active: true }, { onConflict: 'user_id' });
+      if (affErr) console.error('[affiliate/approve] upsert affiliate_profiles that bai:', affErr);
       await supabase.from('profiles').update({ partnership_role: app.application_type || 'ctv', ctv_tier: 'bronze' }).eq('id', app.user_id);
     }
     res.json({ success: true });
@@ -1598,7 +1642,9 @@ router.post('/content-pipeline/planner/delegate-ceo', async (req, res) => {
       windowsHide: true,
     });
 
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (d: Buffer) => send({ type: 'stdout', text: d.toString() }));
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (d: Buffer) => send({ type: 'stderr', text: d.toString() }));
     proc.on('close', (code: number) => { send({ type: 'exit', code }); res.end(); });
     req.on('close', () => { if (!proc.killed) proc.kill(); });
@@ -1790,7 +1836,9 @@ function spawnPublisher(args: string[], label: string): Promise<{ code: number; 
   return new Promise((resolve) => {
     const proc = spawn('python', [SCHEDULER_SCRIPT, ...args], { cwd: SCHEDULER_CWD, env: { ...process.env, PYTHONUTF8: '1' }, windowsHide: true });
     let stdout = '', stderr = '';
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code: number) => {
       console.log(`[Publisher:${label}] exit=${code} stdout=${stdout.length} stderr=${stderr.length}`);
@@ -1866,6 +1914,198 @@ router.post('/content-pipeline/scripts/:id/publish-now', async (req, res) => {
     res.json({ message: 'Đang publish ngay — check Log Viewer hoặc cc_publish_queue để track', script_id: id });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Lỗi publish-now' });
+  }
+});
+
+// POST /content-pipeline/scripts/:id/dispatch — 1 nút "Đăng ngay / Lên lịch":
+// branch theo publish_mode. immediate → đăng NOW (--single). scheduled → đặt lịch
+// Meta BS theo scheduled_at (--single-schedule), validate buffer ≥20 phút.
+router.post('/content-pipeline/scripts/:id/dispatch', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: script, error: sErr } = await supabase
+      .from('cc_scripts')
+      .select('id, title, body, posted_account, publish_mode, scheduled_at, status, metadata')
+      .eq('id', id)
+      .single();
+    if (sErr) throw sErr;
+    const mode = (script.publish_mode || 'immediate') as string;
+    const account = script.posted_account as string | null;
+    const isScheduledMode = (mode === 'scheduled' || mode === 'schedule2week');
+
+    // ── Resend newsletter broadcast (không qua Playwright) ──
+    // Mỗi broadcast = 1 segment. metadata.resend_segments (array) quyết định
+    // segments; default active_customer + partner_ctv. create-broadcast = draft,
+    // phải /send mới gửi (kèm scheduled_at nếu publish_mode=scheduled).
+    if (account === 'resend') {
+      const apiKey = process.env.RESEND_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: 'RESEND_API_KEY chưa cấu hình', code: 'NO_RESEND_KEY' });
+      const meta = (script.metadata || {}) as Record<string, any>;
+      const html = (script.body || '').trim();
+      if (!html) return res.status(422).json({ error: 'Body trống — newsletter cần nội dung HTML.', code: 'EMPTY_BODY' });
+      const scheduledAt = isScheduledMode ? script.scheduled_at : undefined;
+      if (isScheduledMode && !scheduledAt) {
+        return res.status(422).json({ error: 'publish_mode=scheduled nhưng chưa có scheduled_at.', code: 'NO_SCHEDULE' });
+      }
+      const segs: string[] = (Array.isArray(meta.resend_segments) && meta.resend_segments.length)
+        ? meta.resend_segments : ['active_customer', 'partner_ctv'];
+      const subject = meta.email_subject || script.title || 'Gemral Newsletter';
+      const fromName = meta.from_name || 'Gemral';
+      const fromEmail = meta.from_email || 'hello@gemral.com';
+      const replyTo = meta.reply_to || fromEmail;
+      const previewText = meta.preview_text || undefined;
+      // Segment name → Resend audience UUID (audience ≡ segment trong Resend).
+      const RESEND_SEGMENT_MAP: Record<string, string> = {
+        active_customer: '23de5912-92ae-4f4a-8af5-4aeed56b1264',
+        partner_ctv: '4e407443-ea09-4ec2-8634-d506e91d6f8a',
+        vip_high_spender: '0e7a2ec3-245d-4cc9-9ad1-c411732adb91',
+        dormant: '068dd425-50b4-4520-a040-ac53bada2c1b',
+        new_signup: '701a0b97-d02e-4682-a104-ec1b9918fb2e',
+        'Waitlist Leads': '4e94549c-653b-4f7b-98b7-926777939eec',
+        Test: 'a3b2b965-2a6f-477f-84ad-e02af7b2d2ac',
+      };
+      const rHeaders = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+      const broadcasts: Array<Record<string, unknown>> = [];
+      for (const seg of segs) {
+        const audienceId = RESEND_SEGMENT_MAP[seg] || seg; // cho phép raw UUID
+        try {
+          const cResp = await fetch('https://api.resend.com/broadcasts', {
+            method: 'POST', headers: rHeaders,
+            // Resend broadcast `name` max 70 chars — keep the segment tag visible, truncate subject.
+            body: JSON.stringify((() => {
+              const segTag = ` — ${seg}`;
+              const bname = `${subject.slice(0, Math.max(0, 70 - segTag.length))}${segTag}`.slice(0, 70);
+              return {
+                audience_id: audienceId,
+                from: `${fromName} <${fromEmail}>`,
+                subject, html, name: bname,
+                reply_to: replyTo,
+                ...(previewText ? { preview_text: previewText } : {}),
+              };
+            })()),
+          });
+          const cBody: any = await cResp.json().catch(() => ({}));
+          if (!cResp.ok) { broadcasts.push({ segment: seg, error: `create ${cResp.status}: ${JSON.stringify(cBody).slice(0, 200)}` }); continue; }
+          const bid = cBody?.id ?? cBody?.data?.id;
+          const sResp = await fetch(`https://api.resend.com/broadcasts/${bid}/send`, {
+            method: 'POST', headers: rHeaders,
+            body: JSON.stringify(scheduledAt ? { scheduled_at: scheduledAt } : {}),
+          });
+          const sBody: any = await sResp.json().catch(() => ({}));
+          if (!sResp.ok) { broadcasts.push({ segment: seg, broadcast_id: bid, error: `send ${sResp.status}: ${JSON.stringify(sBody).slice(0, 200)}` }); continue; }
+          broadcasts.push({ segment: seg, broadcast_id: bid, scheduled_at: scheduledAt || 'now', ok: true });
+        } catch (e: any) {
+          broadcasts.push({ segment: seg, error: e?.message || 'fetch failed' });
+        }
+      }
+      const okCount = broadcasts.filter((b) => b.ok).length;
+      await supabase.from('cc_scripts').update({
+        status: okCount > 0 ? 'published' : 'approved',
+        published_at: okCount > 0 ? new Date().toISOString() : null,
+        metadata: { ...meta, resend_broadcasts: broadcasts, dispatched_at: new Date().toISOString() },
+      }).eq('id', id);
+      if (okCount === 0) {
+        const firstErr = (broadcasts.find((b) => b.error)?.error as string) || 'unknown';
+        return res.status(502).json({ error: `Broadcast fail — ${firstErr}`, code: 'RESEND_ALL_FAILED', broadcasts });
+      }
+      const partialErr = broadcasts.find((b) => b.error)?.error as string | undefined;
+      return res.json({
+        message: `Newsletter: ${okCount}/${broadcasts.length} broadcast ${scheduledAt ? 'đã lên lịch' : 'đã gửi'}${partialErr ? ` (1 lỗi: ${partialErr})` : ''}`,
+        mode: isScheduledMode ? 'scheduled' : 'immediate', broadcasts,
+      });
+    }
+
+    // Nút dispatch hiện cả ở draft → auto-approve trước khi đăng/lên lịch (approve+đăng 1 phát).
+    if (script.status === 'draft') {
+      await supabase.from('cc_scripts')
+        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .eq('id', id);
+      void updatePageStatus(id, 'approved').catch(() => {});
+    }
+
+    // FB Page/Profile cần Chrome GUI → phải đăng từ phiên user (Task Scheduler),
+    // KHÔNG spawn từ server (pm2 không launch được Chrome). forum/push/resend OK trên server.
+    const needsChrome = !!account && (account.startsWith('page_') || account.startsWith('profile_'));
+    const enqueuePending = async (source: string) => {
+      const { data: existing } = await supabase
+        .from('cc_publish_queue')
+        .select('id').eq('script_id', id).eq('status', 'pending');
+      if (!(existing?.length)) {
+        await supabase.from('cc_publish_queue').insert({
+          script_id: id,
+          trigger_type: 'manual',
+          channel_target: account,
+          status: 'pending',
+          metadata: { source, user: req.headers['x-user'] || 'unknown' },
+        });
+      }
+    };
+
+    const enqueue = async (source: string) => {
+      const { data: claimed } = await supabase
+        .from('cc_publish_queue')
+        .update({ status: 'processing', picked_at: new Date().toISOString() })
+        .eq('script_id', id)
+        .eq('status', 'pending')
+        .select('id');
+      if (!(claimed?.length)) {
+        await supabase.from('cc_publish_queue').insert({
+          script_id: id,
+          trigger_type: 'manual',
+          channel_target: account,
+          status: 'processing',
+          picked_at: new Date().toISOString(),
+          metadata: { source, user: req.headers['x-user'] || 'unknown' },
+        });
+      }
+    };
+    const finalizeQueue = (label: string) => (r: { code: number; stderr: string }) => {
+      supabase.from('cc_publish_queue')
+        .update({
+          status: r.code === 0 ? 'done' : 'failed',
+          published_at: r.code === 0 ? new Date().toISOString() : null,
+          error_message: r.code !== 0 ? r.stderr.slice(0, 2000) : null,
+        })
+        .eq('script_id', id).eq('status', 'processing')
+        .then(() => {});
+      if (r.code === 0) {
+        void (async () => {
+          const quick = await updatePageStatus(id, 'published');
+          if (!quick.ok && quick.note === 'no-page') await pushScript(id);
+        })().catch((e) => console.warn(`[notion-push] ${label} fail`, e));
+      }
+    };
+
+    if (mode === 'scheduled' || mode === 'schedule2week') {
+      if (!script.scheduled_at) {
+        return res.status(422).json({ error: 'Chưa có lịch đăng (scheduled_at). Chọn ngày giờ trước khi lên lịch.', code: 'NO_SCHEDULE' });
+      }
+      const whenMs = new Date(script.scheduled_at).getTime();
+      if (isNaN(whenMs) || whenMs < Date.now() + 20 * 60 * 1000) {
+        return res.status(422).json({ error: 'Lịch quá gần — Meta BS cần ≥20 phút. Chọn giờ xa hơn.', code: 'SCHEDULE_TOO_SOON' });
+      }
+      if (needsChrome) {
+        await enqueuePending('api_dispatch_schedule_local');
+        return res.json({ message: 'Đã vào hàng đợi — Task Scheduler (phiên user) sẽ lên lịch Meta BS trong ~2 phút', script_id: id, mode: 'scheduled', via: 'local_queue' });
+      }
+      await enqueue('api_dispatch_schedule');
+      spawnPublisher(['--single-schedule', id], `sched-${id.slice(0, 8)}`).then(finalizeQueue('dispatch-schedule'));
+      return res.json({ message: 'Đang lên lịch Meta BS — check cc_publish_queue để track', script_id: id, mode: 'scheduled' });
+    }
+
+    // immediate / threshold_5 → đăng NOW
+    await supabase.from('cc_scripts').update({ publish_ready_at: new Date().toISOString() }).eq('id', id);
+    if (needsChrome) {
+      // FB (page_/profile_) cần Chrome GUI — server (pm2) KHÔNG launch được Chrome.
+      // Enqueue pending → Task Scheduler chạy poll_publish_queue.py --local (phiên user) đăng.
+      await enqueuePending('api_dispatch_now_local');
+      return res.json({ message: 'Đã vào hàng đợi — Task Scheduler (phiên user) sẽ đăng FB trong ~2 phút', script_id: id, mode: 'immediate', via: 'local_queue' });
+    }
+    await enqueue('api_dispatch_now');
+    spawnPublisher(['--single', id], `single-${id.slice(0, 8)}`).then(finalizeQueue('dispatch-now'));
+    return res.json({ message: 'Đang đăng ngay — check cc_publish_queue để track', script_id: id, mode: 'immediate' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Lỗi dispatch' });
   }
 });
 

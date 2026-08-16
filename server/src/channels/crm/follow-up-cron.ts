@@ -98,11 +98,15 @@ export function startFollowUpCron(): void {
   log(`Khởi động — quét mỗi ${CRON_INTERVAL_MS / 60000} phút`);
 
   // Run once immediately on startup, then on interval
-  void runAndRecord('followup-scan', runScanCycle);
+  void runAndRecord('node-follow-up-cron', runScanCycle);
 
   cronTimer = setInterval(() => {
-    void runAndRecord('followup-scan', runScanCycle);
-    void runAndRecord('followup-queue', processQueueCycle);
+    // `cronId` must match the id registered in cron-registry.ts NODE_TIMER_SEEDS
+    // ('node-follow-up-cron') — recordCronRun() no-ops silently on unknown ids
+    // (bug found 2026-08-09: 'followup-scan'/'followup-queue' were never
+    // registered, so last_run_at was never actually written).
+    void runAndRecord('node-follow-up-cron', runScanCycle);
+    void runAndRecord('node-follow-up-cron', processQueueCycle);
   }, CRON_INTERVAL_MS);
 }
 
@@ -264,6 +268,27 @@ async function insertFollowup(
     return false;
   }
 
+  // Track A / A4 (plan CSKH-BOT-PAUSE-UX): nếu nhân viên đã trả lời TAY sau tin cuối của khách
+  // → đang xử tay, template cứng không biết gì → KHÔNG nag "còn đó không". last_message_at =
+  // mốc hoạt động cuối của KHÁCH (outbound không bump), nên manual > mốc = nhân viên đã vào sau.
+  const threadId = sess.session_key.split(':')[1];
+  if (threadId) {
+    const { data: recentManual } = await supabase
+      .from('channel_sent_messages')
+      .select('created_at')
+      .eq('channel_name', sess.channel_name)
+      .eq('thread_id', threadId)
+      .like('sent_by', 'manual%')
+      .gt('created_at', sess.last_message_at)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentManual) {
+      log(`⏭ Bỏ follow-up "${sess.session_key.substring(0, 25)}": nhân viên đã trả tay sau tin khách`);
+      return false;
+    }
+  }
+
   const { data: channelInstance } = await supabase
     .from('channel_instances')
     .select('id')
@@ -292,18 +317,16 @@ async function insertFollowup(
     return false;
   }
 
-  const meta = (sess.metadata as Record<string, unknown>) || {};
-  await supabase
-    .from('channel_sessions')
-    .update({
-      metadata: {
-        ...meta,
-        followup_count: prevCount + 1,
-        last_followup_at: new Date().toISOString(),
-        last_followup_stage: stage,
-      },
-    })
-    .eq('session_key', sess.session_key);
+  // ATOMIC jsonb-merge (RPC) — KHÔNG read-merge-write cả object (clobber bot_paused nếu owner
+  // pause xen giữa scan→write; plan 2026-08-10). Chỉ chạm 3 key follow-up.
+  await supabase.rpc('channel_session_merge_meta', {
+    p_session_key: sess.session_key,
+    p_patch: {
+      followup_count: prevCount + 1,
+      last_followup_at: new Date().toISOString(),
+      last_followup_stage: stage,
+    },
+  });
 
   const stuckH = Math.round((Date.now() - new Date(sess.last_message_at).getTime()) / 3600000);
   const customerName = await getCustomerName(sess.customer_id);
@@ -382,6 +405,10 @@ async function processQueueCycle(): Promise<string> {
         content: fu.message,
         contentType: 'text',
         replyToMessageId: undefined,
+        // Reply Gateway (Codex G2): idempotency key so a follow-up can't be sent
+        // twice for one queue row (the 8×-listener-leak class, evolog 08/06). One
+        // queue row id = one deterministic key.
+        dedupeKey: `fu:${fu.id}`,
         metadata: {
           agentSlug: fu.agent_slug,
           isFollowUp: true,

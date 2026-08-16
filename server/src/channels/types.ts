@@ -10,7 +10,7 @@ export interface Channel {
   isAllowed(senderId: string): boolean;
 }
 
-export type ChannelType = 'facebook' | 'zalo_personal' | 'zalo_oa' | 'telegram' | 'youtube';
+export type ChannelType = 'facebook' | 'facebook_web' | 'zalo_personal' | 'zalo_oa' | 'telegram' | 'youtube' | 'cskh';
 
 export type DmPolicy = 'open' | 'allowlist' | 'pairing' | 'disabled';
 export type GroupPolicy = 'open' | 'allowlist' | 'pairing' | 'disabled';
@@ -43,6 +43,14 @@ export interface OutboundMessage {
   media?: MediaFile[];
   replyToMessageId?: string;
   metadata?: Record<string, any>;
+  // Reply Gateway Contract (P2). Deterministic idempotency key for a bot reply
+  // (`reply:<sessionKey>:<batchId>`). Set ONLY on gated bot-reply paths (via
+  // emitReply); manual/human outbound leaves it undefined → adapter sends as
+  // before (no claim). When present, the channel adapter routes the send through
+  // deliverReplyOnce so a duplicate emit (listener leak / restart overlap) is a
+  // 23505 → skip. `sessionKey` carried for logging/trace.
+  dedupeKey?: string | null;
+  sessionKey?: string;
 }
 
 export interface MediaFile {
@@ -61,6 +69,9 @@ export interface MediaLibraryItem {
   type: 'image' | 'video' | 'pdf' | 'audio' | 'document' | 'file';
   mimeType: string;
   path?: string | null;
+  /** Multi-ảnh/sản phẩm (2026-07-16): danh sách path ảnh; `path` = primary = all_images[0].
+   *  Item không có all_images → gửi 1 ảnh (path/url) như cũ (backward-compat). */
+  all_images?: string[];
   url?: string | null;
   description: string;
   tags?: string[];
@@ -186,7 +197,7 @@ export interface QuotaResult {
 
 // ─── Agent Config (paperclip_agents table) ───
 
-export type AgentProvider = 'claude' | 'gemini' | 'openrouter' | 'ollama' | 'nvidia_nim';
+export type AgentProvider = 'claude' | 'gemini' | 'antigravity' | 'openrouter' | 'ollama' | 'nvidia_nim';
 
 /** Row shape from paperclip_agents table */
 export interface AgentConfig {
@@ -210,6 +221,13 @@ export interface AgentConfig {
   history_limit: number;
   session_timeout: number;
   enabled: boolean;
+  /**
+   * Antigravity (agy) only: id of the pre-seeded agy brain to resume. agy `-p`
+   * headless CANNOT create a brain for an unknown id, so this must point at a
+   * brain created once via `agy --conversation <id>` interactively. Optional for
+   * other providers.
+   */
+  conversation_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -217,6 +235,13 @@ export interface AgentConfig {
 /** Provider → default models mapping */
 export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
   claude: [
+    // 2026-07-26: +opus-5 (agent gem-beat dùng) và +opus-4-7 — bản UI
+    // (ui/src/api/agentConfigs.ts) đã có opus-4-7 từ trước mà bản server này thiếu,
+    // tức hai danh sách đã lệch nhau. Đồng bộ lại cùng lượt.
+    // 2026-08-01: +opus-4-8 (agent Gem Doanh Thu dùng) — sweep đồng bộ 4 list.
+    'claude-opus-4-8',
+    'claude-opus-5',
+    'claude-opus-4-7',
     'claude-sonnet-4-6',
     'claude-opus-4-6',
     'claude-haiku-4-5-20251001',
@@ -225,6 +250,28 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-2.0-flash',
+  ],
+  antigravity: [
+    // Display strings accepted verbatim by `agy --model` (see `agy models`, col 2).
+    // Keep in sync with packages/adapters/antigravity-local/src/index.ts `models`
+    // and ui/src/api/agentConfigs.ts PROVIDER_MODELS.antigravity — the audit probe
+    // `paperclip_model_list_audit.py --provider antigravity --against-agy` diffs
+    // agy's live list against all three copies.
+    // 2026-08-15: +3.7 Flash x3, +3.6 Flash x3 (agy had them, all lists stopped at 3.5).
+    'Gemini 3.7 Flash (High)',
+    'Gemini 3.7 Flash (Medium)',
+    'Gemini 3.7 Flash (Low)',
+    'Gemini 3.6 Flash (High)',
+    'Gemini 3.6 Flash (Medium)',
+    'Gemini 3.6 Flash (Low)',
+    'Gemini 3.5 Flash (High)',
+    'Gemini 3.5 Flash (Medium)',
+    'Gemini 3.5 Flash (Low)',
+    'Gemini 3.1 Pro (High)',
+    'Gemini 3.1 Pro (Low)',
+    'Claude Sonnet 4.6 (Thinking)',
+    'Claude Opus 4.6 (Thinking)',
+    'GPT-OSS 120B (Medium)',
   ],
   openrouter: [
     'anthropic/claude-sonnet-4-6',

@@ -19,7 +19,13 @@ import { formatDate, cn, projectUrl } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { User, Hexagon, ArrowUpRight, Tag, Plus, Trash2 } from "lucide-react";
+import { User, Hexagon, ArrowUpRight, Tag, Plus, Trash2, AlarmClock, X } from "lucide-react";
+
+// datetime-local expects "YYYY-MM-DDTHH:mm" in the user's local timezone.
+function toDatetimeLocalValue(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 import { AgentIcon } from "./AgentIconPicker";
 
 function defaultProjectWorkspaceIdForProject(project: {
@@ -126,6 +132,7 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [labelsOpen, setLabelsOpen] = useState(false);
+  const [wakeDraft, setWakeDraft] = useState<string | null>(null);
   const [labelSearch, setLabelSearch] = useState("");
   const [newLabelName, setNewLabelName] = useState("");
   const [newLabelColor, setNewLabelColor] = useState("#6366f1");
@@ -515,6 +522,35 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
             showLabel
           />
         </PropertyRow>
+
+        {issue.scheduledWakeAt && (
+          <PropertyRow label="Hẹn giờ">
+            <AlarmClock className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <input
+              type="datetime-local"
+              className="h-7 min-w-0 rounded border border-input bg-transparent px-1.5 text-xs focus:outline-none focus:border-ring"
+              value={wakeDraft ?? toDatetimeLocalValue(new Date(issue.scheduledWakeAt))}
+              min={toDatetimeLocalValue(new Date())}
+              onChange={(e) => setWakeDraft(e.target.value)}
+              onBlur={() => {
+                if (wakeDraft) {
+                  const next = new Date(wakeDraft);
+                  if (next.getTime() > Date.now()) {
+                    onUpdate({ scheduledWakeAt: next.toISOString() });
+                  }
+                }
+                setWakeDraft(null);
+              }}
+            />
+            <button
+              className="inline-flex items-center justify-center h-5 w-5 rounded hover:bg-accent/50 transition-colors text-muted-foreground hover:text-destructive"
+              title="Bỏ hẹn giờ (issue ở lại Backlog, không tự wake nữa)"
+              onClick={() => onUpdate({ scheduledWakeAt: null })}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </PropertyRow>
+        )}
 
         <PropertyPicker
           inline={inline}

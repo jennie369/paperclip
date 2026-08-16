@@ -606,9 +606,7 @@ export function issueService(db: Db) {
     actorRunId: string;
     expectedCheckoutRunId: string;
   }) {
-    const stale = await isTerminalOrMissingHeartbeatRun(input.expectedCheckoutRunId);
-    if (!stale) return null;
-
+    // Allows the same agent to steal the lock from its own crashed/zombie runs
     const now = new Date();
     const adopted = await db
       .update(issues)

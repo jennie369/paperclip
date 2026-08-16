@@ -53,6 +53,18 @@ export interface ClaudeGenerateParams {
   persona?: PersonaType;
   /** Writing mode */
   writingMode?: WritingMode;
+  /** Brand voice: 'jennie' | 'generic' — batch processor dùng để filter knowledge */
+  brandVoice?: string;
+  /** Content topic từ UI social post (app_features, courses, trading_mindset, ...) — batch processor dùng để route SOP */
+  contentTopic?: string;
+  /** Publish mode */
+  publishMode?: string;
+  /** Tiêu đề (dùng cho content package/outline/script) */
+  title?: string;
+  /** Tài khoản đăng bài */
+  postedAccount?: string;
+  /** ID của SOP */
+  sopId?: string;
 }
 
 export interface ClaudeGenerateResult {
@@ -86,6 +98,7 @@ const JOB_TIMEOUT_MS: Record<string, number> = {
   image_prompt:  600000, // 10 phút
   analysis:      900000, // 15 phút
   repurpose:    1200000, // 20 phút
+  content_package: 1800000, // 30 phút — tạo 4 pieces
 };
 const DEFAULT_TIMEOUT_MS = 1800000; // 30 phút fallback
 
@@ -141,6 +154,13 @@ export const claudeService = {
         temperature,
         model,
         provider: params.provider ?? 'claude',
+        // Routing metadata — batch_processor dùng để chọn SOP đúng (app_features, trading_mindset, ...)
+        ...(params.contentTopic ? { contentTopic: params.contentTopic } : {}),
+        ...(params.brandVoice   ? { brandVoice:   params.brandVoice   } : {}),
+        ...(params.publishMode  ? { publish_mode: params.publishMode  } : {}),
+        ...(params.title        ? { title:        params.title        } : {}),
+        ...(params.postedAccount? { posted_account: params.postedAccount} : {}),
+        ...(params.sopId        ? { sop_id:       params.sopId        } : {}),
       } as unknown as Json,
       created_by: userId,
       track: params.track ?? null,

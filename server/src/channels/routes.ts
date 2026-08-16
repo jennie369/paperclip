@@ -4,6 +4,8 @@
 import { Router } from 'express';
 import { supabase } from './zalo-personal/supabase.js';
 import { clearConfigCache } from './consumer.js';
+import { fetchTranscript } from './transcript.js';
+import { isHumanSent } from './sent-by-utils.js';
 import { approvePairing } from './policy.js';
 import { streamEvents, clearAgentCache } from './router.js';
 
@@ -101,32 +103,21 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
   const { sessionKey } = req.params;
   const limit = Number(req.query.limit) || 100;
 
-  // Parse session_key to get channel_name and thread_id
-  // Format: "{channel}:{chatId}:{senderId}"
-  const parts = sessionKey.split(':');
-  if (parts.length < 2) {
-    return res.status(400).json({ error: 'Invalid session_key format' });
+  // Nguồn DUY NHẤT dùng chung với CrmInbox (transcript.ts) — cùng parser canonical
+  // (indexOf-slicing, chịu được id chứa ':'; split(':') cũ cắt sai) + cùng bộ lọc + cùng
+  // chính sách ẩn `deleted_for_me` ⇒ 2 màn không thể lệch nhau. Plan 2026-07-19-INBOX-...
+  let inbound: Record<string, any>[];
+  let outbound: Record<string, any>[];
+  try {
+    const t = await fetchTranscript(sessionKey, limit);
+    inbound = t.inbound;
+    outbound = t.outbound;
+  } catch (err: any) {
+    // Trước đây lỗi DB bị nuốt (destructure không check error) → trả thread rỗng giả.
+    const invalid = /Invalid session_key/.test(err?.message || '');
+    console.error('[sessions/:sessionKey/messages] transcript failed:', err?.message || err);
+    return res.status(invalid ? 400 : 500).json({ error: err?.message || 'transcript failed' });
   }
-  const channelName = parts[0];
-  const chatId = parts[1];
-
-  // Fetch inbound messages
-  const { data: inbound } = await supabase
-    .from('channel_pending_messages')
-    .select('id, channel_name, thread_id, thread_type, from_uid, sender_name, message_id, body, content_type, status, ts, created_at, session_key, agent_slug')
-    .eq('channel_name', channelName)
-    .eq('thread_id', chatId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
-  // Fetch outbound messages
-  const { data: outbound } = await supabase
-    .from('channel_sent_messages')
-    .select('id, channel_name, thread_id, thread_type, to_uid, body, content_type, media, status, sent_by, created_at')
-    .eq('channel_name', channelName)
-    .eq('thread_id', chatId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
 
   // Merge and normalize
   const messages = [
@@ -138,7 +129,7 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
       ...m,
       direction: 'outbound' as const,
       from_uid: '',
-      sender_name: m.sent_by && m.sent_by !== 'manual' ? `🤖 ${m.sent_by}` : 'Bạn',
+      sender_name: (!m.sent_by || isHumanSent(m.sent_by)) ? 'Bạn' : `🤖 ${m.sent_by}`,
       ts: m.created_at,
     })),
   ].sort((a, b) => {
@@ -147,7 +138,51 @@ router.get('/sessions/:sessionKey/messages', async (req, res) => {
     return tb.localeCompare(ta);
   });
 
-  res.json(messages.slice(0, limit));
+  // Apply operator-side flags (star / pin / delete-for-me) from inbox_message_flags.
+  // Keyed by the message uuid (unique across both source tables).
+  const ids = messages.map((m: any) => m.id).filter(Boolean);
+  const flagMap: Record<string, { starred: boolean; pinned: boolean; deleted_for_me: boolean }> = {};
+  if (ids.length) {
+    const { data: flags } = await supabase
+      .from('inbox_message_flags')
+      .select('message_id, starred, pinned, deleted_for_me')
+      .in('message_id', ids);
+    for (const f of flags || []) flagMap[(f as any).message_id] = f as any;
+  }
+
+  const withFlags = messages
+    .filter((m: any) => !flagMap[m.id]?.deleted_for_me) // hide messages deleted on our side only
+    .map((m: any) => ({
+      ...m,
+      starred: flagMap[m.id]?.starred || false,
+      pinned: flagMap[m.id]?.pinned || false,
+    }));
+
+  res.json(withFlags.slice(0, limit));
+});
+
+/**
+ * POST /api/channels/messages/:id/flags
+ * Toggle operator-side per-message flags (star / pin / delete-for-me). Partial
+ * upsert — only provided fields change; others keep their stored value.
+ */
+router.post('/messages/:id/flags', async (req, res) => {
+  const { id } = req.params;
+  const { starred, pinned, deleted_for_me, session_key } = req.body || {};
+  const patch: Record<string, any> = { message_id: id, updated_at: new Date().toISOString() };
+  if (starred !== undefined) patch.starred = !!starred;
+  if (pinned !== undefined) patch.pinned = !!pinned;
+  if (deleted_for_me !== undefined) patch.deleted_for_me = !!deleted_for_me;
+  if (session_key !== undefined) patch.session_key = session_key;
+
+  const { data, error } = await supabase
+    .from('inbox_message_flags')
+    .upsert(patch, { onConflict: 'message_id' })
+    .select('message_id, starred, pinned, deleted_for_me')
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 /**
@@ -169,6 +204,7 @@ router.post('/settings/:channelName', async (req, res) => {
     allow_from,
     enabled,
     save_contacts_to_crm,
+    color,
   } = req.body;
 
   const updates: Record<string, any> = {
@@ -187,6 +223,7 @@ router.post('/settings/:channelName', async (req, res) => {
   if (allow_from !== undefined) updates.allow_from = allow_from;
   if (enabled !== undefined) updates.enabled = enabled;
   if (save_contacts_to_crm !== undefined) updates.save_contacts_to_crm = save_contacts_to_crm;
+  if (color !== undefined) updates.color = color || null;
 
   const { data, error } = await supabase
     .from('channel_instances')
@@ -661,23 +698,7 @@ router.post('/send', async (req, res) => {
     return res.status(400).json({ error: 'channel_name, thread_id và message là bắt buộc' });
   }
 
-  // 1. Ghi outbound message vào DB ngay để UI hiển thị tức thì
-  const { error: dbErr } = await supabase
-    .from('channel_sent_messages')
-    .insert({
-      channel_name,
-      thread_id,
-      thread_type,
-      to_uid: thread_id,
-      body: message,
-      content_type: 'text',
-      status: 'sending',
-      sent_by: 'manual',
-    });
-  if (dbErr) console.error('[Send] DB insert error:', dbErr.message);
-
-  // 2. Forward đến sub-handler theo channel_name
-  // Detect channel type từ DB
+  // Detect channel type từ DB (cần trước khi forward)
   const { data: inst } = await supabase
     .from('channel_instances')
     .select('channel_type, name')
@@ -688,46 +709,79 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: `Kênh "${channel_name}" không tồn tại` });
   }
 
-  // Forward đến Zalo Personal sub-handler qua internal fetch
-  try {
-    const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/zalo-personal/send`;
-    const fwdRes = await fetch(forwardUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel_name, thread_id, message, thread_type }),
+  // 0. FAIL-CLOSED (25/07): chỉ gửi khi channel_type có sub-handler THẬT SỰ tương thích.
+  //    Trước đây `subPathByType[type] || 'zalo-personal'` fail-OPEN ⇒ mọi type lạ
+  //    (app / facebook / facebook_web) bị đẩy sang handler Zalo. Đường đó KHÔNG BAO GIỜ gửi
+  //    được (zalo-personal/routes.ts:129 `activeChannels.get()` → 404) nhưng KỊP tạo row
+  //    'sending' → lật 'failed'; mà transcript KHÔNG lọc status ⇒ tin hiện như ĐÃ GỬI trong
+  //    khi khách chưa từng nhận ("tin ma" — đo 25/07: 18 row 'failed' đang render như vậy).
+  //    Phải chặn TRƯỚC câu insert bên dưới, vì chính câu insert đẻ ra tin ma.
+  //    ⚠️ KHÔNG map facebook/facebook_web vào đây: 2 handler đó nhận body KHÁC HẲN
+  //    (facebook cần {page_id, recipient_id}; facebook-web là `/:name/send`) ⇒ nối đường gửi
+  //    tay cho chúng là FEATURE riêng, không phải đổi 1 dòng map.
+  const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
+  const sub = subPathByType[inst.channel_type];
+  if (!sub) {
+    return res.status(400).json({
+      error: `Kênh "${channel_name}" (loại ${inst.channel_type}) chưa hỗ trợ gửi tay từ Paperclip.`,
     });
-    const fwdData = await fwdRes.json().catch(() => ({}));
-
-    if (fwdRes.ok) {
-      // Update DB status to sent
-      await supabase
-        .from('channel_sent_messages')
-        .update({ status: 'sent' })
-        .eq('channel_name', channel_name)
-        .eq('thread_id', thread_id)
-        .eq('status', 'sending');
-      return res.json({ success: true, ...fwdData });
-    } else {
-      // Update DB to failed
-      await supabase
-        .from('channel_sent_messages')
-        .update({ status: 'failed' })
-        .eq('channel_name', channel_name)
-        .eq('thread_id', thread_id)
-        .eq('status', 'sending');
-      return res.status(fwdRes.status).json({ success: false, error: fwdData.error || 'Gửi thất bại' });
-    }
-  } catch (err: any) {
-    console.error('[Send] Forward error:', err.message);
-    // Message đã ghi vào DB, mark failed
-    await supabase
-      .from('channel_sent_messages')
-      .update({ status: 'failed' })
-      .eq('channel_name', channel_name)
-      .eq('thread_id', thread_id)
-      .eq('status', 'sending');
-    return res.status(500).json({ success: false, error: err.message });
   }
+
+  // 1. Ghi outbound message vào DB NGAY (status 'sending') để UI hiển thị tức thì.
+  //    Đây là row DUY NHẤT cho tin này — sub-handler được yêu cầu skip_db_log
+  //    để tránh double-insert (channel.send tự log trước đây tạo row thứ 2).
+  const { data: row, error: dbErr } = await supabase
+    .from('channel_sent_messages')
+    .insert({
+      channel_name,
+      thread_id,
+      thread_type,
+      to_uid: thread_id,
+      body: message,
+      content_type: 'text',
+      status: 'sending',
+      sent_by: 'manual',
+    })
+    .select('id')
+    .single();
+  if (dbErr) console.error('[Send] DB insert error:', dbErr.message);
+  const rowId = row?.id;
+
+  // 2. Trả về NGAY để UI render tức thì (không chờ ~2s typing+gửi của Zalo).
+  //    Việc forward + cập nhật trạng thái chạy nền; status reconcile ở refetch kế.
+  res.json({ success: true, optimistic: true, id: rowId });
+
+  // 3. Forward (nền) đến sub-handler theo channel_type (đã resolve fail-closed ở bước 0),
+  //    rồi cập nhật status theo id.
+  const forwardUrl = `http://localhost:${process.env.PORT || 3101}/api/channels/${sub}/send`;
+  (async () => {
+    try {
+      const fwdRes = await fetch(forwardUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // `sent_row_id`: row channel_sent_messages do CHÍNH handler này tạo ở bước 1.
+        // Sub-handler CSKH cần nó để nối bản-cho-khách với bản-cho-inbox, nhờ vậy thu hồi
+        // 1 tin đánh dấu được cả hai kho. Sub-handler khác bỏ qua trường thừa này.
+        body: JSON.stringify({ channel_name, thread_id, message, thread_type, skip_db_log: true, sent_row_id: rowId ?? null }),
+      });
+      const ok = fwdRes.ok;
+      if (rowId) {
+        await supabase
+          .from('channel_sent_messages')
+          .update({ status: ok ? 'sent' : 'failed' })
+          .eq('id', rowId);
+      }
+      if (!ok) {
+        const fwdData = await fwdRes.json().catch(() => ({}));
+        console.error('[Send] Forward failed:', fwdData?.error || fwdRes.status);
+      }
+    } catch (err: any) {
+      console.error('[Send] Forward error:', err.message);
+      if (rowId) {
+        await supabase.from('channel_sent_messages').update({ status: 'failed' }).eq('id', rowId);
+      }
+    }
+  })();
 });
 
 // ── POST /api/channels/conversations — create new conversation (FIX 7) ──

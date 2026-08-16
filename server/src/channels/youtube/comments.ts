@@ -5,6 +5,7 @@
 
 import { bus } from '../bus.js';
 import { supabase } from '../zalo-personal/supabase.js';
+import { deliverReplyOnce } from '../deliver-once.js';
 import type { InboundMessage, OutboundMessage } from '../types.js';
 
 // ─── Config from env ───
@@ -191,7 +192,7 @@ async function fetchCommentThreads(videoId: string): Promise<any[] | null> {
  * Reply to a YouTube comment.
  * Requires OAuth access token (not just API key).
  */
-export async function replyToYouTubeComment(parentId: string, text: string): Promise<{ success: boolean; commentId?: string; error?: string }> {
+export async function replyToYouTubeComment(parentId: string, text: string, skipDbLog = false): Promise<{ success: boolean; commentId?: string; error?: string }> {
   if (!YOUTUBE_ACCESS_TOKEN) {
     return { success: false, error: 'YOUTUBE_ACCESS_TOKEN not configured' };
   }
@@ -220,17 +221,20 @@ export async function replyToYouTubeComment(parentId: string, text: string): Pro
     const data = await res.json();
     console.log(`[YT] Reply sent to comment ${parentId}: "${text.slice(0, 60)}"`);
 
-    // Log to channel_sent_messages for audit trail (non-blocking)
-    void supabase.from('channel_sent_messages').insert({
-      channel_name: CHANNEL_NAME,
-      thread_id: parentId,
-      thread_type: 'comment',
-      to_uid: parentId,
-      body: text,
-      content_type: 'text',
-      status: 'sent',
-      sent_by: 'agent',
-    }).then(() => {}, () => {});
+    // Log to channel_sent_messages for audit trail (non-blocking).
+    // skipDbLog=true when the Reply Gateway (deliverReplyOnce) already owns the row.
+    if (!skipDbLog) {
+      void supabase.from('channel_sent_messages').insert({
+        channel_name: CHANNEL_NAME,
+        thread_id: parentId,
+        thread_type: 'comment',
+        to_uid: parentId,
+        body: text,
+        content_type: 'text',
+        status: 'sent',
+        sent_by: 'agent',
+      }).then(() => {}, () => {});
+    }
 
     return { success: true, commentId: data.id };
   } catch (err: any) {
@@ -251,9 +255,21 @@ bus.on('outbound', async (msg: OutboundMessage) => {
     return;
   }
 
-  const result = await replyToYouTubeComment(commentId, msg.content);
-  if (!result.success) {
-    console.error(`[YT] Outbound reply failed: ${result.error}`);
+  if (msg.dedupeKey) {
+    // Reply Gateway: claim-before-send owns the channel_sent_messages row (skipDbLog).
+    const logRow = {
+      channel_name: CHANNEL_NAME, thread_id: commentId, thread_type: 'comment',
+      to_uid: commentId, body: msg.content, content_type: 'text',
+      sent_by: (msg.metadata?.agentSlug as string) || 'agent',
+    };
+    await deliverReplyOnce(msg.dedupeKey, logRow, async () => {
+      const r = await replyToYouTubeComment(commentId, msg.content, /*skipDbLog*/ true);
+      if (!r.success) throw new Error(r.error || 'youtube reply failed');  // Codex F2
+      return { platformMessageId: r.commentId ?? null };
+    });
+  } else {
+    const result = await replyToYouTubeComment(commentId, msg.content);
+    if (!result.success) console.error(`[YT] Outbound reply failed: ${result.error}`);
   }
 });
 

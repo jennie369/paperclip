@@ -19,6 +19,7 @@ import { PluginLauncherProvider } from "./plugins/launchers";
 import "@mdxeditor/editor/style.css";
 import "./index.css";
 import "./gem/cc-scope-styles.css";
+import "./styles/crm-messaging.css";
 
 initPluginBridge(React, ReactDOM);
 

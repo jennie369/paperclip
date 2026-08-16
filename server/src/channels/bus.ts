@@ -91,6 +91,18 @@ class MessageBus extends EventEmitter {
         },
         (payload) => {
           const row = payload.new as Record<string, any>;
+          // Realtime re-emit tồn tại để cover kênh EDGE-INGESTED (cskh-*: tin insert từ
+          // Supabase edge fn, KHÔNG có in-process bus.emit trong paperclip server). Kênh
+          // IN-PROCESS (zalo/facebook/facebook-web/youtube) đã tự emit('inbound') ngay khi
+          // nhận tin → nếu realtime CŨNG emit thì consumer xử lý CÙNG tin 2 LẦN → bản thứ 2
+          // bị deduplicator coi 'duplicate' → markHandled('skipped') đè lên chính row đang
+          // chờ reply → runSessionBatch drain WHERE status='pending' miss → bot không trả
+          // lời (BUG Zalo Gem & Yinyang 2026-07-18, plan 2026-07-18-ZALO-GEM-INBOUND-...).
+          // → CHỈ re-emit cho kênh edge-ingested (prefix cskh). gem-master insert
+          // status='handled' nên realtime filter status=eq.pending không đụng nó. Kênh
+          // edge-ingested MỚI (ngoài cskh) → thêm prefix vào guard này.
+          const chName = String(row.channel_name || '');
+          if (!chName.startsWith('cskh')) return;
           const msg: InboundMessage = {
             id: row.message_id || row.id,
             channel: row.channel_name,
@@ -100,6 +112,14 @@ class MessageBus extends EventEmitter {
             senderName: row.sender_name || row.from_uid,
             content: row.body || '',
             contentType: (row.content_type || 'text') as InboundMessage['contentType'],
+            // Map cột media (text[] URL) → MediaFile[] để router attach _media cho agy vision
+            // (khách gửi ảnh → agy view_file). Trước đây bị drop → agy không "thấy" ảnh.
+            media: Array.isArray(row.media) && row.media.length > 0
+              ? row.media.map((u: string) => ({
+                  url: u,
+                  mimeType: /\.png(\?|$)/i.test(u) ? 'image/png' : /\.webp(\?|$)/i.test(u) ? 'image/webp' : 'image/jpeg',
+                }))
+              : undefined,
             peerKind: (row.peer_kind || 'direct') as PeerKind,
             metadata: row.metadata || {},
             timestamp: new Date(row.ts || row.created_at),

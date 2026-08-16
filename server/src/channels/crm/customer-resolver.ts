@@ -21,12 +21,25 @@ export class CustomerResolver {
     // BUG 3 FIX: If channel has save_contacts_to_crm = false, skip CRM entirely
     if (!saveContact) return null;
 
-    // 1. Fast lookup by primary_external_id (unique indexed — no race condition)
-    const { data: existing } = await supabase
+    // 1a. Fast lookup by primary_external_id (unique indexed — no race condition)
+    let { data: existing } = await supabase
       .from('crm_customers')
       .select('id')
       .eq('primary_external_id', senderId)
       .maybeSingle();
+
+    // 1b. Fallback: identity đã được merge vào record khác → external_id nằm trong channels[]
+    //     của survivor (merge_crm_customers dời identity + null primary_external_id source).
+    //     Bắt buộc để KHÔNG re-split sau khi dedup-merge cross-channel.
+    if (!existing) {
+      const { data: byChannel } = await supabase
+        .from('crm_customers')
+        .select('id')
+        .contains('channels', [{ external_id: senderId }])
+        .neq('status', 'churned')
+        .limit(1);
+      existing = byChannel?.[0] || null;
+    }
 
     if (existing) {
       // Update last_contact_at + increment message count
@@ -37,8 +50,9 @@ export class CustomerResolver {
         })
         .eq('id', existing.id);
 
-      // Auto-match Gemral if not linked yet (async, non-blocking)
-      this.tryAutoMatchGemral(existing.id).catch(() => {});
+      // Auto-match Gemral if not linked yet (async, non-blocking) — truyền senderId+channelName
+      // để khách CSKH (senderId=profiles.id) tự link qua uid dù chưa có phone/email.
+      this.tryAutoMatchGemral(existing.id, senderId, channelName).catch(() => {});
 
       return { customerId: existing.id, isNew: false };
     }
@@ -90,8 +104,8 @@ export class CustomerResolver {
 
     console.log(`[CustomerResolver] Khách mới: ${senderName} (${channelType}) → ${created.id}`);
 
-    // 4. Try auto-match Gemral (async, non-blocking)
-    this.tryAutoMatchGemral(created.id).catch(() => {});
+    // 4. Try auto-match Gemral (async, non-blocking) — CSKH khách mới tự link qua uid
+    this.tryAutoMatchGemral(created.id, senderId, channelName).catch(() => {});
 
     return { customerId: created.id, isNew: true };
   }
@@ -100,7 +114,7 @@ export class CustomerResolver {
    * Auto-match Gemral account for a CRM customer.
    * Called on new customers and on existing customers without gemral_user_id (re-sync hourly).
    */
-  async tryAutoMatchGemral(customerId: string): Promise<void> {
+  async tryAutoMatchGemral(customerId: string, senderId?: string, channelName?: string): Promise<void> {
     try {
       const { data: cust } = await supabase
         .from('crm_customers')
@@ -111,6 +125,19 @@ export class CustomerResolver {
       if (!cust) return;
 
       if (!cust.gemral_user_id) {
+        // Kênh CSKH in-app: senderId = thread_id = Gemral profiles.id → link THẲNG qua uid
+        // (khách app thường không có phone/email → matchGemralUser sẽ trượt). Verify uid tồn tại
+        // trong profiles trước khi enrich (tránh ghi gemral_user_id rác). CHỈ áp 'cskh-internal'
+        // (zalo/fb external_id KHÔNG phải profiles.id). enrichWithGemralData tự set gemral_user_id + gemral_data.
+        if (channelName === 'cskh-internal' && senderId) {
+          const { data: p } = await supabase.from('profiles').select('id').eq('id', senderId).maybeSingle();
+          if (p?.id) {
+            await enrichWithGemralData(customerId, p.id);
+            console.log(`[CustomerResolver] Linked Gemral via CSKH uid: ${customerId} → ${p.id}`);
+            await this.dedupMerge(customerId);
+            return;
+          }
+        }
         // No link yet — try to match by phone/email
         const gemralId = await matchGemralUser(cust.phone, cust.email);
         if (gemralId) {
@@ -125,8 +152,65 @@ export class CustomerResolver {
           console.log(`[CustomerResolver] Re-synced Gemral: ${customerId}`);
         }
       }
+
+      // Sau khi biết gemral/phone/email → gom các record cùng người (đa kênh) về 1.
+      await this.dedupMerge(customerId);
     } catch (err: any) {
       console.warn(`[CustomerResolver] Gemral match failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Auto-dedup cross-channel: 1 người nhắn từ nhiều kênh (Shopify/Zalo/web) tạo nhiều
+   * crm_customers (mỗi kênh 1 primary_external_id). Gom về 1 record theo tín hiệu định danh
+   * MẠNH (gemral_user_id / email / phone). Survivor = record giàu nhất (nhiều đơn → doanh thu
+   * cao → có email → cũ nhất). merge_crm_customers dời data + channel identity vào survivor
+   * (channels union + null primary_external_id source) → inbound sau resolve về survivor.
+   */
+  async dedupMerge(customerId: string): Promise<void> {
+    try {
+      const { data: me } = await supabase
+        .from('crm_customers')
+        .select('id, gemral_user_id, email, phone, status')
+        .eq('id', customerId)
+        .single();
+      if (!me || me.status === 'churned') return;
+
+      // Chỉ dùng tín hiệu định danh MẠNH; né ký tự phá cú pháp PostgREST .or()
+      const safe = (v?: string | null) => v && !/[,()]/.test(v);
+      const ors: string[] = [];
+      if (me.gemral_user_id) ors.push(`gemral_user_id.eq.${me.gemral_user_id}`);
+      if (safe(me.email)) ors.push(`email.eq.${me.email}`);
+      if (safe(me.phone)) ors.push(`phone.eq.${me.phone}`);
+      if (!ors.length) return;
+
+      const { data: cands } = await supabase
+        .from('crm_customers')
+        .select('id, total_orders, total_revenue, email, created_at')
+        .or(ors.join(','))
+        .neq('status', 'churned');
+      const group = (cands || []).filter((c) => c.id);
+      if (group.length < 2) return; // không có bản trùng
+
+      // Chọn survivor giàu nhất — giữ lịch sử/đơn, gom bản nghèo vào.
+      const survivor = group.slice().sort((a, b) => {
+        const ord = (b.total_orders || 0) - (a.total_orders || 0);
+        if (ord) return ord;
+        const rev = Number(b.total_revenue || 0) - Number(a.total_revenue || 0);
+        if (rev) return rev;
+        const em = (b.email ? 1 : 0) - (a.email ? 1 : 0);
+        if (em) return em;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      })[0];
+
+      for (const c of group) {
+        if (c.id !== survivor.id) {
+          await supabase.rpc('merge_crm_customers', { p_source: c.id, p_target: survivor.id });
+          console.log(`[CustomerResolver] Dedup-merged ${c.id} → ${survivor.id}`);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[CustomerResolver] Dedup-merge failed: ${err.message}`);
     }
   }
 

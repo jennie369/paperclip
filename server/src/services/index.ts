@@ -13,6 +13,7 @@ export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";
+export { scheduledIssueWakeupService } from "./scheduled-issue-wakeups.js";
 export { costService } from "./costs.js";
 export { financeService } from "./finance.js";
 export { heartbeatService } from "./heartbeat.js";

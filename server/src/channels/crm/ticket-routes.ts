@@ -247,7 +247,7 @@ router.post('/', async (req, res) => {
           message_type: 'alert',
           content: `[TICKET ${pLabel}] ${data.ticket_number}: ${title}${assigned_to_agent ? `\n→ Gán cho: ${assigned_to_agent}` : ''}`,
           priority: ['urgent', 'critical'].includes(priority) ? 0 : 2,
-        }).catch(() => {});
+        }).then(undefined, () => {});
       }
     }
 
@@ -305,7 +305,7 @@ router.put('/:id', async (req, res) => {
         agent: 'board',
         note: timelineNote,
       },
-    }).catch(() => {});
+    }).then(undefined, () => {});
 
     // Spawn agent when assigned/reassigned
     if (assigned_to_agent) {
@@ -323,7 +323,7 @@ router.put('/:id', async (req, res) => {
           message_type: 'alert',
           content: `[ASSIGN] ${data.ticket_number}: ${data.title}\n→ Agent: ${assigned_to_agent}${['urgent', 'critical'].includes(p) ? ' [P0]' : ''}`,
           priority: ['urgent', 'critical'].includes(p) ? 0 : 2,
-        }).catch(() => {});
+        }).then(undefined, () => {});
       }
     }
 
@@ -352,7 +352,7 @@ router.post('/:id/escalate', async (req, res) => {
     await supabase.rpc('append_ticket_timeline', {
       p_ticket_id: req.params.id,
       p_entry: { ts: new Date().toISOString(), action: 'escalated', agent: 'board', note: `Chuyển tới ${escalate_to}: ${reason || ''}` },
-    }).catch(() => {});
+    }).then(undefined, () => {});
 
     // War Room P0 alert
     const { data: ch } = await supabase.from('war_room_channels').select('id').eq('name', 'general').maybeSingle();
@@ -363,7 +363,7 @@ router.post('/:id/escalate', async (req, res) => {
         message_type: 'alert',
         content: `[ESCALATION] ${(ticket.priority || 'medium').toUpperCase()}: ${ticket.ticket_number} — ${ticket.title}\nKhách: ${(ticket as any).customer?.display_name || 'N/A'}\n→ Chuyển tới: ${escalate_to}`,
         priority: 0,
-      }).catch(() => {});
+      }).then(undefined, () => {});
     }
 
     res.json(ticket);
@@ -389,7 +389,7 @@ router.post('/:id/resolve', async (req, res) => {
     await supabase.rpc('append_ticket_timeline', {
       p_ticket_id: req.params.id,
       p_entry: { ts: new Date().toISOString(), action: 'resolved', agent: 'board', note: resolution_note || 'Đã giải quyết' },
-    }).catch(() => {});
+    }).then(undefined, () => {});
 
     // Create interaction
     if ((data as any).customer?.id) {

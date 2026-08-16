@@ -7,8 +7,10 @@
 
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import multer from 'multer';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Supabase client (service role) — lazy init to avoid crash when env vars not set at module load
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
@@ -242,7 +244,7 @@ router.post('/social/publish', async (req, res) => {
       published_at: result.scheduled ? null : new Date().toISOString(),
       external_post_id: result.id,
       external_post_url: result.url,
-    });
+    } as any);
 
     res.json({
       success: true,
@@ -261,6 +263,48 @@ router.post('/social/publish', async (req, res) => {
 // ─── GET /social/pages ───────────────────────────────────────────
 router.get('/social/pages', (_req, res) => {
   res.json({ success: true, pages: getFacebookPages() });
+});
+
+// ─── POST /social/upload ─────────────────────────────────────────
+router.post('/social/upload', upload.array('files'), async (req, res) => {
+  try {
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) {
+      return res.status(400).json({ success: false, error: 'No files uploaded' });
+    }
+
+    const uploadedUrls: string[] = [];
+    const supabase = getSupabase();
+
+    for (const file of files) {
+      // Create a unique filename
+      const fileExt = file.originalname.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `uploads/${fileName}`;
+
+      const { data, error } = await supabase.storage
+        .from('course-images')
+        .upload(filePath, file.buffer, {
+          contentType: file.mimetype,
+          upsert: true
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from('course-images')
+        .getPublicUrl(filePath);
+
+      uploadedUrls.push(publicUrlData.publicUrl);
+    }
+
+    res.json({ success: true, urls: uploadedUrls });
+  } catch (err: any) {
+    console.error('[/social/upload]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // ─── Helpers for news ───────────────────────────────────────────
@@ -311,7 +355,7 @@ router.post('/news/publish', async (req, res) => {
     };
 
     const { data: ccArticle, error: ccError } = await getSupabase()
-      .from('cc_news_articles').insert(article).select().single();
+      .from('cc_news_articles').insert(article as any).select().single();
     if (ccError) throw ccError;
 
     // Cross-post to forum_posts if published
@@ -320,7 +364,7 @@ router.post('/news/publish', async (req, res) => {
     if (status === 'published') {
       try {
         const forumContent = cleanContentForForum(content, title);
-        const { data: forumPost, error: forumError } = await supabase
+        const { data: forumPost, error: forumError } = await getSupabase()
           .from('forum_posts').insert({
             user_id: GEMRAL_ADMIN_USER_ID,
             title,
@@ -336,12 +380,12 @@ router.post('/news/publish', async (req, res) => {
             media_urls: coverImageUrl ? [coverImageUrl] : [],
             visibility: 'public',
             is_admin_post: true,
-          }).select('id').single();
+          } as any).select('id').single();
 
         if (!forumError && forumPost) {
-          forumPostId = forumPost.id;
-          publishUrl = `https://gemral.com/forum/thread/${forumPost.id}`;
-          await getSupabase().from('cc_news_articles').update({ metadata: { forum_post_id: forumPost.id } }).eq('id', ccArticle.id);
+          forumPostId = (forumPost as any).id;
+          publishUrl = `https://gemral.com/forum/thread/${(forumPost as any).id}`;
+          await (getSupabase().from('cc_news_articles') as any).update({ metadata: { forum_post_id: (forumPost as any).id } }).eq('id', (ccArticle as any).id);
         }
       } catch (e) {
         console.error('[/news/publish] cross-post error:', e);

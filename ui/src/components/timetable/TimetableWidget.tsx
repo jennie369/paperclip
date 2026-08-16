@@ -12,13 +12,17 @@ import {
   ChevronRight,
   Plus,
   RotateCw,
+  List,
+  Calendar as CalendarIcon
 } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { useTimetable } from "@/hooks/useTimetable";
 import { HCM_TZ, TimetableTable } from "./TimetableTable";
 import { AddManualRowModal } from "./AddManualRowModal";
+import { TimetableCalendarView } from "./TimetableCalendarView";
 import { SortMenu, GroupMenu, ColumnMenu, FilterMenu } from "./TimetableMenus";
 import { SmartSearch } from "./SmartSearch";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { TimetableSort, TimetableGroup } from "@/types/timetable";
 import {
   sortRows,
@@ -84,6 +88,7 @@ export default function TimetableWidget() {
   const companyId = selectedCompanyId ?? "";
 
   const [date, setDate] = useState<string>(todayHCM());
+  const [displayMode, setDisplayMode] = useState<"list" | "calendar">("list");
 
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } =
     useTimetable(companyId, { date });
@@ -149,7 +154,6 @@ export default function TimetableWidget() {
     const centerOnNow =
       sort.field === "time" &&
       sort.dir === "asc" &&
-      visibleCount === DEFAULT_VISIBLE &&
       sorted.length > visibleCount;
     let capped;
     if (centerOnNow) {
@@ -163,10 +167,12 @@ export default function TimetableWidget() {
           nearestIdx = i;
         }
       }
-      const PAST_ROWS = 2;
+      // Keep 2 past rows by default. When expanding, distribute extra rows
+      // roughly equally between past and future.
+      const pastRows = Math.max(2, Math.floor((visibleCount - 4) / 2));
       const start = Math.max(
         0,
-        Math.min(sorted.length - visibleCount, nearestIdx - PAST_ROWS),
+        Math.min(sorted.length - visibleCount, nearestIdx - pastRows),
       );
       capped = sorted.slice(start, start + visibleCount);
     } else {
@@ -250,6 +256,24 @@ export default function TimetableWidget() {
                 Hôm nay
               </button>
             )}
+            <div className="flex bg-muted/40 rounded border border-border ml-1 p-0.5">
+              <button
+                type="button"
+                className={`rounded px-1.5 py-0.5 text-xs transition-colors ${displayMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setDisplayMode("list")}
+                title="Dạng danh sách"
+              >
+                <List size={14} />
+              </button>
+              <button
+                type="button"
+                className={`rounded px-1.5 py-0.5 text-xs transition-colors ${displayMode === "calendar" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setDisplayMode("calendar")}
+                title="Dạng Timeline 1 ngày"
+              >
+                <CalendarIcon size={14} />
+              </button>
+            </div>
           </div>
           <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground ml-1">
             {formatDateLabel(date)}
@@ -339,7 +363,11 @@ export default function TimetableWidget() {
       {/* Body */}
       <div className="overflow-x-auto">
         {isLoading ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">Đang tải lịch…</div>
+          <div className="flex flex-col gap-2 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[52px] w-full rounded-md" />
+            ))}
+          </div>
         ) : error ? (
           <div className="px-4 py-8 text-center text-sm text-destructive">
             Lỗi tải lịch: {(error as Error).message || "unknown"}
@@ -386,6 +414,8 @@ export default function TimetableWidget() {
               <>Không có dòng nào khớp.</>
             )}
           </div>
+        ) : displayMode === "calendar" ? (
+          <TimetableCalendarView rows={filteredRows} companyId={companyId} />
         ) : (
           <div>
             {processedSections.map((section) => (

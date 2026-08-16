@@ -1,63 +1,64 @@
 // Chat Header — customer info + quick actions
-// Ticket modal reuses TicketForm + SimpleModal from CRM (no duplication)
+// ("Tạo đơn" + "Phiếu HT" đã chuyển sang card Customer 360 trong panel Hồ sơ.)
 
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import {
-  Package, Ticket, User, Pin, BellOff,
-  ClipboardList, X,
+  ClipboardList, X, Pause, Play, ArrowLeft, PauseCircle,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from "@/components/ui/select";
 import { channelsApi, type ChannelSession } from "@/api/channels";
-import { crmApi } from "@/api/crm";
-import { SimpleModal } from "../../crm/components/SimpleModal";
 import { type ChannelDisplayMap } from "../UnifiedInbox";
-import { ChannelBadge, AgentBadge } from "@/components/ChannelBadge";
+import { AgentBadge } from "@/components/ChannelBadge";
 
 interface Props {
   conversation: ChannelSession;
   onToggleCustomer: () => void;
-  onShowOrderPanel?: () => void;
   onAction: () => void;
   channelMap?: ChannelDisplayMap;
+  /** Set on narrow layouts, where the list and the thread share one column. */
+  onBack?: () => void;
 }
 
-const defaultTicketForm = { title: '', description: '', category: 'general', priority: 'medium', status: 'open', assigned_to_agent: '' };
-export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPanel, onAction, channelMap }: Props) {
-  const navigate = useNavigate();
-  const qc = useQueryClient();
-  const [showTicketModal, setShowTicketModal] = useState(false);
-  const [ticketForm, setTicketForm] = useState(defaultTicketForm);
-
+export function ChatHeader({ conversation: conv, onToggleCustomer, onAction, channelMap, onBack }: Props) {
   const chInfo = conv.channel_name && channelMap ? channelMap[conv.channel_name] : null;
   const channelLabel = chInfo?.display_name || conv.channel_name || "Kênh";
   const channelColor = chInfo?.color || "#6B7280";
   const displayName = conv.customer?.display_name || conv.sender_name || conv.sender_id || "Không rõ";
   const leadScore = conv.customer?.lead_score;
+  // Per-conversation bot pause (metadata.bot_paused). Lets the operator take over
+  // a single thread instantly — agent goes silent for THIS customer only,
+  // messages still arrive. Channel-wide pause lives in Cài đặt kênh.
+  const meta = (conv.metadata || {}) as {
+    bot_paused?: boolean; paused_pending_count?: number;
+    bot_paused_reason?: string; bot_paused_at?: string;
+    human_takeover_at?: string;
+  };
+  const botPaused = meta.bot_paused === true;
+  // Số tin khách CHỜ trong lúc bot tắt (consumer stash khi tin chạm gate paused, 2026-07-16)
+  // → nhắc operator nhớ bật bot lại (chống case "quên bật 3 tuần" của khách yinyangmasters).
+  const pausedWaiting = meta.paused_pending_count ?? 0;
+  // C4 (plan CSKH-BOT-PAUSE-UX): badge nói RÕ lý do dừng — "bạn đang trực" vs "máy tự dừng"
+  // + mốc giờ, để chị không đọc "BOT ĐANG DỪNG" trơ thành "kẹt".
+  const pauseLabel = buildPauseLabel(meta);
 
-  // Agent list for ticket assignment (same query as TicketListPage)
-  const { data: agents } = useQuery({
-    queryKey: ['agents-list'],
+  // Agent options for the inline per-chat picker (always loaded — lets the operator
+  // turn the bot ON with a chosen agent even on a channel that has no default agent).
+  const { data: chatAgentOptions = [] } = useQuery({
+    queryKey: ['chat-agent-options'],
     queryFn: async () => {
       const res = await fetch('/api/channels/agent-configs');
       if (!res.ok) return [];
       return (await res.json()).map((a: any) => ({ slug: a.slug, name: a.display_name || a.slug }));
     },
     staleTime: 60_000,
-    enabled: showTicketModal,
   });
-  const agentList = (agents || []) as Array<{ slug: string; name: string }>;
-
-  // Create ticket mutation (same as TicketListPage)
-  const createTicketMut = useMutation({
-    mutationFn: (d: any) => crmApi.createTicket(d),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['crm'] });
-      setShowTicketModal(false);
-      setTicketForm(defaultTicketForm);
-    },
+  // Assign / clear the agent for THIS conversation (writes a chat_id override that
+  // resolveAgent matches; takes effect on the next inbound message).
+  const changeAgentMut = useMutation({
+    mutationFn: (slug: string) => channelsApi.changeAgent(conv.session_key, slug),
+    onSettled: () => onAction(),
   });
 
   const quickAction = async (fn: () => Promise<any>) => {
@@ -68,9 +69,21 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
   return (
     <>
       <div className="border-b px-3 py-1.5">
-        {/* Compact single row: Avatar + Name + Badges + Actions */}
-        <div className="flex items-center justify-between gap-2">
+        {/* Avatar + Name + Badges on the left; actions on the right. Wraps to a
+            second row when the chat panel is narrow (e.g. customer panel open) so
+            the labeled action buttons never overlap or get clipped. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
           <div className="flex items-center gap-2 min-w-0 flex-1">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                aria-label="Quay lại danh sách hội thoại"
+                className="-ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+            )}
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
               style={{ backgroundColor: channelColor }}
@@ -78,104 +91,167 @@ export function ChatHeader({ conversation: conv, onToggleCustomer, onShowOrderPa
               {displayName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold truncate max-w-[200px]">{displayName}</h3>
-                <ChannelBadge name={channelLabel} size="sm" />
-                {conv.agent_slug && <AgentBadge slug={conv.agent_slug} size="sm" />}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                <h3 className="text-sm font-semibold truncate max-w-[180px]">{displayName}</h3>
                 {conv.label && (
-                  <span className="text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold uppercase bg-red-500/10 text-red-500">
+                  <span className="shrink-0 text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold uppercase bg-red-500/10 text-red-500">
                     {conv.label}
                   </span>
                 )}
                 {leadScore != null && (
                   <span className="text-[10px] text-muted-foreground tabular-nums">Lead: {leadScore}</span>
                 )}
+                {/* App vs Web origin (metadata.last_source, set by the consumer from
+                    edge cskh-inbound). Only appears for cskh customers who chat from
+                    the app/web — Zalo/FB threads don't carry a source. */}
+                {(() => {
+                  const src = (conv.metadata as { last_source?: string } | undefined)?.last_source;
+                  if (!src) return null;
+                  const isApp = src === "mobile";
+                  return (
+                    <span
+                      title={isApp ? "Khách đang nhắn từ App" : "Khách đang nhắn từ Web"}
+                      className={`text-[10px] px-1.5 py-0 leading-[16px] rounded-sm font-semibold ${isApp ? "bg-sky-500/10 text-sky-600" : "bg-emerald-500/10 text-emerald-600"}`}
+                    >
+                      {isApp ? "📱 App" : "🌐 Web"}
+                    </span>
+                  );
+                })()}
+              </div>
+              {/* Which connected account this thread belongs to — full name + the
+                  channel's own color so the operator never replies from the wrong
+                  account (e.g. Zalo Personal Jennie vs Zalo Yinyang Gemral). */}
+              <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                <span className="text-[9px] text-muted-foreground shrink-0 uppercase tracking-wider font-medium">
+                  Trả lời từ
+                </span>
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-bold border min-w-0 max-w-[230px]"
+                  style={{ backgroundColor: `${channelColor}1A`, color: channelColor, borderColor: `${channelColor}40` }}
+                  title={channelLabel}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: channelColor }} />
+                  <span className="truncate">{channelLabel}</span>
+                </span>
+                {conv.agent_slug && <AgentBadge slug={conv.agent_slug} size="sm" />}
               </div>
             </div>
           </div>
 
-          {/* Quick actions inline */}
-          <div className="flex items-center gap-1 shrink-0">
-            <IconBtn icon={<Package className="h-3.5 w-3.5" />} title="Tạo đơn" onClick={() => onShowOrderPanel?.()} />
-            <IconBtn icon={<Ticket className="h-3.5 w-3.5" />} title="Phiếu HT" onClick={() => { setTicketForm(defaultTicketForm); setShowTicketModal(true); }} />
-            {conv.customer?.id && (
-              <IconBtn icon={<User className="h-3.5 w-3.5" />} title="Xem CRM" onClick={() => navigate(`/crm/customers/${conv.customer!.id}`)} />
+          {/* Quick actions — wrap as a group below when space is tight */}
+          <div className="flex items-center gap-1 flex-wrap justify-end">
+            {/* Per-chat agent picker — turn bot ON (pick agent) / OFF (— Không bot —),
+                works even when the channel has no default agent. */}
+            <Select
+              value={conv.agent_slug || "__none__"}
+              onValueChange={(v) => changeAgentMut.mutate(v === "__none__" ? "" : v)}
+              disabled={changeAgentMut.isPending}
+            >
+              <SelectTrigger
+                size="sm"
+                title="Đổi/TẮT AGENT xử lý hội thoại này (vĩnh viễn cho chat này). 'Không bot' = không agent nào tự trả lời. Khác nút Dừng Bot (tạm trực, bot vẫn còn agent)."
+                className={`h-7 text-[11px] max-w-[170px] mr-1 ${
+                  conv.agent_slug
+                    ? ""
+                    : "border-dashed border-amber-500/50 text-amber-600 [&>svg]:opacity-80"
+                }`}
+              >
+                <SelectValue placeholder="— Không bot —" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— Không bot —</SelectItem>
+                {chatAgentOptions.map((a: { slug: string; name: string }) => (
+                  <SelectItem key={a.slug} value={a.slug}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* BOT ĐANG DỪNG (đậm hơn 2026-07-28) — bản cũ là chip mờ 10px, chị lướt qua
+                không thấy nên một thread bị dừng từ trước vẫn nằm im 16h (khách nhắn 3 lần
+                chỉ nhận câu chờ). BỎ gate `conv.agent_slug`: gemini-proxy đọc cờ bot_paused
+                ĐỘC LẬP agent_slug, nên gate cũ có thể GIẤU đúng trạng thái đang dừng. */}
+            {botPaused && (
+              <span
+                title="Bot ĐANG DỪNG cho hội thoại này — khách chỉ nhận câu chờ, không ai tự trả lời. Bấm 'Bật Bot' để bot chạy lại."
+                className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-amber-500/20 text-amber-600 font-bold ring-1 ring-amber-500/40"
+              >
+                <PauseCircle className="h-3.5 w-3.5" />
+                {pauseLabel}{pausedWaiting > 0 ? ` · ${pausedWaiting} tin chờ` : ""}
+              </span>
             )}
-            <IconBtn icon={<Pin className="h-3.5 w-3.5" />} title={conv.is_pinned ? "Bỏ ghim" : "Ghim"} onClick={() => quickAction(() => channelsApi.pinConversation(conv.session_key))} active={conv.is_pinned} />
-            <IconBtn icon={<BellOff className="h-3.5 w-3.5" />} title={conv.is_muted ? "Bật TB" : "Tắt TB"} onClick={() => quickAction(() => channelsApi.muteConversation(conv.session_key))} active={conv.is_muted} />
-            <IconBtn icon={<ClipboardList className="h-3.5 w-3.5" />} title="Xem CRM" onClick={onToggleCustomer} />
+            {/* C6 (plan CSKH-BOT-PAUSE-UX): nút "Bật Bot" LUÔN hiện khi đang paused, KỂ CẢ
+                hội thoại "— Không bot —" (agent_slug=null) — trước đây gate agent_slug làm badge
+                hiện mà KHÔNG có nút bật = "kẹt" theo nghĩa đen. Nút "Dừng Bot" vẫn cần agent_slug
+                (không có agent thì dừng bot vô nghĩa). */}
+            {(botPaused || conv.agent_slug) && (
+              <button
+                onClick={() => quickAction(() => channelsApi.setBotPaused(conv.session_key, !botPaused))}
+                title={botPaused
+                  ? "Bạn đang TRỰC (bot tạm dừng cho hội thoại này) — bấm để bot tiếp tục tự trả lời"
+                  : "TẠM DỪNG bot để bạn trực tiếp trả lời (takeover). Tin khách vẫn về. Bấm lại để bot tiếp tục. Khác 'Không bot' (bỏ hẳn agent)."}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold transition-colors mr-1 ${
+                  botPaused
+                    ? "bg-amber-500/20 text-amber-600 ring-1 ring-amber-500/40 hover:bg-amber-500/30"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                {botPaused
+                  ? <><Play className="h-3.5 w-3.5" /> Bật Bot</>
+                  : <><Pause className="h-3.5 w-3.5" /> Dừng Bot</>}
+              </button>
+            )}
+            {/* "Tạo đơn" + "Phiếu HT" đã chuyển vào card Customer 360 (panel Hồ sơ).
+                "Ghim" + "Tắt TB" đã có ở cột danh sách hội thoại → bỏ khỏi header. */}
+            <IconBtn icon={<ClipboardList className="h-4 w-4" />} label="Hồ sơ" title="Mở/đóng hồ sơ khách hàng" onClick={onToggleCustomer} />
           </div>
         </div>
       </div>
 
-      {/* ═══ Modal: Phiếu hỗ trợ (reuse TicketForm từ CRM) ═══ */}
-      <SimpleModal open={showTicketModal} onClose={() => setShowTicketModal(false)} title="Tạo phiếu hỗ trợ mới" footer={<>
-        <Button variant="outline" onClick={() => setShowTicketModal(false)}>Hủy</Button>
-        <Button disabled={!ticketForm.title.trim() || createTicketMut.isPending} onClick={() => createTicketMut.mutate(ticketForm)}>
-          {createTicketMut.isPending ? 'Đang tạo...' : 'Tạo phiếu'}
-        </Button>
-      </>}>
-        {/* Same form as TicketListPage — Tiêu đề, Mô tả, Loại, Ưu tiên, Gán agent */}
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium">Tiêu đề *</label>
-            <Input value={ticketForm.title} onChange={e => setTicketForm(f => ({ ...f, title: e.target.value }))} placeholder="Nhập tiêu đề..." />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Mô tả</label>
-            <textarea value={ticketForm.description} onChange={e => setTicketForm(f => ({ ...f, description: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[80px]" placeholder="Mô tả chi tiết..." />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium">Loại</label>
-              <select value={ticketForm.category} onChange={e => setTicketForm(f => ({ ...f, category: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option value="general">Chung</option>
-                <option value="product_inquiry">Hỏi sản phẩm</option>
-                <option value="order_issue">Vấn đề đơn hàng</option>
-                <option value="payment_issue">Thanh toán</option>
-                <option value="shipping_issue">Giao hàng</option>
-                <option value="refund_request">Hoàn tiền</option>
-                <option value="technical_support">Kỹ thuật</option>
-                <option value="complaint">Khiếu nại</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm font-medium">Ưu tiên</label>
-              <select value={ticketForm.priority} onChange={e => setTicketForm(f => ({ ...f, priority: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                <option value="low">Thấp</option>
-                <option value="medium">Trung bình</option>
-                <option value="high">Cao</option>
-                <option value="urgent">Khẩn cấp</option>
-                <option value="critical">Nghiêm trọng</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="text-sm font-medium">Gán cho agent</label>
-            <select value={ticketForm.assigned_to_agent} onChange={e => setTicketForm(f => ({ ...f, assigned_to_agent: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-              <option value="">— Không gán —</option>
-              {agentList.map(a => <option key={a.slug} value={a.slug}>{a.name}</option>)}
-            </select>
-            {ticketForm.assigned_to_agent && (
-              <p className="text-xs text-blue-600 mt-1">
-                Agent "{ticketForm.assigned_to_agent}" sẽ nhận thông báo qua War Room và xử lý ngay.
-              </p>
-            )}
-          </div>
-        </div>
-      </SimpleModal>
     </>
   );
 }
 
-// Compact icon-only button for header actions
+// C4: dựng câu badge "BOT ĐANG DỪNG" nói rõ AI dừng + LÝ DO + MỐC giờ (HCM).
+// Ưu tiên human_takeover_at (chị đang trực) → kèm phụ chú máy tự dừng nếu có reason escalation.
+const REASON_VN: Record<string, string> = {
+  customer_hostile: "khách bức xúc",
+  prolonged_frustration: "khách bức xúc kéo dài",
+  refund_dispute: "tranh chấp hoàn tiền",
+  fraud_allegation: "khách tố gian lận",
+  legal_threat: "khách doạ pháp lý",
+  mental_health_concern: "lo ngại tâm lý khách",
+  manual_takeover: "",
+};
+function gioHCM(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const hcm = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+  return `${String(hcm.getUTCHours()).padStart(2, "0")}:${String(hcm.getUTCMinutes()).padStart(2, "0")}`;
+}
+function buildPauseLabel(meta: {
+  bot_paused_reason?: string; bot_paused_at?: string; human_takeover_at?: string;
+}): string {
+  const reasonRaw = meta.bot_paused_reason || "";
+  const reasonVN = REASON_VN[reasonRaw] ?? reasonRaw;
+  const mayTuDung = reasonRaw && reasonRaw !== "manual_takeover";
+  if (meta.human_takeover_at) {
+    let s = `BOT ĐANG DỪNG — bạn đang trực (từ ${gioHCM(meta.human_takeover_at)})`;
+    if (mayTuDung) s += ` · máy tự dừng ${gioHCM(meta.bot_paused_at)} vì ${reasonVN}`;
+    return s;
+  }
+  if (mayTuDung) return `BOT ĐANG DỪNG — máy tự dừng: ${reasonVN} (${gioHCM(meta.bot_paused_at)})`;
+  return "BOT ĐANG DỪNG — bạn đang trực"; // data cũ / không rõ nguồn → giữ chữ hiện tại
+}
+
+// Header action button — icon + short label, larger hit area for easy clicking.
 function IconBtn({
   icon,
+  label,
   title,
   onClick,
   active,
 }: {
   icon: React.ReactNode;
+  label: string;
   title: string;
   onClick: () => void;
   active?: boolean;
@@ -184,13 +260,14 @@ function IconBtn({
     <button
       onClick={onClick}
       title={title}
-      className={`p-1.5 rounded-md transition-colors ${
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
         active
           ? "bg-primary/10 text-primary"
           : "text-muted-foreground hover:bg-muted hover:text-foreground"
       }`}
     >
       {icon}
+      <span>{label}</span>
     </button>
   );
 }

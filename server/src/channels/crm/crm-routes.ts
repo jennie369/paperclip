@@ -115,13 +115,45 @@ router.post('/customers/bulk-delete', async (req, res) => {
   }
 });
 
-// PUT /api/channels/crm/customers/:id — cập nhật khách hàng (status, etc.)
+// Cột khách-hàng user được phép sửa qua PUT (whitelist — chống mass-assignment
+// + chống crash khi UI gửi cột rác như "stage" không tồn tại trong schema).
+// LOẠI TRỪ lead_score & lead_temperature: 2 cột này DẪN XUẤT, bị trigger
+// trg_lead_score (BEFORE UPDATE) recompute từ calculate_lead_score() trên MỌI
+// update → ghi tay vào là futile (no error nhưng revert ngay). Stats, link-IDs
+// (gemral/shopify), timestamps = system-managed, cũng không nhận từ client.
+const CUSTOMER_EDITABLE_COLUMNS = new Set([
+  'display_name', 'phone', 'email', 'avatar_url',
+  'status',
+  'lead_temperature_manual', // override nhiệt độ (display = COALESCE(manual, auto-from-score))
+  'ai_summary', 'ai_tags', 'internal_notes',
+  'assigned_agent', 'next_follow_up_at',
+]);
+
+// PUT /api/channels/crm/customers/:id — cập nhật khách hàng (status, name, temperature…)
 router.put('/customers/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Chỉ giữ field nằm trong whitelist
+    const patch: Record<string, any> = {};
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (CUSTOMER_EDITABLE_COLUMNS.has(k)) patch[k] = v;
+    }
+    // metadata: MERGE (không clobber key khác) — dùng cho dữ liệu CRM-native
+    // như địa chỉ manual (SSOT CRM_AND_META_CAPI: KHÔNG thêm cột mirror, lưu metadata.address).
+    const mdIn = (req.body || {}).metadata;
+    if (mdIn && typeof mdIn === 'object' && !Array.isArray(mdIn)) {
+      const { data: cur } = await supabase.from('crm_customers').select('metadata').eq('id', id).maybeSingle();
+      patch.metadata = { ...((cur?.metadata as Record<string, any>) || {}), ...mdIn };
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: 'Không có trường hợp lệ để cập nhật' });
+    }
+    patch.updated_at = new Date().toISOString();
+
     const { data, error } = await supabase
       .from('crm_customers')
-      .update({ ...req.body, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('id', id)
       .select()
       .single();
@@ -153,7 +185,7 @@ router.post('/customers', async (req, res) => {
         message_type: 'info',
         content: `👤 Khách hàng mới: ${name}${data.source ? ` (nguồn: ${data.source})` : ''}`,
         priority: 2,
-      }).catch(() => {});
+      }).then(undefined, () => {});
     }
 
     // Queue CAPI Lead event
@@ -164,24 +196,6 @@ router.post('/customers', async (req, res) => {
     });
 
     res.status(201).json(data);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/channels/crm/customers/:id — update
-router.put('/customers/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { data, error } = await supabase
-      .from('crm_customers')
-      .update({ ...req.body, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) return res.status(400).json({ error: error.message });
-    res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -253,6 +267,25 @@ router.get('/tags', async (_req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
     res.json(data || []);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/channels/crm/tags — tạo tag mới (dedup case-insensitive theo name → trả tag cũ nếu trùng).
+// Cho phép CS tự thêm tag ngoài preset, KHÔNG trùng lặp DB.
+router.post('/tags', async (req, res) => {
+  try {
+    const name = String((req.body || {}).name || '').trim();
+    const category = String((req.body || {}).category || 'custom').trim() || 'custom';
+    if (!name) return res.status(400).json({ error: 'Thiếu tên tag' });
+    // Dedup trong JS (bảng nhỏ) — tránh bẫy wildcard `_`/`%` của ilike với tag snake_case.
+    const { data: all } = await supabase.from('crm_tags').select('*');
+    const dup = (all || []).find((t: any) => String(t.name || '').trim().toLowerCase() === name.toLowerCase());
+    if (dup) return res.json(dup);
+    const { data, error } = await supabase.from('crm_tags').insert({ name, category }).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -398,6 +431,152 @@ router.post('/customers/:id/notes', async (req, res) => {
   }
 });
 
+// PUT /api/channels/crm/customers/:id/notes/:noteId — sửa ghi chú (content/pinned)
+router.put('/customers/:id/notes/:noteId', async (req, res) => {
+  try {
+    const patch: Record<string, any> = {};
+    if (typeof req.body.content === 'string') {
+      if (!req.body.content.trim()) return res.status(400).json({ error: 'Nội dung không được trống' });
+      patch.content = req.body.content.trim();
+    }
+    if (typeof req.body.pinned === 'boolean') patch.pinned = req.body.pinned;
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Không có gì để cập nhật' });
+
+    const { data, error } = await supabase
+      .from('crm_notes')
+      .update(patch)
+      .eq('id', req.params.noteId).eq('customer_id', req.params.id)
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/channels/crm/customers/:id/notes/:noteId — xoá 1 ghi chú
+router.delete('/customers/:id/notes/:noteId', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('crm_notes')
+      .delete().eq('id', req.params.noteId).eq('customer_id', req.params.id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/channels/crm/customers/:id/notes/bulk-delete — xoá nhiều ghi chú
+router.post('/customers/:id/notes/bulk-delete', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids required' });
+    const { error } = await supabase
+      .from('crm_notes')
+      .delete().eq('customer_id', req.params.id).in('id', ids);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true, deleted: ids.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Tags (gán/gỡ tag cho khách — crm_customer_tags) ───
+
+// POST /api/channels/crm/customers/:id/tags — gán 1 tag (idempotent)
+router.post('/customers/:id/tags', async (req, res) => {
+  try {
+    const { tag_id, tagged_by } = req.body;
+    if (!tag_id) return res.status(400).json({ error: 'tag_id required' });
+    const { error } = await supabase
+      .from('crm_customer_tags')
+      .upsert(
+        { customer_id: req.params.id, tag_id, tagged_by: tagged_by || 'board' },
+        { onConflict: 'customer_id,tag_id', ignoreDuplicates: true },
+      );
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/channels/crm/customers/:id/tags/:tagId — gỡ tag
+router.delete('/customers/:id/tags/:tagId', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('crm_customer_tags')
+      .delete()
+      .eq('customer_id', req.params.id)
+      .eq('tag_id', req.params.tagId);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Segments (read-only — segment ĐỘNG theo rule, đánh giá best-effort) ───
+
+// GET /api/channels/crm/customers/:id/segments — segment mà khách THUỘC VỀ.
+// chatbot_segments.rules là vocab cố định cho "chatbot user"; map best-effort
+// sang dữ liệu CRM. Conservative: điều kiện không có data CRM để verify (vd
+// has_abandoned_cart) → coi như KHÔNG thoả → không claim thuộc về.
+router.get('/customers/:id/segments', async (req, res) => {
+  try {
+    const { data: c } = await supabase
+      .from('crm_customers')
+      .select('channels, gemral_data, total_orders, last_contact_at')
+      .eq('id', req.params.id).single();
+    if (!c) return res.status(404).json({ error: 'Không tìm thấy khách hàng' });
+
+    const { data: segs } = await supabase
+      .from('chatbot_segments')
+      .select('id, name, rules')
+      .eq('is_active', true);
+
+    // Dữ liệu khách để so rule
+    const platforms = new Set(
+      (Array.isArray(c.channels) ? c.channels : []).map((ch: any) => {
+        const t = String(ch?.channel_type || '').toLowerCase();
+        if (t.includes('zalo')) return 'zalo';
+        if (t.includes('facebook') || t.includes('messenger')) return 'messenger';
+        if (t.includes('telegram')) return 'telegram';
+        return t;
+      }),
+    );
+    const gd = (c.gemral_data || {}) as Record<string, any>;
+    const tier = String(gd.tier || gd.chatbot_tier || gd.scanner_tier || '').toUpperCase();
+    const purchaseCount = c.total_orders || 0;
+    const lastActiveDays = c.last_contact_at
+      ? Math.floor((Date.now() - new Date(c.last_contact_at).getTime()) / 86400000)
+      : null;
+
+    const matchRange = (v: number | null, r: any) =>
+      v != null && (r.lte == null || v <= r.lte) && (r.gte == null || v >= r.gte);
+
+    const matched: Array<{ id: string; name: string }> = [];
+    const seenNames = new Set<string>(); // dedup các segment trùng tên
+    for (const s of segs || []) {
+      const rules = (s.rules || {}) as Record<string, any>;
+      let ok = true;
+      for (const [key, cond] of Object.entries(rules)) {
+        if (key === 'platform') ok = Array.isArray(cond) && cond.some((p: string) => platforms.has(p));
+        else if (key === 'tier') ok = Array.isArray(cond) && cond.map((t) => String(t).toUpperCase()).includes(tier);
+        else if (key === 'purchase_count') ok = matchRange(purchaseCount, cond);
+        else if (key === 'last_active_days') ok = matchRange(lastActiveDays, cond);
+        else ok = false; // điều kiện không map được (has_abandoned_cart…) → conservative
+        if (!ok) break;
+      }
+      if (ok && !seenNames.has(s.name)) { seenNames.add(s.name); matched.push({ id: s.id, name: s.name }); }
+    }
+    res.json(matched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Webhook Logs + Replay ───
 
 // GET /api/channels/crm/webhooks/logs — recent webhook events
@@ -437,6 +616,64 @@ router.post('/webhooks/replay/:id', async (req, res) => {
       body,
     });
     res.json({ ok: resp.ok, status: resp.status, replayed_id: id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Interactions (timeline "Hoạt động gần đây" — crm_interactions) ───
+// Chỉ title + content editable (type/channel/timestamp/revenue = system-managed).
+const INTERACTION_EDITABLE = new Set(['title', 'content']);
+
+// POST /api/channels/crm/customers/:id/interactions — thêm 1 hoạt động tay
+router.post('/customers/:id/interactions', async (req, res) => {
+  try {
+    const title = String((req.body || {}).title || '').trim();
+    const content = String((req.body || {}).content || '').trim();
+    if (!title && !content) return res.status(400).json({ error: 'Tiêu đề hoặc nội dung bắt buộc' });
+    const { data, error } = await supabase
+      .from('crm_interactions')
+      .insert({
+        customer_id: req.params.id,
+        interaction_type: String((req.body || {}).interaction_type || 'note'),
+        title: title || 'Ghi chú',
+        content: content || null,
+        agent_slug: (req.body || {}).agent_slug || 'manual',
+      })
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/channels/crm/interactions/:id — sửa title/content 1 hoạt động
+router.put('/interactions/:id', async (req, res) => {
+  try {
+    const patch: Record<string, any> = {};
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (INTERACTION_EDITABLE.has(k)) patch[k] = typeof v === 'string' ? (v.trim() || null) : v;
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Không có field hợp lệ' });
+    const { data, error } = await supabase
+      .from('crm_interactions')
+      .update(patch)
+      .eq('id', req.params.id)
+      .select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/channels/crm/interactions/:id — xoá 1 hoạt động
+router.delete('/interactions/:id', async (req, res) => {
+  try {
+    const { error } = await supabase.from('crm_interactions').delete().eq('id', req.params.id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

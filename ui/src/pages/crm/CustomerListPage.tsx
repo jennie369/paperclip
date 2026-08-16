@@ -93,9 +93,11 @@ export function CustomerListPage() {
 
   return (
     <div className="space-y-4 p-6">
-      <div className="flex items-center justify-between">
+      {/* Wraps below md: the three actions need 405px side by side, which overflows
+          a 375px phone and drags the whole page into horizontal scroll. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Khách hàng</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={() => {
             const rows = list.map((c: any) => [c.display_name, c.phone, c.email, c.status, c.lead_score, c.lead_temperature].join(','));
             const csv = ['Tên,SĐT,Email,Trạng thái,Lead Score,Nhiệt độ', ...rows].join('\n');

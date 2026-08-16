@@ -20,7 +20,7 @@ export interface IssueAssignmentWakeupDeps {
 
 export function queueIssueAssignmentWakeup(input: {
   heartbeat: IssueAssignmentWakeupDeps;
-  issue: { id: string; assigneeAgentId: string | null; status: string };
+  issue: { id: string; assigneeAgentId: string | null; status: string; scheduledWakeAt?: Date | null };
   reason: string;
   mutation: string;
   contextSource: string;
@@ -34,6 +34,11 @@ export function queueIssueAssignmentWakeup(input: {
   // delegated task sits in backlog forever (it's not returned by /agents/me/inbox-lite
   // which filters to todo|in_progress|blocked) and the escalation loop breaks.
   if (input.issue.status === "backlog" && input.requestedByActorType !== "agent") return;
+  // Scheduled issues must NOT wake before their time — the scheduler tick
+  // (scheduled-issue-wakeups.ts) flips them to todo and wakes at the right
+  // moment. This guard is the ONLY gate on the agent-created path: the
+  // backlog check above intentionally lets agent actors through.
+  if (input.issue.scheduledWakeAt && input.issue.scheduledWakeAt.getTime() > Date.now()) return;
 
   return input.heartbeat
     .wakeup(input.issue.assigneeAgentId, {

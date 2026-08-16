@@ -141,7 +141,7 @@ router.post('/', async (req, res) => {
       p_id: customer_id,
       p_orders: 1,
       p_revenue: total,
-    }).catch(() => {});
+    }).then(undefined, () => {});
 
     // Create interaction
     await supabase.from('crm_interactions').insert({
@@ -162,7 +162,7 @@ router.post('/', async (req, res) => {
         message_type: 'info',
         content: `📦 Đơn hàng mới ${data.order_number} — ${new Intl.NumberFormat('vi-VN').format(total)}₫ (${items.length} sản phẩm)`,
         priority: 2,
-      }).catch(() => {});
+      }).then(undefined, () => {});
     }
 
     // Queue CAPI Purchase event

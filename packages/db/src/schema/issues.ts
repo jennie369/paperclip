@@ -52,6 +52,7 @@ export const issues = pgTable(
       .references((): AnyPgColumn => executionWorkspaces.id, { onDelete: "set null" }),
     executionWorkspacePreference: text("execution_workspace_preference"),
     executionWorkspaceSettings: jsonb("execution_workspace_settings").$type<Record<string, unknown>>(),
+    scheduledWakeAt: timestamp("scheduled_wake_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
@@ -77,6 +78,9 @@ export const issues = pgTable(
     projectWorkspaceIdx: index("issues_company_project_workspace_idx").on(table.companyId, table.projectWorkspaceId),
     executionWorkspaceIdx: index("issues_company_execution_workspace_idx").on(table.companyId, table.executionWorkspaceId),
     identifierIdx: uniqueIndex("issues_identifier_idx").on(table.identifier),
+    scheduledWakeIdx: index("issues_scheduled_wake_idx")
+      .on(table.scheduledWakeAt)
+      .where(sql`${table.scheduledWakeAt} is not null`),
     openRoutineExecutionIdx: uniqueIndex("issues_open_routine_execution_uq")
       .on(table.companyId, table.originKind, table.originId)
       .where(

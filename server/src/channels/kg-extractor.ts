@@ -105,7 +105,9 @@ function callGeminiCli(message: string): Promise<string> {
 
     let stdout = '';
     let stderr = '';
+    proc.stdout?.setEncoding("utf8");
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.setEncoding("utf8");
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code) => {
       if (code === 0 && stdout.trim()) {

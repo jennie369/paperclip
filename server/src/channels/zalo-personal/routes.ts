@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { ZaloPersonalChannel } from './channel.js';
 import { supabase } from './supabase.js';
+import { isHumanSent } from '../sent-by-utils.js';
 
 // Configure multer for temp file uploads
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || '/tmp/paperclip-uploads');
@@ -26,6 +27,42 @@ const router = Router();
 
 // Active channels in memory
 const activeChannels = new Map<string, ZaloPersonalChannel>();
+
+// ── Media serve (ảnh outbound media-library) ────────────────────────────────
+// Roots cho phép serve: media-library.json trỏ path HỖN HỢP — project-relative
+// (memory/agents/…) + absolute content vault (D:/Claude Projects/App Content Jennie/…).
+// SSOT list này = ALLOWED_MEDIA_ROOTS trong channel.ts (giữ đồng bộ).
+const ALLOWED_MEDIA_ROOTS = [
+  process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner',
+  process.env.CONTENT_LIBRARY_ROOT || 'D:/Claude Projects/App Content Jennie',
+].map((r) => path.resolve(r));
+const MEDIA_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.bmp': 'image/bmp', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
+};
+function isWithinAllowedRoot(abs: string): boolean {
+  return ALLOWED_MEDIA_ROOTS.some((root) => {
+    const rel = path.relative(root, abs);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
+}
+
+/**
+ * GET /api/channels/zalo-personal/media?path=<absolute path within allowed roots>
+ * Serve media-library / marketing-kit asset để inbox HIỂN THỊ ảnh outbound.
+ * Ảnh agent gửi khách = file LOCAL trên đĩa (không phải URL) → browser không load
+ * được path đĩa → proxy qua endpoint này. Guard: chỉ serve trong ALLOWED_MEDIA_ROOTS.
+ */
+router.get('/media', (req, res) => {
+  const p = String(req.query.path || '');
+  if (!p) return res.status(400).json({ error: 'path required' });
+  const abs = path.resolve(p);
+  if (!isWithinAllowedRoot(abs)) return res.status(403).json({ error: 'forbidden' });
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return res.status(404).json({ error: 'not found' });
+  res.setHeader('Content-Type', MEDIA_MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  fs.createReadStream(abs).pipe(res);
+});
 
 /**
  * GET /api/channels/zalo-personal
@@ -85,7 +122,7 @@ router.get('/connect', async (req, res) => {
  * Body: { channel_name, thread_id, message, thread_type? }
  */
 router.post('/send', async (req, res) => {
-  const { channel_name, thread_id, message, thread_type } = req.body;
+  const { channel_name, thread_id, message, thread_type, skip_db_log } = req.body;
 
   console.log(`[ZaloRoutes] POST /send channel=${channel_name} thread=${thread_id} msg="${message?.substring(0, 30)}"`);
   console.log(`[ZaloRoutes] activeChannels keys:`, [...activeChannels.keys()]);
@@ -96,8 +133,20 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: 'Channel not connected' });
   }
 
+  // Chặn sớm: uid Zalo là dãy số dài (~15-20 chữ số), KHÔNG phải số điện thoại.
+  // Hội thoại có chat_id là SĐT do luồng khác tự tạo (vd từ đơn hàng) — nhìn trên
+  // giao diện y hệt hội thoại thật nhưng Zalo luôn trả 114. Báo thẳng thay vì để
+  // người gọi tưởng đã gửi (21/07).
+  if (typeof thread_id === 'string' && /^\+?[\d\s.-]{9,15}$/.test(thread_id.trim()) && !/^\d{15,}$/.test(thread_id.replace(/\D/g, ''))) {
+    const msg = `thread_id "${thread_id}" là SỐ ĐIỆN THOẠI, không phải uid Zalo — hội thoại này chưa gắn với người dùng Zalo thật nên không gửi tự động được. Nhắn tay giúp khách.`;
+    console.error(`[ZaloRoutes] ${msg}`);
+    return res.status(400).json({ success: false, error: msg });
+  }
+
   try {
-    const result = await channel.send(thread_id, message, thread_type || 'dm');
+    // skip_db_log=true khi gọi từ universal /send (route đó đã ghi row optimistic rồi)
+    // → tránh double-insert channel_sent_messages. Path agent gọi channel.send trực tiếp vẫn log.
+    const result = await channel.send(thread_id, message, thread_type || 'dm', undefined, skip_db_log === true);
     console.log(`[ZaloRoutes] Send result:`, JSON.stringify(result).substring(0, 200));
     res.json(result);
   } catch (err: any) {
@@ -274,11 +323,36 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   }
 
   try {
+    // Upload to Supabase Storage để inbox có URL hiển thị ảnh THẬT (§P12 fix 2026-08-16).
+    // Temp file multer nằm ngoài ALLOWED_MEDIA_ROOTS → buildOutboundMediaUrl() trả null → media=null.
+    // Upload lên gemops-attachments (public bucket) trước khi gửi Zalo → URL persistent.
+    let storageUrl: string | undefined;
+    try {
+      const fileBuffer = fs.readFileSync(file.path);
+      const ext = path.extname(file.originalname || file.filename) || '.jpg';
+      const storagePath = `zalo/${channel_name}/${Date.now()}${ext}`;
+      const { data: storageData, error: storageErr } = await (supabase.storage as any)
+        .from('gemops-attachments')
+        .upload(storagePath, fileBuffer, { contentType: file.mimetype, upsert: false });
+      if (!storageErr && storageData) {
+        const { data: { publicUrl } } = (supabase.storage as any)
+          .from('gemops-attachments')
+          .getPublicUrl(storagePath);
+        storageUrl = publicUrl as string;
+      } else if (storageErr) {
+        console.warn('[upload] Storage upload failed (P12 media will be null):', storageErr.message);
+      }
+    } catch (storageEx: any) {
+      console.warn('[upload] Storage exception (P12 media will be null):', storageEx.message);
+    }
+
     const result = await channel.sendImage(
       thread_id,
       file.path,
       (thread_type as 'dm' | 'group') || 'dm',
       caption,
+      undefined, // agentSlug — manual upload
+      storageUrl, // providedMediaUrl — Supabase public URL (or undefined if upload failed)
     );
 
     // Clean up temp file
@@ -309,7 +383,7 @@ router.get('/:name/messages', async (req, res) => {
   // Fetch outbound (sent) messages
   let outQuery = supabase
     .from('channel_sent_messages')
-    .select('id, channel_name, thread_id, thread_type, to_uid, body, content_type, status, sent_by, created_at')
+    .select('id, channel_name, thread_id, thread_type, to_uid, body, content_type, media, status, sent_by, created_at')
     .eq('channel_name', name)
     .in('status', ['sent', 'failed'])
     .order('created_at', { ascending: false })
@@ -329,7 +403,7 @@ router.get('/:name/messages', async (req, res) => {
       ...m,
       direction: 'outbound',
       from_uid: '',
-      sender_name: m.sent_by && m.sent_by !== 'manual' ? `🤖 ${m.sent_by}` : 'Bạn',
+      sender_name: (!m.sent_by || isHumanSent(m.sent_by)) ? 'Bạn' : `🤖 ${m.sent_by}`,
       ts: m.created_at,
       status: m.status,
     })),

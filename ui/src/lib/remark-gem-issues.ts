@@ -41,6 +41,7 @@ export function remarkGemIssues() {
         newChildren.push({ type: 'text', value: text.slice(lastIndex) });
       }
 
+      if (index === undefined) return;
       parent.children.splice(index, 1, ...newChildren);
       return index + newChildren.length;
     });

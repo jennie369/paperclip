@@ -47,6 +47,9 @@ import { useToast } from '@gem/ui';
 import { useScript, useUpdateScript, useSocialPost, useUpdateSocialPost } from '@gem/hooks/useQueryHooks';
 import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
+import { MetaSelect, SlugUrlHandle, generateSlug } from './components/ContentMetaShared';
+import { PromptImageCards } from './components/PromptImageCards';
+import { MarkdownBody } from '../../components/MarkdownBody';
 
 // ============================================================================
 // Status Configuration
@@ -358,20 +361,36 @@ function renderJsonStructured(obj) {
   return renderObject(obj);
 }
 
-// --- Parse markdown tables ---
-function parseMarkdownTable(lines, startIdx) {
-  const rows = [];
-  let i = startIdx;
-  while (i < lines.length && lines[i].trim().startsWith('|')) {
-    const cells = lines[i].trim().split('|').filter(Boolean).map(c => c.trim());
-    rows.push(cells);
-    i++;
-  }
-  if (rows.length < 2) return null; // Need at least header + separator
-  // Check if second row is separator (dashes)
-  const isSep = rows[1].every(c => /^[-:]+$/.test(c));
-  if (!isSep) return null;
-  return { headers: rows[0], data: rows.slice(2), endIdx: i };
+function autoFormatContent(text) {
+  if (typeof text !== 'string') return text;
+  let res = text;
+  
+  // Options A, B, C, D (with or without bold)
+  res = res.replace(/(?:^|\s+)(\*\*[A-D]\.\*\*|\*[A-D]\.\*|[A-D]\.)\s+/g, '\n\n$1 ');
+  
+  // Common markers (added more variations)
+  const markers = [
+    'Đáp án', 'Giải thích', 'Caption', 'Bình luận', 'Hook', 'Body', 'CTA', 'Call to action', 'Action', 'Câu hỏi',
+    'Tiêu đề', 'Mô tả', 'Text trên video', 'Text', 'Hình ảnh', 'Video', 'Hashtags', 'Hashtag', 'Lưu ý', 'Ghi chú', 
+    'Âm thanh', 'Nhạc nền', 'Voice', 'Voice off', 'Kịch bản'
+  ];
+  
+  markers.forEach(marker => {
+    // Match the marker with optional asterisks and a colon, OR just bolded marker without colon
+    const pattern = `(?:^|\\s+)(\\*\\*${marker}\\*\\*:|\\*\\*${marker}:\\*\\*|\\*${marker}\\*:|\\*${marker}:\\*|${marker}:|\\*\\*${marker}\\*\\*)\\s*`;
+    const regex = new RegExp(pattern, 'gi');
+    res = res.replace(regex, '\n\n$1 ');
+  });
+
+  // Prefix with numbers (Câu X, Clip X, Phần X, Video X, Hình X, Ảnh X, Cảnh X, Bài X)
+  const prefixRegex = /(?:^|\s+)(\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*?:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:\*\*?|(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*)\s*/gi;
+  res = res.replace(prefixRegex, '\n\n$1 ');
+  
+  // Bracketed markers like [Text trên màn hình], [Video], 【Caption】, (Voice-over)
+  const bracketRegex = /(?:^|\s+)(\[\w.*?\]|【\w.*?】|\((?:Voice-over|Audio|Visual|Voice|Nhạc nền|Hiệu ứng|Góc máy|Kịch bản|Cười)\))\s*/gi;
+  res = res.replace(bracketRegex, '\n\n$1 ');
+  
+  return res.trim();
 }
 
 function renderMarkdownContent(text) {
@@ -381,107 +400,8 @@ function renderMarkdownContent(text) {
     return renderJsonStructured(jsonObj);
   }
 
-  const lines = text.split('\n');
-  const elements = [];
-  let i = 0;
-
-  const renderBold = (t) => {
-    const parts = t.split(/(\*\*.*?\*\*)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={index} className="text-txt font-bold">{part.slice(2, -2)}</strong>;
-      }
-      return <span key={index}>{part}</span>;
-    });
-  };
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // Skip code fences
-    if (trimmed.startsWith('```')) { i++; continue; }
-
-    // Markdown table detection
-    if (trimmed.startsWith('|')) {
-      const table = parseMarkdownTable(lines, i);
-      if (table) {
-        elements.push(
-          <div key={`table-${i}`} className="overflow-x-auto rounded-card border border-border my-3">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-glass-bg/50">
-                  {table.headers.map((h, hi) => (
-                    <th key={hi} className="px-3 py-2.5 text-left text-xs font-bold text-gold uppercase tracking-wider border-b border-border whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {table.data.map((row, ri) => (
-                  <tr key={ri} className={`border-b border-border/20 ${ri % 2 === 0 ? '' : 'bg-glass-bg/20'} hover:bg-gold/5 transition-colors`}>
-                    {row.map((cell, ci) => (
-                      <td key={ci} className="px-3 py-2.5 text-txt-2">
-                        {renderBold(cell)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-        i = table.endIdx;
-        continue;
-      }
-    }
-
-    // Headings
-    if (line.startsWith('## ')) {
-      elements.push(
-        <h2 key={i} className="text-lg font-heading font-bold text-gold mt-6 mb-3">
-          {line.slice(3)}
-        </h2>
-      );
-      i++; continue;
-    }
-    if (line.startsWith('### ')) {
-      elements.push(
-        <h3 key={i} className="text-base font-heading font-semibold text-txt mt-4 mb-2">
-          {line.slice(4)}
-        </h3>
-      );
-      i++; continue;
-    }
-
-    // Bullet list items
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      elements.push(
-        <div key={i} className="flex items-start gap-2 mb-1.5 pl-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-gold mt-2 shrink-0" />
-          <span className="text-sm text-txt-2 leading-relaxed">{renderBold(trimmed.slice(2))}</span>
-        </div>
-      );
-      i++; continue;
-    }
-
-    // Empty line
-    if (trimmed === '') {
-      elements.push(<div key={i} className="h-2" />);
-      i++; continue;
-    }
-
-    // Regular paragraph
-    elements.push(
-      <p key={i} className="text-sm text-txt-2 leading-relaxed mb-3">
-        {renderBold(line)}
-      </p>
-    );
-    i++;
-  }
-
-  return elements;
+  const formattedText = autoFormatContent(text);
+  return <MarkdownBody>{formattedText}</MarkdownBody>;
 }
 
 // ============================================================================
@@ -581,6 +501,24 @@ function ScriptDetailContent() {
   const [feedbackSent, setFeedbackSent] = useState(new Set());
   const fileInputRef = useRef(null);
 
+  // --- Content Gating State (tier / course) ---
+  // Tách riêng khỏi metaFields để né validFields whitelist trong handleSave.
+  const [requiredTier, setRequiredTier] = useState('');
+  const [selectedCourseIds, setSelectedCourseIds] = useState([]);
+  const [availableCourses, setAvailableCourses] = useState([]);
+
+  // Load danh sách khóa học đã publish (cho checkbox phân quyền)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { getSupabase } = await import('@gem/services/api/supabase');
+        const sb = getSupabase();
+        const { data } = await sb.from('courses').select('id, title').eq('is_published', true).order('title');
+        if (data) setAvailableCourses(data);
+      } catch { /* ignore — UI vẫn dùng được, chỉ thiếu list course */ }
+    })();
+  }, []);
+
   // --- News Publish State ---
   const [newsPublishing, setNewsPublishing] = useState(false);
   const [newsPublished, setNewsPublished] = useState(null);
@@ -593,7 +531,6 @@ function ScriptDetailContent() {
     content_type: 'latc',
     job_type: 'script',
     pillar: 'trading',
-    track: 'wealth',
     persona: 'jennie_mentor',
     writing_mode: 'mode_1_calm',
     brand_voice: 'jennie',
@@ -608,12 +545,26 @@ function ScriptDetailContent() {
   useEffect(() => {
     if (script && !isDirty) {
       const extraMeta = script.metadata || {};
+      
+      let initialSlug = extraMeta.slug || script.slug || '';
+      if (!initialSlug && script.title) {
+        initialSlug = generateSlug(script.title);
+      }
+      
+      let initialExcerpt = extraMeta.excerpt || '';
+      if (!initialExcerpt) {
+        const sourceText = script.body || script.title || '';
+        const text = sourceText.replace(/[#*\n]/g, ' ').trim();
+        if (text) {
+          initialExcerpt = text.slice(0, 160) + (text.length > 160 ? '...' : '');
+        }
+      }
+
       setMetaFields(prev => ({
         ...prev,
         content_type: script.content_type || 'latc',
         job_type: script.job_type || 'script',
         pillar: script.pillar || 'trading',
-        track: script.track || 'wealth',
         persona: script.persona || 'jennie_mentor',
         writing_mode: script.writing_mode || 'mode_1_calm',
         brand_voice: script.brand_voice || 'jennie',
@@ -622,15 +573,48 @@ function ScriptDetailContent() {
         model: script.model || '',
         provider: script.provider || '',
         sop_id: script.sop_id || '',
+        slug: initialSlug,
         email_day: extraMeta.email_day || '',
         from_email: extraMeta.from_email || '',
         email_template: extraMeta.email_template || '',
         audience_type: extraMeta.audience_type || '',
         preview_text: extraMeta.preview_text || '',
         campaign_type: extraMeta.campaign_type || '',
+        tags: extraMeta.tags || [],
+        excerpt: initialExcerpt,
       }));
+
+      // Init content-gating từ script (separate state — không qua metaFields whitelist)
+      setRequiredTier(script.required_tier ?? '');
+      setSelectedCourseIds(script.required_course_ids ?? []);
     }
   }, [script, isDirty]);
+
+  // Auto-fill for new scripts
+  useEffect(() => {
+    if (isNew && !isDirty) {
+      setMetaFields(prev => {
+        let updated = false;
+        const next = { ...prev };
+        
+        if (!next.slug && editableTitle) {
+          next.slug = generateSlug(editableTitle);
+          updated = true;
+        }
+        
+        if (!next.excerpt) {
+          const sourceText = body || editableTitle || '';
+          const text = sourceText.replace(/[#*\n]/g, ' ').trim();
+          if (text) {
+            next.excerpt = text.slice(0, 160) + (text.length > 160 ? '...' : '');
+            updated = true;
+          }
+        }
+        
+        return updated ? next : prev;
+      });
+    }
+  }, [isNew, isDirty, editableTitle, body]);
 
   const handleMetaChange = (field, value) => {
     setMetaFields(prev => ({ ...prev, [field]: value }));
@@ -638,7 +622,9 @@ function ScriptDetailContent() {
   };
 
   // --- Email Send State ---
+  const [emailFrom, setEmailFrom] = useState('Gemral <hello@gemral.com>');
   const [emailTo, setEmailTo] = useState('');
+  const [emailBcc, setEmailBcc] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailSending, setEmailSending] = useState(false);
   const [showEmailPanel, setShowEmailPanel] = useState(false);
@@ -811,8 +797,8 @@ function ScriptDetailContent() {
     setIsSaving(true);
     try {
       // Chỉ gửi những trường có trong schema cc_scripts
-      const validFields = ['content_type', 'pillar', 'track', 'persona', 'writing_mode', 'publish_mode', 'posted_account', 'brand_voice'];
-      const metadataKeys = ['email_day', 'from_email', 'email_template', 'audience_type', 'preview_text', 'campaign_type'];
+      const validFields = ['content_type', 'pillar', 'persona', 'writing_mode', 'publish_mode', 'posted_account', 'brand_voice', 'slug'];
+      const metadataKeys = ['email_day', 'from_email', 'email_template', 'audience_type', 'preview_text', 'campaign_type', 'tags', 'excerpt'];
       const validMetaFields = {};
       const extraMetadataFields = {};
       Object.keys(metaFields).forEach(k => {
@@ -832,6 +818,8 @@ function ScriptDetailContent() {
             body: body,
             ...validMetaFields,
             metadata: extraMetadataFields,
+            required_tier: requiredTier || null,
+            required_course_ids: selectedCourseIds.length ? selectedCourseIds : null,
             status: 'draft',
           })
         });
@@ -849,7 +837,12 @@ function ScriptDetailContent() {
         const fieldName = resolvedIsSocialPost ? 'content' : 'body';
         const updates = { 
           [fieldName]: body,
-          ...(resolvedIsSocialPost ? {} : validMetaFields),
+          title: editableTitle || script?.title,
+          ...(resolvedIsSocialPost ? {} : {
+            ...validMetaFields,
+            required_tier: requiredTier || null,
+            required_course_ids: selectedCourseIds.length ? selectedCourseIds : null,
+          }),
           metadata: {
             ...(script?.metadata || {}),
             ...extraMetadataFields
@@ -869,7 +862,7 @@ function ScriptDetailContent() {
     } finally {
       setIsSaving(false);
     }
-  }, [isNew, scriptId, body, editableTitle, updateMutation, resolvedIsSocialPost, addToast, navigate, metaFields]);
+  }, [isNew, scriptId, body, editableTitle, updateMutation, resolvedIsSocialPost, addToast, navigate, metaFields, requiredTier, selectedCourseIds]);
 
   // ═══ Iterate — Sửa script trong cùng session ═══
   const scriptSessionId = script?.session_id || null;
@@ -1400,6 +1393,7 @@ function ScriptDetailContent() {
                   autoFocus
                   value={editableTitle}
                   onChange={e => setEditableTitle(e.target.value)}
+                  onBlur={handleSaveTitle}
                   onKeyDown={e => { if (e.key === 'Enter') handleSaveTitle(); if (e.key === 'Escape') setIsEditingTitle(false); }}
                   className="flex-1 font-heading text-lg font-semibold text-txt bg-bg-3 border border-gold/40 rounded-card px-2 py-0.5 focus:outline-none focus:border-gold/70"
                 />
@@ -1448,7 +1442,6 @@ function ScriptDetailContent() {
           variant={contentType === 'LATC' ? 'gold' : contentType === 'TMT' ? 'key' : 'default'}
           size="sm"
         />
-        {track && <span>{TRACK_LABELS[track] ?? track}</span>}
         {personaKey && <span>{PERSONA_LABELS[personaKey] ?? personaKey}</span>}
         {writingMode && <span>{MODE_LABELS[writingMode] ?? writingMode}</span>}
         <span className="text-txt-3">|</span>
@@ -1654,75 +1647,70 @@ function ScriptDetailContent() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Content Type</label>
-                <select value={metaFields.content_type || ''} onChange={e => handleMetaChange('content_type', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="latc">LATC</option>
-                  <option value="tmt">TMT</option>
-                  <option value="short_clip">Short Clip</option>
-                  <option value="social_post">Social Post</option>
-                  <option value="news">News</option>
-                  <option value="banner">Banner</option>
-                  <option value="push_notification">Push Notification</option>
-                  <option value="inapp_story">In-app Story</option>
-                  <option value="sms">SMS</option>
-                  <option value="chatbot_script">Chatbot Script</option>
-                  <option value="email">Email</option>
-                  <option value="content_planner">Content Planner</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.content_type || ''}
+                  onCommit={v => handleMetaChange('content_type', v)}
+                  options={['latc', 'tmt', 'short_clip', 'social_post', 'news', 'banner', 'push_notification', 'inapp_story', 'sms', 'chatbot_script', 'email', 'content_planner']}
+                  storageKey="content_type"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Pillar</label>
-                <select value={metaFields.pillar || ''} onChange={e => handleMetaChange('pillar', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="trading">Trading</option>
-                  <option value="wealth">Wealth</option>
-                  <option value="spiritual">Spiritual</option>
-                  <option value="integration">Integration</option>
-                  <option value="education">Education</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.pillar || ''}
+                  onCommit={v => handleMetaChange('pillar', v)}
+                  options={['trading', 'wealth', 'spiritual', 'integration', 'education']}
+                  storageKey="pillar"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gold">Track</label>
-                <select value={metaFields.track || ''} onChange={e => handleMetaChange('track', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="wealth">Wealth</option>
-                  <option value="spiritual">Spiritual</option>
-                  <option value="integration">Integration</option>
-                  <option value="education">Education</option>
-                </select>
-              </div>
+
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Persona</label>
-                <select value={metaFields.persona || ''} onChange={e => handleMetaChange('persona', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="jennie_mentor">Jennie Mentor</option>
-                  <option value="jennie_provocateur">Jennie Provocateur</option>
-                  <option value="jennie_storyteller">Jennie Storyteller</option>
-                  <option value="jennie_analyst">Jennie Analyst</option>
-                  <option value="jennie_motivator">Jennie Motivator</option>
-                  <option value="jennie_confidante">Jennie Confidante</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.persona || ''}
+                  onCommit={v => handleMetaChange('persona', v)}
+                  options={['jennie_mentor', 'jennie_provocateur', 'jennie_storyteller', 'jennie_analyst', 'jennie_motivator', 'jennie_confidante']}
+                  storageKey="persona"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Writing Mode</label>
-                <select value={metaFields.writing_mode || ''} onChange={e => handleMetaChange('writing_mode', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="mode_1_calm">Mode 1: Calm</option>
-                  <option value="mode_2_provocative">Mode 2: Provocative</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.writing_mode || ''}
+                  onCommit={v => handleMetaChange('writing_mode', v)}
+                  options={['mode_1_calm', 'mode_2_provocative']}
+                  storageKey="writing_mode"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Publish Mode</label>
-                <select value={metaFields.publish_mode || ''} onChange={e => handleMetaChange('publish_mode', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="scheduled">Lên lịch tự động (Scheduled)</option>
-                  <option value="immediate">Đăng ngay (Immediate)</option>
-                  <option value="threshold_5">Gom đủ 5 bài (Threshold)</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.publish_mode || ''}
+                  onCommit={v => handleMetaChange('publish_mode', v)}
+                  options={['scheduled', 'immediate', 'threshold_5']}
+                  storageKey="publish_mode"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Posted Account</label>
-                <select value={metaFields.posted_account || ''} onChange={e => handleMetaChange('posted_account', e.target.value)} className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold">
-                  <option value="page_jennie">Page Jennie Chu</option>
-                  <option value="page_gemral">Page Gemral Official</option>
-                  <option value="profile_jennie">Profile Uyen Chu</option>
-                  <option value="forum_gemral">Forum Gemral</option>
-                  <option value="telegram_channel">Telegram Channel</option>
-                </select>
+                <MetaSelect
+                  value={metaFields.posted_account || ''}
+                  onCommit={v => handleMetaChange('posted_account', v)}
+                  options={['page_jennie', 'page_gemral', 'profile_jennie', 'forum_gemral', 'telegram_channel']}
+                  storageKey="posted_account"
+                  allowCustom
+                  className="w-full"
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">Model</label>
@@ -1744,6 +1732,75 @@ function ScriptDetailContent() {
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gold">SOP ID</label>
                 <input disabled value={metaFields.sop_id || ''} placeholder="UUID..." className="w-full bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold opacity-50 cursor-not-allowed" />
+              </div>
+              <div className="space-y-1 col-span-2">
+                <label className="text-xs font-bold text-gold">Slug</label>
+                <div className="flex gap-2 mb-1">
+                  <input 
+                    value={metaFields.slug || ''} 
+                    onChange={e => handleMetaChange('slug', e.target.value)} 
+                    placeholder={generateSlug(editableTitle || scriptTitle)} 
+                    className="flex-1 bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold" 
+                  />
+                  <button
+                    onClick={() => {
+                      if (editableTitle || scriptTitle) {
+                        handleMetaChange('slug', generateSlug(editableTitle || scriptTitle));
+                      }
+                    }}
+                    title="Tạo Slug từ Title"
+                    className="px-2 py-1 bg-bg-3 border border-border rounded hover:border-gold text-txt-3 transition-colors shrink-0"
+                  >
+                    <i className="fas fa-magic mr-1"></i> Tạo Slug
+                  </button>
+                </div>
+                <SlugUrlHandle slug={metaFields.slug || generateSlug(editableTitle || scriptTitle)} contentType={metaFields.content_type || ''} />
+              </div>
+
+              <div className="space-y-1 col-span-2">
+                <label className="text-xs font-bold text-gold">Blog Tags</label>
+                <MetaSelect
+                  value={Array.isArray(metaFields.tags) ? metaFields.tags.join(', ') : (metaFields.tags || '')}
+                  onCommit={v => {
+                     const arr = v.split(',').map(t => t.trim()).filter(Boolean);
+                     handleMetaChange('tags', arr);
+                  }}
+                  options={['crypto', 'trading', 'mindset', 'tutorial', 'news', 'update', 'gemral', 'market-analysis', 'onchain']}
+                  storageKey="blog_tags"
+                  allowCustom
+                  className="w-full"
+                  placeholder="tag1, tag2..."
+                />
+              </div>
+
+              <div className="space-y-1 col-span-4">
+                <label className="text-xs font-bold text-gold">Excerpt (Tóm tắt SEO)</label>
+                <div className="flex gap-2 items-start">
+                  <div className="flex-1">
+                    <MetaSelect
+                      value={metaFields.excerpt || ''}
+                      onCommit={v => handleMetaChange('excerpt', v)}
+                      options={[]}
+                      storageKey="blog_excerpts"
+                      allowCustom
+                      className="w-full"
+                      placeholder="Mô tả ngắn gọn về bài viết..."
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      const sourceText = body || mainContent || scriptTitle || '';
+                      const text = sourceText.replace(/[#*\n]/g, ' ').trim();
+                      if (text) {
+                        handleMetaChange('excerpt', text.slice(0, 160) + (text.length > 160 ? '...' : ''));
+                      }
+                    }}
+                    title="Tạo Excerpt tự động từ nội dung"
+                    className="px-2 py-1 text-xs bg-bg-3 border border-border rounded hover:border-gold text-txt-3 transition-colors shrink-0"
+                  >
+                    <i className="fas fa-magic mr-1"></i> Gợi ý
+                  </button>
+                </div>
               </div>
 
               {metaFields.content_type === 'email' && (
@@ -1788,11 +1845,54 @@ function ScriptDetailContent() {
                   </div>
                 </>
               )}
+
+              {/* ===== Phân Quyền Truy Cập (tier / course gating) — chỉ blog/non-social ===== */}
+              {!resolvedIsSocialPost && (
+              <div className="col-span-2 md:col-span-4 mt-2 rounded border border-border bg-bg-2 p-4">
+                <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-txt-2">🔒 Phân Quyền Truy Cập</h4>
+                <label className="mb-1 block text-[11px] font-semibold uppercase text-txt-3">Tier tối thiểu</label>
+                <select
+                  value={requiredTier}
+                  onChange={(e) => { setRequiredTier(e.target.value); setIsDirty(true); }}
+                  className="w-full max-w-xs bg-bg-3 border border-border rounded px-2 py-1 text-txt-2 focus:border-gold mb-3"
+                >
+                  <option value="">Không khóa (Free)</option>
+                  <option value="tier1">TIER 1</option>
+                  <option value="tier2">TIER 2</option>
+                  <option value="tier3">TIER 3</option>
+                </select>
+                <label className="mb-1 block text-[11px] font-semibold uppercase text-txt-3">Khóa học cho phép truy cập</label>
+                {availableCourses.length === 0 ? (
+                  <p className="text-[11px] italic text-txt-3">Đang tải khóa học…</p>
+                ) : (
+                  <div className="max-h-44 space-y-1.5 overflow-y-auto rounded border border-border bg-bg-3 p-2">
+                    {availableCourses.map((course) => {
+                      const checked = selectedCourseIds.includes(course.id);
+                      return (
+                        <label key={course.id} className="flex cursor-pointer items-center gap-2 text-xs text-txt-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedCourseIds((prev) => checked ? prev.filter((id) => id !== course.id) : [...prev, course.id]);
+                              setIsDirty(true);
+                            }}
+                          />
+                          {course.title}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="mt-2 text-[11px] text-txt-3">Để trống cả hai = miễn phí. Có tier <strong>hoặc</strong> đã mua 1 khóa bên dưới đều đọc được.</p>
+              </div>
+              )}
             </div>
 
             <textarea
               value={body}
               onChange={handleBodyChange}
+              onBlur={handleSave}
               style={{ minHeight: `${textareaMinHeight}px` }}
               className="w-full p-5 bg-transparent text-sm text-txt font-body leading-relaxed resize-y focus:outline-none placeholder:text-txt-3"
               placeholder="Bắt đầu viết kịch bản tại đây..."
@@ -1822,6 +1922,9 @@ function ScriptDetailContent() {
           </div>
         )}
       </Card>
+
+      {/* ===== 7 Prompt Cards — LUÔN HIỂN DÙ thu gọn ===== */}
+      <PromptImageCards output={mainContent} addToast={addToast} />
 
       {/* ===== Brand Voice + GEM Tools (2 columns) ===== */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2234,12 +2337,32 @@ function ScriptDetailContent() {
           <div className="space-y-3">
             <div className="grid grid-cols-1 gap-2">
               <div>
+                <label className="text-xxs text-txt-3 block mb-1">Gửi từ (Sender) *</label>
+                <input
+                  type="text"
+                  value={emailFrom}
+                  onChange={(e) => setEmailFrom(e.target.value)}
+                  placeholder="Gemral <hello@gemral.com>"
+                  className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
                 <label className="text-xxs text-txt-3 block mb-1">Email người nhận *</label>
                 <input
                   type="text"
                   value={emailTo}
                   onChange={(e) => setEmailTo(e.target.value)}
                   placeholder="email@example.com (cách nhau bằng dấu phẩy nếu nhiều người)"
+                  className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-xxs text-txt-3 block mb-1">BCC <span className="text-txt-3 font-normal">(tùy chọn, cách nhau bằng dấu phẩy)</span></label>
+                <input
+                  type="text"
+                  value={emailBcc}
+                  onChange={(e) => setEmailBcc(e.target.value)}
+                  placeholder="bcc1@example.com, bcc2@example.com"
                   className="w-full text-xs px-3 py-2 bg-glass-bg border border-border rounded-card text-txt placeholder:text-txt-3 focus:border-violet-400/50 focus:outline-none transition-colors"
                 />
               </div>
@@ -2281,13 +2404,20 @@ function ScriptDetailContent() {
                 setEmailSending(true);
                 try {
                   const recipients = emailTo.split(',').map(e => e.trim()).filter(Boolean);
+                  const bccList = emailBcc.split(',').map(e => e.trim()).filter(Boolean);
                   const htmlContent = isHtmlContent(mainContent)
                     ? stripCodeFence(mainContent)
                     : `<pre style="font-family:sans-serif;white-space:pre-wrap;line-height:1.6">${mainContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
-                  const res = await fetch('/api/email/send', {
+                  const res = await fetch('/api/ops/email/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ to: recipients, subject: emailSubject, html: htmlContent }),
+                    body: JSON.stringify({
+                      from: emailFrom,
+                      to: recipients,
+                      ...(bccList.length > 0 && { bcc: bccList }),
+                      subject: emailSubject,
+                      html: htmlContent,
+                    }),
                   });
                   const data = await res.json();
                   if (data.success) {

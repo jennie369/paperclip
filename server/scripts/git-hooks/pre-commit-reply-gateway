@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Reply Gateway Contract — commit-time regression gate (P4).
+#
+# When a commit touches a customer-facing reply-path file, run the golden-set +
+# dispatch contract tests BEFORE the commit is created. A failing case (leaked
+# marker, price-in-persona, broken idempotency key, scrub regression) blocks the
+# commit here — earlier than the /restart-paperclip-server gate, and long before
+# it could reach a customer.
+#
+# Local-only (.git/hooks is not versioned). Re-create on a new machine by copying
+# this file. Plan: crypto-pattern-scanner/docs/plans_reports/2026-07-10-REPLY-GATEWAY-CONTRACT_ARCHITECTURE_PLAN.md §7.3
+set -euo pipefail
+
+# Only staged files under server/ that own the reply contract.
+GUARDED='server/src/channels/router\.ts|server/src/channels/reply-contract\.ts|server/src/channels/consumer\.ts|server/src/channels/deliver-once\.ts|server/src/__tests__/reply-contract\.golden\.test\.ts|server/src/__tests__/reply-gateway-dispatch\.test\.ts'
+
+staged="$(git diff --cached --name-only --diff-filter=ACM || true)"
+if ! echo "$staged" | grep -Eq "$GUARDED"; then
+  exit 0   # no reply-path file touched — nothing to gate
+fi
+
+echo "[reply-gateway] reply-path file staged → running contract gate (test:reply-contract)…"
+repo_root="$(git rev-parse --show-toplevel)"
+if ! ( cd "$repo_root/server" && npm run --silent test:reply-contract ); then
+  echo ""
+  echo "[reply-gateway] ❌ Reply contract tests FAILED — commit blocked."
+  echo "[reply-gateway] Fix the failing case, or (if behavior changed on purpose)"
+  echo "[reply-gateway] update the golden case + note it in the plan §16 Deviations."
+  exit 1
+fi
+echo "[reply-gateway] ✅ Reply contract gate passed."
+exit 0

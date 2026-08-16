@@ -10,6 +10,8 @@ export interface ChannelInstance {
   zalo_uid?: string;
   zalo_name?: string;
   enabled: boolean;
+  /** Per-account display color (hex). NULL → fall back to platform color. */
+  color?: string | null;
   config: Record<string, unknown>;
   agent_id?: string;
   agent_slug?: string;
@@ -46,6 +48,14 @@ export interface PendingMessage {
   extra_data?: Record<string, unknown>;
   ts: string;
   created_at: string;
+  // Thu hồi / sửa tin CSKH. Snake_case vì server trải thẳng row DB ra (`...m`).
+  // ⚠️ Hộp thư (ChatPanel) đọc kiểu NÀY, không phải ConversationMessage — thiếu ở đây
+  // là TypeScript chặn ngay, và đó chính là cách em phát hiện mình khai nhầm kiểu.
+  is_recalled?: boolean;
+  recalled_at?: string | null;
+  edited_at?: string | null;
+  starred?: boolean;
+  pinned?: boolean;
 }
 
 export interface ChannelSession {
@@ -90,6 +100,8 @@ export interface ChannelSession {
     tags?: string[];
     ai_summary?: string | null;
     gemral_data?: Record<string, unknown> | null;
+    total_revenue?: number | null;
+    next_follow_up_at?: string | null;
   } | null;
 }
 
@@ -109,6 +121,12 @@ export interface ConversationMessage {
   timestamp: string;
   extra_data?: Record<string, unknown>;
   extraData?: Record<string, unknown>;
+  // Thu hồi / sửa tin CSKH. Snake_case vì server trải thẳng row DB ra (`...m`).
+  is_recalled?: boolean;
+  recalled_at?: string | null;
+  edited_at?: string | null;
+  starred?: boolean;
+  pinned?: boolean;
 }
 
 export type ConversationLabel = "hot" | "warm" | "cold" | "vip" | "spam";
@@ -193,7 +211,10 @@ export const channelsApi = {
     formData.append("thread_id", threadId);
     formData.append("thread_type", threadType);
     if (caption) formData.append("caption", caption);
-    return api.postForm<{ success: boolean; error?: string }>("/channels/zalo-personal/upload", formData);
+    // CSKH (in-app) KHÔNG có external API như Zalo → route riêng /channels/cskh/upload
+    // (server upload bucket cskh-attachments + mirror cskh_messages → khách nhận). Zalo giữ nguyên.
+    const endpoint = channelName.startsWith("cskh") ? "/channels/cskh/upload" : "/channels/zalo-personal/upload";
+    return api.postForm<{ success: boolean; error?: string }>(endpoint, formData);
   },
 
   // --- Cross-channel endpoints ---
@@ -218,6 +239,16 @@ export const channelsApi = {
   getSessionMessages: (sessionKey: string, limit = 100) =>
     api.get<PendingMessage[]>(
       `/channels/sessions/${encodeURIComponent(sessionKey)}/messages?limit=${limit}`
+    ),
+
+  // Operator-side per-message flags (star / pin / delete-for-me). Partial patch.
+  setMessageFlag: (
+    messageId: string,
+    patch: { starred?: boolean; pinned?: boolean; deleted_for_me?: boolean; session_key?: string }
+  ) =>
+    api.post<{ message_id: string; starred: boolean; pinned: boolean; deleted_for_me: boolean }>(
+      `/channels/messages/${encodeURIComponent(messageId)}/flags`,
+      patch
     ),
 
   getChannelSettings: (channelName: string) =>
@@ -274,6 +305,12 @@ export const channelsApi = {
       `/channels/conversations/${encodeURIComponent(key)}/read`, { unread }
     ),
 
+  /** Bot/Sale handoff: paused=true → Sale Trực (pause bot), false → BOT Tự Động. */
+  setBotPaused: (key: string, paused: boolean) =>
+    api.post<{ bot_paused: boolean; message: string }>(
+      `/channels/conversations/${encodeURIComponent(key)}/bot`, { paused }
+    ),
+
   muteConversation: (key: string) =>
     api.post<{ muted: boolean; message: string }>(
       `/channels/conversations/${encodeURIComponent(key)}/mute`, {}
@@ -322,4 +359,39 @@ export const channelsApi = {
     const q = qs.toString();
     return api.get<ActivityLogEntry[]>(`/channels/activity${q ? `?${q}` : ""}`);
   },
+
+  // --- Facebook Web (Reverse Protocol) ---
+  listFacebookWeb: () =>
+    api.get<ChannelInstance[]>("/channels/facebook-web"),
+
+  setupFacebookWeb: (payload: {
+    channel_name: string;
+    display_name?: string;
+    page_id: string;
+    page_name?: string;
+    cookies: Array<{ name: string; value: string; domain: string; path?: string; httpOnly?: boolean; secure?: boolean; sameSite?: string; expirationDate?: number }>;
+    user_agent?: string;
+  }) =>
+    api.post<{ success: boolean; status?: string; error?: string }>("/channels/facebook-web/setup", payload),
+
+  restartFacebookWeb: (name: string) =>
+    api.post<{ success: boolean }>(`/channels/facebook-web/${encodeURIComponent(name)}/restart`, {}),
+
+  verifyFacebookWeb: (name: string) =>
+    api.get<{ name: string; running: boolean }>(`/channels/facebook-web/${encodeURIComponent(name)}/verify`),
+
+  sendFacebookWebMessage: (name: string, threadId: string, message: string) =>
+    api.post<{ success: boolean; message_id?: string; error?: string }>(
+      `/channels/facebook-web/${encodeURIComponent(name)}/send`,
+      { thread_id: threadId, message },
+    ),
+
+  replyFacebookWebComment: (name: string, commentId: string, message: string) =>
+    api.post<{ success: boolean; message_id?: string; error?: string }>(
+      `/channels/facebook-web/${encodeURIComponent(name)}/comment-reply`,
+      { comment_id: commentId, message },
+    ),
+
+  deleteFacebookWeb: (name: string) =>
+    api.delete<{ success: boolean }>(`/channels/facebook-web/${encodeURIComponent(name)}`),
 };

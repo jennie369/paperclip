@@ -35,9 +35,10 @@ function readIssueDetailSourceFromSearch(search?: string): IssueDetailSource | n
   return isIssueDetailSource(source) ? source : null;
 }
 
-function breadcrumbForSource(source: IssueDetailSource): IssueDetailBreadcrumb {
-  if (source === "inbox") return { label: "Inbox", href: "/inbox" };
-  return { label: "Issues", href: "/issues" };
+function breadcrumbForSource(source: IssueDetailSource, companyPrefix?: string): IssueDetailBreadcrumb {
+  const prefix = companyPrefix ? `/${companyPrefix}` : "";
+  if (source === "inbox") return { label: "Inbox", href: `${prefix}/inbox` };
+  return { label: "Issues", href: `${prefix}/issues` };
 }
 
 export function createIssueDetailLocationState(
@@ -51,20 +52,21 @@ export function createIssueDetailLocationState(
   };
 }
 
-export function createIssueDetailPath(issuePathId: string, state?: unknown, search?: string): string {
+export function createIssueDetailPath(issuePathId: string, state?: unknown, search?: string, companyPrefix?: string): string {
+  const prefix = companyPrefix ? `/${companyPrefix}` : "";
   const source = readIssueDetailSource(state) ?? readIssueDetailSourceFromSearch(search);
-  if (!source) return `/issues/${issuePathId}`;
+  if (!source) return `${prefix}/issues/${issuePathId}`;
   const params = new URLSearchParams();
   params.set(ISSUE_DETAIL_SOURCE_QUERY_PARAM, source);
-  return `/issues/${issuePathId}?${params.toString()}`;
+  return `${prefix}/issues/${issuePathId}?${params.toString()}`;
 }
 
-export function readIssueDetailBreadcrumb(state: unknown, search?: string): IssueDetailBreadcrumb | null {
+export function readIssueDetailBreadcrumb(state: unknown, search?: string, companyPrefix?: string): IssueDetailBreadcrumb | null {
   if (typeof state === "object" && state !== null) {
     const candidate = (state as IssueDetailLocationState).issueDetailBreadcrumb;
     if (isIssueDetailBreadcrumb(candidate)) return candidate;
   }
 
   const source = readIssueDetailSourceFromSearch(search);
-  return source ? breadcrumbForSource(source) : null;
+  return source ? breadcrumbForSource(source, companyPrefix) : null;
 }

@@ -49,6 +49,7 @@ import {
   Layers,
   Mic,
   Play,
+  ArrowUp,
 } from 'lucide-react';
 import emailRegistry from '@/config/email_template_registry.json';
 import { Card } from '@gem/ui';
@@ -68,6 +69,12 @@ import { useJobSubscription } from '@gem/hooks/useJobSubscription';
 import CCSelect from './CCSelect';
 import JobLogViewerPanel from './JobLogViewerPanel';
 import DripStepHtmlEditor from './components/DripStepHtmlEditor';
+import { ContentResultPanel } from './components';
+import MediaDropUploader from './components/MediaDropUploader';
+import MediaGalleryGrid from './components/MediaGalleryGrid';
+import { supabase } from '../../lib/supabaseClient';
+import { marked } from 'marked';
+import { opsApi } from '@/api/ops'; // WIP CCAIGen dùng opsApi (getBatchStatus/sendEmail/...) nhưng thiếu import → crash "opsApi is not defined"
 
 // ============================================================================
 // Constants — Loại nội dung
@@ -141,6 +148,12 @@ const OUTPUT_TYPE_OPTIONS = [
 const DOC_SOP_OPTIONS = [
   { value: 'DOC-MKT-001', label: 'Brand Overview Kit', group: 'Marketing' },
   { value: 'DOC-MKT-006', label: 'Social Media Kit', group: 'Marketing' },
+  { value: 'DOC-CRS-001', label: 'Khóa 7 Ngày Tần Số Gốc (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-002', label: 'Khóa Tần Số Tình Yêu (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-003', label: 'Khóa Tư Duy Triệu Phú (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-004', label: 'Trading Starter (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-005', label: 'Trading Tier 1-2-3 (Dài)', group: 'Khóa học' },
+  { value: 'DOC-CRS-006', label: 'So Sánh Tất Cả Khóa Học (Dài)', group: 'Khóa học' },
   { value: 'DOC-CRS-001S', label: 'Khóa 7 Ngày Tần Số Gốc (Ngắn)', group: 'Khóa học' },
   { value: 'DOC-CRS-002S', label: 'Khóa Tần Số Tình Yêu (Ngắn)', group: 'Khóa học' },
   { value: 'DOC-CRS-003S', label: 'Khóa Tư Duy Triệu Phú (Ngắn)', group: 'Khóa học' },
@@ -165,6 +178,17 @@ const DOC_SOP_OPTIONS = [
   { value: 'DOC-ONB-006', label: 'Onboarding Tư Duy Triệu Phú (7 emails)', group: 'Onboarding Email', emailCount: 7 },
   { value: 'DOC-ONB-007', label: 'Onboarding 7 Ngày Tần Số Gốc (7 emails)', group: 'Onboarding Email', emailCount: 7 },
   { value: 'DOC-ONB-008', label: 'Onboarding CTV/KOL (5 emails)', group: 'Onboarding Email', emailCount: 5 },
+  // Lead Magnet → High-Ticket Close Funnel V1 (2026-05-18) — 10 individual emails of sequence `lm_close_v1`
+  { value: 'DOC-SAL-LM-001', label: 'LM Stage 1 Day 0 — Delivery + Wow Moment',           group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-002', label: 'LM Stage 2 Day 2 — Origin Story',                    group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-003', label: 'LM Stage 3 Day 3 — 3 Sai Lầm + Authority',          group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-004', label: 'LM Stage 3 Day 4 — Quick Win Tool (Reciprocity)',   group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-005', label: 'LM Stage 3 Day 5 — Soft Pitch + Yes/No VSL Intent', group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-006', label: 'LM Stage 4 Day 6 — VSL Reveal + Strategy Call CTA', group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-007', label: 'LM Stage 5 Day 7 — Case Study Social Proof',        group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-008', label: 'LM Stage 5 Day 8 — FAQ + Risk Reversal',            group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-009', label: 'LM Stage 5 Day 9 — Urgency 48h',                    group: 'Lead Magnet Funnel', emailCount: 1 },
+  { value: 'DOC-SAL-LM-010', label: 'LM Stage 5 Day 10 — Last Call (Personal Tone)',     group: 'Lead Magnet Funnel', emailCount: 1 },
   // Customer Support / User guides (2026-04-19)
   { value: 'DOC-CS-005', label: 'Hướng Dẫn Sử Dụng App Gemral', group: 'Hướng Dẫn App' },
   { value: 'DOC-CS-006', label: 'Hướng Dẫn Ritual & Vision Board', group: 'Hướng Dẫn App' },
@@ -181,7 +205,7 @@ const DOC_SOP_OPTIONS = [
   { value: 'DST-006', label: 'Market Update Broadcast (1 weekly)',               group: 'Email Automation (DST)', emailCount: 1 },
   { value: 'DST-007', label: 'Welcome Drip Flow 7 ngày (3 emails)',              group: 'Email Automation (DST)', emailCount: 3 },
   { value: 'DST-008', label: 'Trial Expiry Flow (3 emails)',                     group: 'Email Automation (DST)', emailCount: 3 },
-  { value: 'DST-009', label: 'Post-Purchase Flow vật lý/combo (3 emails)',       group: 'Email Automation (DST)', emailCount: 3 },
+  { value: 'DST-009', label: 'Post-Purchase Physical/Crystal (6 emails — Day 0/1/5/10/21/45)', group: 'Email Automation (DST)', emailCount: 6 },
   { value: 'DST-010', label: 'Re-engagement / Win Back Inactive (3 emails)',     group: 'Email Automation (DST)', emailCount: 3 },
   { value: 'DST-011', label: 'CTV Onboard Sequence (5 emails + messages)',       group: 'Email Automation (DST)', emailCount: 5 },
 ];
@@ -297,6 +321,10 @@ const EMAIL_TYPE_OPTIONS = [
   { value: 'seasonal', label: 'Theo mùa (Tết, Valentine, Trung Thu...)' },
   { value: 'weekly_digest', label: 'Weekly Digest (Tổng hợp tuần)' },
   { value: 'personal_note', label: 'Thư cá nhân từ Jennie' },
+  { value: 'lead_magnet', label: 'Lead Magnets' },
+  { value: 'magazine_article', label: 'Magazine / Article' },
+  { value: 'prototype', label: 'Prototype' },
+  { value: 'jennies_hobbies', label: "Jennie's Hobbies" },
 ];
 
 // 2026-05-06 — Resend MCP migration v3 (Stage A.17): segment values legacy → 5 plan v3 segments.
@@ -322,6 +350,57 @@ const EMAIL_TYPE_TO_TEMPLATE = {
   seasonal: { template: 'custom', segment: 'active_customer' },
   weekly_digest: { template: 'daily_newsletter_general', segment: 'active_customer' },
   personal_note: { template: 'vip-personal-touch', segment: 'vip_high_spender' },
+  lead_magnet: { template: 'custom', segment: 'new_signup' },
+  magazine_article: { template: 'custom', segment: 'active_customer' },
+  prototype: { template: 'custom', segment: 'active_customer' },
+  jennies_hobbies: { template: 'custom', segment: 'active_customer' },
+};
+
+// 2026-05-14 — Sub-options per emailType. Hiển thị dạng checkbox nhóm sau khi chọn emailType.
+// Mỗi entry: { value, label, skillFile } — value dùng để gửi lên input_params,
+// skillFile là knowledge file tương ứng trong batch_processor.py.
+const EMAIL_TYPE_SUBOPTIONS = {
+  lead_magnet: [
+    { value: 'lm_cheat_sheet',    label: 'Cheat sheet',                               skillFile: 'SKILL_Lead_Magnet_Cheat_Sheet.md' },
+    { value: 'lm_checklist',      label: 'Checklist',                                 skillFile: 'SKILL_Lead_Magnet_Checklist.md' },
+    { value: 'lm_template',       label: 'Template (doc/spreadsheet/Notion)',         skillFile: 'SKILL_Lead_Magnet_Template.md' },
+    { value: 'lm_ebook',          label: 'Ebook / Guide',                             skillFile: 'SKILL_Lead_Magnet_Ebook.md' },
+    { value: 'lm_minicourse',     label: 'Mini-course (email drip)',                  skillFile: 'SKILL_Lead_Magnet_Mini_Course.md' },
+    { value: 'lm_quiz',           label: 'Quiz / Assessment',                         skillFile: 'SKILL_Lead_Magnet_Quiz.md' },
+    { value: 'lm_resource_lib',   label: 'Resource library',                          skillFile: 'SKILL_Lead_Magnet_Resource_Library.md' },
+    { value: 'lm_free_trial',     label: 'Free trial / Community access',             skillFile: 'SKILL_Lead_Magnet_Free_Trial.md' },
+    { value: 'lm_workflow',       label: 'Workflow / SOP template',                   skillFile: 'SKILL_Lead_Magnet_Workflow.md' },
+    { value: 'lm_swipe_file',     label: 'Swipe file / Copy templates',               skillFile: 'SKILL_Lead_Magnet_Swipe_File.md' },
+  ],
+  magazine_article: [
+    { value: 'mag_profile',       label: 'Profile / Chân dung nhân vật',              skillFile: 'SKILL_Magazine_Profile.md' },
+    { value: 'mag_trend',         label: 'Xu hướng / Trend report',                   skillFile: 'SKILL_Magazine_Trend.md' },
+    { value: 'mag_interview',     label: 'Phỏng vấn / Q&A',                           skillFile: 'SKILL_Magazine_Interview.md' },
+    { value: 'mag_opinion',       label: 'Opinion / Góc nhìn cá nhân',                skillFile: 'SKILL_Magazine_Opinion.md' },
+    { value: 'mag_how_to',        label: 'How-to / Hướng dẫn chuyên sâu',             skillFile: 'SKILL_Magazine_HowTo.md' },
+    { value: 'mag_case_study',    label: 'Case study / Phân tích case',               skillFile: 'SKILL_Magazine_CaseStudy.md' },
+    { value: 'mag_listicle',      label: 'Listicle / Top N danh sách',                skillFile: 'SKILL_Magazine_Listicle.md' },
+    { value: 'mag_behind_scenes', label: 'Behind the scenes / Hậu trường',            skillFile: 'SKILL_Magazine_BehindScenes.md' },
+  ],
+  prototype: [
+    { value: 'proto_email_seq',   label: 'Email sequence (draft chuỗi mẫu)',           skillFile: 'SKILL_Prototype_EmailSeq.md' },
+    { value: 'proto_landing',     label: 'Landing page copy',                          skillFile: 'SKILL_Prototype_LandingPage.md' },
+    { value: 'proto_funnel',      label: 'Funnel prototype (ads → landing → email)',   skillFile: 'SKILL_Prototype_Funnel.md' },
+    { value: 'proto_script',      label: 'Video / Webinar script prototype',           skillFile: 'SKILL_Prototype_Script.md' },
+    { value: 'proto_chatbot',     label: 'Chatbot script prototype',                   skillFile: 'SKILL_Prototype_Chatbot.md' },
+    { value: 'proto_offer',       label: 'Offer stack / Pricing page copy',            skillFile: 'SKILL_Prototype_Offer.md' },
+  ],
+  jennies_hobbies: [
+    { value: 'hobby_crystal',     label: 'Crystal & Đá quý',                           skillFile: 'SKILL_Hobbies_Crystal.md' },
+    { value: 'hobby_tarot',       label: 'Tarot & Tâm linh',                            skillFile: 'SKILL_Hobbies_Tarot.md' },
+    { value: 'hobby_travel',      label: 'Du lịch & Trải nghiệm',                      skillFile: 'SKILL_Hobbies_Travel.md' },
+    { value: 'hobby_fitness',     label: 'Fitness & Sức khoẻ',                         skillFile: 'SKILL_Hobbies_Fitness.md' },
+    { value: 'hobby_fashion',     label: 'Fashion & Lifestyle',                         skillFile: 'SKILL_Hobbies_Fashion.md' },
+    { value: 'hobby_cooking',     label: 'Nấu ăn & Food',                              skillFile: 'SKILL_Hobbies_Cooking.md' },
+    { value: 'hobby_reading',     label: 'Đọc sách & Bài học cuộc sống',              skillFile: 'SKILL_Hobbies_Reading.md' },
+    { value: 'hobby_astrology',   label: 'Chiêm tinh / Astrology',                     skillFile: 'SKILL_Hobbies_Astrology.md' },
+    { value: 'hobby_journaling',  label: 'Journaling & Tự phát triển bản thân',        skillFile: 'SKILL_Hobbies_Journaling.md' },
+  ],
 };
 
 // ============================================================================
@@ -679,7 +758,7 @@ const COURSE_OPTIONS = [
   { value: 'starter', label: 'Gói Khởi Đầu Trading (299K)' },
   { value: 'tier_1', label: 'Gói Chuyên Nghiệp TIER 1 (11tr)' },
   { value: 'tier_2', label: 'Gói Nâng Cao TIER 2 (21tr)' },
-  { value: 'tier_3', label: 'Gói Cao Cấp TIER 3 (68tr)' },
+  { value: 'tier_3', label: 'Gói Cao Cấp TIER 3 (30tr)' },
 ];
 
 const CLIP_CTA_OPTIONS = [
@@ -704,7 +783,7 @@ const SOCIAL_TOPIC_OPTIONS = [
   { value: 'app_features', label: '📱 Tính năng App GEMRAL' },
   { value: 'trading_mindset', label: '🧠 Trading Mindset — Tâm lý & Kỷ luật' },
   { value: 'market_daily', label: '📊 Thị Trường Daily Brief — Tình hình nổi bật trong ngày' },
-  { value: 'spiritual', label: '🔮 Tâm Linh & Huyền Học' },
+  { value: 'spiritual', label: '🔮 Nghiên Cứu & Huyền Học' },
   { value: 'self_development', label: '🚀 Phát Triển Bản Thân & Productivity' },
   { value: 'success_stories', label: '🏆 Success Stories & Testimonials' },
   { value: 'faq_tips', label: '❓ FAQ & Tips Nhanh' },
@@ -804,7 +883,7 @@ const SOCIAL_SUCCESS_STORY_OPTIONS = [
 const SOCIAL_FAQ_TIPS_OPTIONS = [
   { value: 'getting_started', label: '🆕 Bắt Đầu — Hướng dẫn user mới sử dụng app' },
   { value: 'scanner_tips', label: '📊 Tips Scanner — Cách đọc tín hiệu, chọn pattern, timeframe' },
-  { value: 'spiritual_tips', label: '🔮 Tips Tâm Linh — Cách bói Tarot, xem quẻ, thiền đúng cách' },
+  { value: 'spiritual_tips', label: '🔮 Tips Nghiên Cứu — Cách bói Tarot, xem quẻ, thiền đúng cách' },
   { value: 'trading_tips', label: '💹 Tips Trading — Entry/exit, quản lý vốn, trailing stop' },
   { value: 'app_tricks', label: '📱 Mẹo Sử Dụng App — Tính năng ẩn, shortcut, tối ưu trải nghiệm' },
   { value: 'common_mistakes', label: '⚠️ Sai Lầm Phổ Biến — Những lỗi trader/user mới hay mắc' },
@@ -855,7 +934,7 @@ const CHATBOT_SCRIPT_TOPIC_OPTIONS = [
   { value: 'onboarding', label: '🆕 Onboarding — Hướng dẫn user mới làm quen app' },
   { value: 'scanner_guide', label: '📊 Hướng Dẫn Scanner — Cách dùng GEM Scanner' },
   { value: 'trading_qa', label: '💹 Q&A Trading — Trả lời câu hỏi trading phổ biến' },
-  { value: 'spiritual_qa', label: '🔮 Q&A Tâm Linh — Giải đáp Tarot, Kinh Dịch, thiền' },
+  { value: 'spiritual_qa', label: '🔮 Q&A Nghiên Cứu — Giải đáp Tarot, Kinh Dịch, thiền' },
   { value: 'course_recommend', label: '🎓 Gợi Ý Khóa Học — Tư vấn chọn khóa phù hợp' },
   { value: 'tier_explain', label: '💎 Giải Thích Tier — So sánh Free/Tier 1/2/3' },
   { value: 'troubleshoot', label: '🔧 Xử Lý Lỗi — FAQ về lỗi app, thanh toán, tài khoản' },
@@ -906,7 +985,7 @@ const BANNER_LAYOUT_OPTIONS = [
 const PUSH_TOPIC_OPTIONS = [
   { value: 'trading_signal', label: '📊 Tín Hiệu Trading — Pattern mới, cơ hội giao dịch' },
   { value: 'daily_motivation', label: '🌅 Daily Motivation — Câu trích dẫn, lời khích lệ buổi sáng' },
-  { value: 'spiritual_daily', label: '🔮 Tâm Linh Hàng Ngày — Lá bài Tarot, quẻ Kinh Dịch, năng lượng ngày' },
+  { value: 'spiritual_daily', label: '🔮 Nghiên Cứu Hàng Ngày — Lá bài Tarot, quẻ Kinh Dịch, năng lượng ngày' },
   { value: 'course_reminder', label: '🎓 Nhắc Học — Nhắc nhở tiến trình học, bài mới' },
   { value: 'market_update', label: '📈 Thị Trường — Cập nhật BTC, ETH, tin crypto nổi bật' },
   { value: 'new_feature', label: '✨ Tính Năng Mới — Thông báo cập nhật app' },
@@ -951,7 +1030,7 @@ const PLANNER_TOPIC_OPTIONS = [
   { value: 'app_features', label: 'Tính năng App GEMRAL' },
   { value: 'trading_mindset', label: 'Trading Mindset & Kỷ luật' },
   { value: 'market_daily', label: 'Thị Trường & Crypto Daily' },
-  { value: 'spiritual', label: 'Tâm Linh & Huyền Học' },
+  { value: 'spiritual', label: 'Nghiên Cứu & Huyền Học' },
   { value: 'self_development', label: 'Phát Triển Bản Thân' },
   { value: 'courses', label: 'Khóa Học GEM Academy' },
   { value: 'success_stories', label: 'Success Stories & Testimonials' },
@@ -1189,12 +1268,14 @@ export default function AiGenPage() {
   // -- Batch Processor (Play/Stop) --
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [galleryImages, setGalleryImages] = useState([]);
+  const [showMediaGallery, setShowMediaGallery] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
       try {
-        const r = await fetch('/api/ops/content-pipeline/batch/status');
+        const r = await opsApi.getBatchStatus();
         if (!cancelled && r.ok) {
           const d = await r.json();
           setBatchRunning(!!d.running);
@@ -1212,7 +1293,7 @@ export default function AiGenPage() {
       const endpoint = batchRunning
         ? '/api/ops/content-pipeline/batch/stop'
         : '/api/ops/content-pipeline/batch/start';
-      const r = await fetch(endpoint, { method: 'POST' });
+      const r = await (endpoint.includes('start') ? opsApi.startBatch() : opsApi.stopBatch());
       if (r.ok) setBatchRunning(!batchRunning);
     } catch {} finally { setBatchLoading(false); }
   }, [batchRunning]);
@@ -1268,7 +1349,7 @@ export default function AiGenPage() {
         formData.append('file', audioBlob, 'recording.webm');
         formData.append('language', 'vi');
         console.log('[Speech] Sending to /api/speech...');
-        const res = await fetch('/api/speech', { method: 'POST', body: formData });
+        const res = await opsApi.speechToText(formData);
         console.log('[Speech] Response status:', res.status);
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -1452,6 +1533,7 @@ export default function AiGenPage() {
   const [imagePrompt, setImagePrompt] = useState('');
   const [savedId, setSavedId] = useState(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [customFilename, setCustomFilename] = useState('');
   const downloadMenuRef = useRef(null);
 
   useEffect(() => {
@@ -1487,6 +1569,7 @@ export default function AiGenPage() {
   // -- Email state --
   const [manualEmailHtml, setManualEmailHtml] = useState('');
   const [emailType, setEmailType] = useState('newsletter');
+  const [selectedEmailSubOptions, setSelectedEmailSubOptions] = useState([]);
   // 2026-04-19 — Auto-apply campaign defaults khi emailType đổi (Email Marketing section).
   // Placed right after emailType declaration để tránh TDZ (ReferenceError 'Cannot access before initialization').
   useEffect(() => {
@@ -1494,7 +1577,10 @@ export default function AiGenPage() {
     if (!map) return;
     if (map.template) setCampaignTemplate(map.template);
     if (map.segment) setCampaignSegment(map.segment);
+    // 2026-05-14 — Reset sub-options khi đổi emailType
+    setSelectedEmailSubOptions([]);
   }, [emailType]);
+
 
   // 2026-04-19 Cách B — Drip Override state + sequences fetch
   // V2 (2026-04-19) — overrideEmailMap thay thế selectedStepId đơn-step:
@@ -1507,7 +1593,7 @@ export default function AiGenPage() {
   const [overrideEmailMap, setOverrideEmailMap] = useState([]);
   useEffect(() => {
     if (!dripOverrideEnabled || dripSequences.length > 0) return;
-    fetch('/api/ops/email/sequences')
+    opsApi.getEmailSequences()
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setDripSequences(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -1516,7 +1602,7 @@ export default function AiGenPage() {
   // Force refetch sequences (used after a step's HTML is overridden so the
   // step dropdown can show "· đã override" for the affected step).
   const refetchDripSequences = useCallback(() => {
-    fetch('/api/ops/email/sequences')
+    opsApi.getEmailSequences()
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setDripSequences(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -1553,6 +1639,7 @@ export default function AiGenPage() {
   }, [dripOverrideEnabled, activeOnbDoc, selectedSequenceId, dripSequences]);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailRecipients, setEmailRecipients] = useState('');
+  const [emailBcc, setEmailBcc] = useState('');
   const [emailSender, setEmailSender] = useState('Jennie Uyen Chu <hello@gemral.com>');
   const [emailSending, setEmailSending] = useState(false);
   const [emailSent, setEmailSent] = useState(null);
@@ -1565,6 +1652,7 @@ export default function AiGenPage() {
   );
   const emailFileInputRef = useRef(null);
   const emailIframeRef = useRef(null);
+  const resultSectionRef = useRef(null);  // 2026-05-13: scroll to "Kết Quả" section when loading via ?scriptId=
   const emailSrcDocRef = useRef('');  // Cache srcDoc to prevent re-render during editing
   const emailSyncingRef = useRef(false);  // Flag to skip srcDoc recalc on iframe-initiated syncs
   const [canUndo, setCanUndo] = useState(false);
@@ -1679,6 +1767,87 @@ export default function AiGenPage() {
     }
   }, [searchParams]);
 
+  // -- ContentTab → AI Gen: load existing cc_scripts row when ?scriptId=X --
+  // Pattern from 2026-05-13: "Mở Full" button in ContentTab navigates here so user
+  // can review/edit the generated output with the same prompt-card UI as right
+  // after generation. Populates a subset of state (output + content_type + brand_voice
+  // + persona + writing_mode + image_prompt + title). Form fields like `brief` are
+  // best-effort recovered from input_params JSON if present.
+  useEffect(() => {
+    const scriptId = searchParams.get('scriptId');
+    if (!scriptId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { supabase: supa } = await import('../../lib/supabaseClient');
+        const { data, error } = await supa
+          .from('cc_scripts')
+          .select('*')
+          .eq('id', scriptId)
+          .single();
+        if (cancelled || error || !data) return;
+
+        // Mark this as a restore so the session-save useEffect doesn't overwrite later
+        isRestoringRef.current = true;
+
+        // Output (body/content/caption — best-effort)
+        const bodyContent = data.body || data.content || data.caption || '';
+        if (bodyContent) setOutput(bodyContent);
+
+        // Content type → outputType mapping
+        const ct = data.content_type || '';
+        const contentTypeToOutputType = {
+          latc: 'script_latc',
+          tmt: 'script_tmt',
+          short_clip: 'script_short_clip',
+          social_post: 'social_post',
+          news: 'news',
+          email: 'email_html',
+          outline: 'outline',
+          title: 'title',
+          image_prompt: 'image_prompt',
+          content_package: 'content_package',
+        };
+        if (contentTypeToOutputType[ct]) setOutputType(contentTypeToOutputType[ct]);
+        else if (ct.startsWith('DOC-') || ct.startsWith('DST-')) {
+          setOutputType('doc_tai_lieu');
+          if (typeof setSelectedDocIds === 'function') setSelectedDocIds([ct]);
+        }
+
+        // Brand / persona / writing_mode / pillar
+        if (data.brand_voice) setBrandResult({ brand: data.brand_voice });
+        if (data.persona) setPersona(data.persona);
+        if (data.writing_mode) setWritingMode(data.writing_mode);
+        if (data.image_prompt) setImagePrompt(data.image_prompt);
+
+        // Recover brief / topic from input_params if present
+        const ip = data.input_params || {};
+        if (ip.userPrompt && !brief) setBrief(ip.userPrompt);
+        if (ip.topic && !brief) setBrief(ip.topic);
+
+        // Mark generation as done so prompt cards render (same as just-generated UI)
+        setGenerationDone(true);
+        setSavedId(data.id);
+
+        // Auto-scroll to "Kết Quả" section after a brief delay (let render settle)
+        setTimeout(() => {
+          resultSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 300);
+
+        // Email fields restore
+        if (data.posted_account === 'email_hello' || ct === 'email' || ct.startsWith('DST-') || ct.startsWith('DOC-ONB-')) {
+          if (ip.emailSubject || data.title) setEmailSubject(ip.emailSubject || data.title);
+        }
+
+        setTimeout(() => { isRestoringRef.current = false; }, 200);
+      } catch (e) {
+        console.error('[load scriptId]', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   // Save state on every change (debounced via key states)
   useEffect(() => {
     if (isRestoringRef.current) return;
@@ -1759,8 +1928,7 @@ export default function AiGenPage() {
 
   // -- Load Facebook Pages --
   React.useEffect(() => {
-    fetch('/api/social/publish')
-      .then(r => r.json())
+    opsApi.getSocialPages()
       .then(data => {
         if (data.success && data.pages?.length) {
           setFacebookPages(data.pages);
@@ -1843,12 +2011,7 @@ export default function AiGenPage() {
           const scheduledTime = new Date(`${date}T${item.time || '00:00'}`);
           if (now >= scheduledTime) {
             const { from, to, subject, html } = item.scheduledContent.emailData;
-            fetch('/api/ops/email/send', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ from, to, subject, html }),
-            })
-              .then(r => r.json())
+            opsApi.sendEmail({ from, to, subject, html })
               .then(data => {
                 const newStatus = data.success ? 'published' : 'planned';
                 plannerService.update(item.id, { status: newStatus });
@@ -2133,7 +2296,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
 
     // 2026-05-08: Auto start batch on ANY generate click, optimistic UI update
     setBatchRunning(true);
-    fetch('/api/ops/content-pipeline/batch/start', { method: 'POST' })
+    opsApi.startBatch()
       .catch(err => {
         console.warn('[AUTO-BATCH] error starting:', err);
         setBatchRunning(false);
@@ -2182,7 +2345,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
             trading: 'wealth',
             wealth: 'wealth',
             spiritual: 'spiritual',
-            'tam-linh': 'spiritual',
+            'nghien-cuu': 'spiritual',
             wellness: 'wellness',
             health: 'wellness',
             lifestyle: 'integration',
@@ -2201,7 +2364,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
             sop_id: docId,
             topic: brief.trim() || resolvedTitle,
             title: resolvedTitle,
-            brand_voice: brandVoice || 'jennie',
+            brand_voice: brandVoice,
             pillar: resolvedPillar,
             track: resolvedTrack,
             persona: persona && persona !== 'auto' ? persona : undefined,
@@ -2234,11 +2397,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
               if (!slot?.stepId) continue;
               if (slot.saveHint && slot.extraPrompt?.trim()) {
                 try {
-                  await fetch(`/api/ops/email/steps/${slot.stepId}/hint`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ generation_hint: slot.extraPrompt.trim() }),
-                  });
+                  await opsApi.saveEmailHint(slot.stepId, { generation_hint: slot.extraPrompt.trim() });
                 } catch (e) {
                   console.warn(`[HINT-SAVE] step=${slot.stepId} failed:`, e);
                 }
@@ -2280,13 +2439,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
               full: payload,
             });
             try {
-              const r = await fetch('/api/ops/content-pipeline/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-              });
-              if (!r.ok) throw new Error(`HTTP ${r.status}`);
-              const job = await r.json();
+              const job = await opsApi.generateContent(payload);
               queuedJobIds.push(job?.id);
               queued += 1;
             } catch (err) {
@@ -2318,9 +2471,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
             for (const jid of queuedJobIds) {
               if (!jid || completed.has(jid)) continue;
               try {
-                const jr = await fetch(`/api/ops/sop-engine/batch-jobs/${jid}`);
-                if (!jr.ok) continue;
-                const job = await jr.json();
+                const job = await opsApi.getBatchJobStatus(jid);
                 if (job.status === 'completed' || job.status === 'failed') {
                   completed.add(jid);
                   if (job.status === 'completed') {
@@ -2339,18 +2490,16 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
                     }
                     if (!body && job.entity_id) {
                       try {
-                        const sr = await fetch(`/api/ops/content-pipeline/scripts?id=${job.entity_id}&limit=1`);
-                        if (sr.ok) {
-                          const rows = await sr.json();
+                        const rows = await opsApi.getScripts(`id=${job.entity_id}&limit=1`);
+                        if (rows) {
                           if (Array.isArray(rows) && rows[0]?.body) body = rows[0].body;
                         }
                       } catch (e) { console.warn('[DOC-POLL] fetch script by entity_id failed', e); }
                     }
                     if (!body) {
                       try {
-                        const sr = await fetch(`/api/ops/content-pipeline/scripts?generation_job_id=${jid}&limit=1`);
-                        if (sr.ok) {
-                          const rows = await sr.json();
+                        const rows = await opsApi.getScripts(`generation_job_id=${jid}&limit=1`);
+                        if (rows) {
                           if (Array.isArray(rows) && rows[0]?.body) body = rows[0].body;
                         }
                       } catch (e) { console.warn('[DOC-POLL] fetch script by job_id failed', e); }
@@ -2410,7 +2559,7 @@ TL;DR: (tóm tắt 1-2 câu cho AI search)
       } finally {
         setGenerating(false);
         // Tự động tắt batch sau khi xong
-        fetch('/api/ops/content-pipeline/batch/stop', { method: 'POST' })
+        opsApi.stopBatch()
           .then(() => setBatchRunning(false))
           .catch(e => console.error('[AUTO-BATCH] error stopping:', e));
       }
@@ -2535,6 +2684,8 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         writingMode: writingMode !== 'auto' ? writingMode : undefined,
         brandVoice,
         contentTopic: isSocialPost ? socialTopic : undefined,
+        emailType: isEmail ? emailType : undefined,
+        emailSubOptions: (isEmail && selectedEmailSubOptions.length > 0) ? selectedEmailSubOptions : undefined,
         onStream: (chunk) => {
           setOutput(chunk);
           setPipelineStep('processing');
@@ -2686,7 +2837,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       abortRef.current = null;
       
       // Tự động tắt batch sau khi xong (cho flow thường)
-      fetch('/api/ops/content-pipeline/batch/stop', { method: 'POST' })
+      opsApi.stopBatch()
         .then(() => setBatchRunning(false))
         .catch(e => console.error('[AUTO-BATCH] error stopping:', e));
     }
@@ -2710,6 +2861,14 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     }
   }, [output, addToast]);
 
+  const defaultFilename = useMemo(() => {
+    if (!output) return 'Gemral-Content';
+    const lines = output.split('\n');
+    let title = lines.find(line => line.trim().length > 0)?.replace(/^#+\s*/, '').trim() || 'Gemral-Content';
+    // Lọc ký tự không hợp lệ cho Windows/Mac/Linux
+    return title.substring(0, 100).replace(/[\\/?%*:|"<>]/g, '').trim() || 'Gemral-Content';
+  }, [output]);
+
   // -- Download --
   const handleDownload = useCallback(async (mode = 'file') => {
     if (!output) return;
@@ -2718,25 +2877,14 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     const mimeType = isDocHtml ? 'text/html' : 'text/markdown';
 
     // Tìm tiêu đề
-    let title = newsMetadata?.title || brief || '';
-    if (!title) {
-      const lines = output.split('\n');
-      title = lines[0]?.replace(/^#+\s*/, '').trim() || 'Gemral-Content';
-    }
-    // Lọc ký tự đặc biệt khỏi tên file
-    title = title.substring(0, 50).replace(/[^a-zA-Z0-9 À-ỹ]/g, '').trim() || 'Gemral-Content';
+    let title = customFilename.trim() || defaultFilename;
 
     if (mode === 'folder') {
       try {
         const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
 
-        // Remove accents and uppercase for folder name
-        const removeAccents = (str) =>
-          str.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
-        const folderName =
-          removeAccents(title).replace(/[^A-Z0-9 ]/g, '').trim().replace(/\s+/g, '_') ||
-          'GEMRAL_CONTENT';
+        const folderName = title;
         const filename = `${title}.${extension}`;
 
         // Add file to folder
@@ -2770,7 +2918,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       URL.revokeObjectURL(url);
       addToast({ type: 'success', message: `Đã tải về file ${filename}` });
     }
-  }, [output, outputType, newsMetadata, brief, addToast]);
+  }, [output, outputType, newsMetadata, brief, addToast, customFilename]);
 
   // -- Auto-save: batch_processor đã tự động lưu (server-side)
   useEffect(() => {
@@ -2852,6 +3000,89 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     { label: 'Tạo Tiêu Đề', instruction: 'Tạo 4 tiêu đề cho kịch bản này theo 4 công thức khác nhau.' },
   ];
 
+  // -- Gallery Upload Handlers --
+  const handleGalleryUpload = useCallback(async (file, { positionId }) => {
+    try {
+      if (!supabase) throw new Error('Supabase client not initialized');
+
+      // Upload to server to get real URL using Supabase
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
+      const filePath = `content-center/${fileName}`;
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('course-images')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from('course-images')
+        .getPublicUrl(filePath);
+        
+      const imageUrl = publicUrlData.publicUrl;
+
+      // Ensure user profile account is captured
+      const { data: { user } } = await supabase.auth.getUser();
+
+      const imageData = {
+        lesson_id: 'content-center', // Generic identifier
+        image_url: imageUrl,
+        file_name: file.name,
+        file_path: filePath,
+        file_size: file.size,
+        mime_type: file.type,
+        position_id: positionId,
+        is_active: true,
+        created_by: user?.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: insertedData, error: dbError } = await supabase
+        .from('course_lesson_images')
+        .insert(imageData)
+        .select()
+        .single();
+
+      if (dbError) {
+        // Fallback: still show it in UI but warn about DB issue
+        console.warn('[GalleryUpload] DB insert failed:', dbError);
+      }
+      
+      const newImage = insertedData || {
+        id: Date.now().toString(),
+        image_url: imageUrl,
+        alt_text: file.name,
+        position_id: positionId,
+        file_name: file.name,
+      };
+      
+      setGalleryImages(prev => [...prev, newImage]);
+      addToast({ type: 'success', message: 'Đã thêm hình ảnh vào thư viện' });
+      return { success: true };
+    } catch (error) {
+      console.error('[GalleryUpload] Error:', error);
+      addToast({ type: 'error', message: 'Lỗi tải ảnh: ' + (error.message || 'Không xác định') });
+      return { error };
+    }
+  }, [addToast]);
+
+  const handleGalleryDelete = useCallback(async (image) => {
+    setGalleryImages(prev => prev.filter(img => img.id !== image.id));
+    if (image.image_url.startsWith('blob:')) {
+      URL.revokeObjectURL(image.image_url);
+    }
+    addToast({ type: 'success', message: 'Đã xóa hình ảnh' });
+  }, [addToast]);
+
+  const handleGalleryReorder = useCallback((newImages) => {
+    setGalleryImages(newImages);
+  }, []);
+
   // -- Image upload handlers --
   const handleImageFiles = useCallback(async (files) => {
     const newImages = Array.from(files).filter(f => f.type.startsWith('image/')).slice(0, 10 - uploadedImages.length);
@@ -2905,11 +3136,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         const formData = new FormData();
         uploadedImages.forEach(img => formData.append('files', img.file));
 
-        const uploadRes = await fetch('/api/social/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        const uploadData = await uploadRes.json();
+        const uploadData = await opsApi.uploadSocialMedia(formData);
         if (!uploadData.success) throw new Error(uploadData.error);
         imageUrls = uploadData.urls;
         setUploading(false);
@@ -2935,12 +3162,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       if (scheduleMode && scheduledDateTime && platform === 'Facebook') {
         publishBody.scheduledTime = Math.floor(new Date(scheduledDateTime).getTime() / 1000);
       }
-      const publishRes = await fetch('/api/social/publish', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(publishBody),
-      });
-      const publishData = await publishRes.json();
+      const publishData = await opsApi.publishSocialMedia(publishBody);
       if (!publishData.success) throw new Error(publishData.error);
 
       setPublishResults(prev => [...prev, { platform, url: publishData.postUrl }]);
@@ -2948,17 +3170,12 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       // Auto-comment nếu đã bật và đăng Facebook thành công (không phải scheduled)
       if (autoCommentEnabled && autoCommentText.trim() && platform === 'Facebook' && !publishData.scheduled && publishData.postId) {
         try {
-          const commentRes = await fetch('/api/social/comment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          const commentData = await opsApi.commentSocialMedia({
               postId: publishData.postId,
               pageId: selectedFbPage || undefined,
               message: autoCommentText,
               link: autoCommentLink || undefined,
-            }),
           });
-          const commentData = await commentRes.json();
           if (commentData.success) {
             addToast({ type: 'success', title: 'Auto-comment', message: 'Đã đăng comment tự động!' });
           }
@@ -3193,17 +3410,14 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
       const recipients = emailRecipients.split(',').map(e => e.trim()).filter(Boolean);
 
       // 1. Gửi email qua API
-      const res = await fetch('/api/ops/email/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const bccList = emailBcc.split(',').map(e => e.trim()).filter(Boolean);
+      const data = await opsApi.sendEmail({
           from: emailSender,
           to: recipients,
+          ...(bccList.length > 0 && { bcc: bccList }),
           subject: emailSubject,
           html: htmlContent,
-        }),
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
       // 2. Track campaign trong cc_email_campaigns
@@ -3446,11 +3660,135 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     return () => window.removeEventListener('message', handler);
   }, [addToast]);
 
-  // -- Email preview srcDoc with base tag + interactive editing script --
-  const emailPreviewSrcDoc = React.useMemo(() => {
-    // When iframe syncs its DOM back to parent, don't regenerate srcDoc (iframe already has correct state)
+  // -- Content preview srcDoc với base tag + interactive editing script --
+  // Generic — handles HTML output (email/doc) + plain markdown/text (social/forum)
+  // wrap markdown trong <pre> với preserve whitespace (Phase A KISS, no markdown parser).
+  // Spec: memory/reports/2026-05-17-content-result-panel-global-design.md §5.3
+
+  const autoFormatContent = (text) => {
+    if (typeof text !== 'string') return text;
+    let res = text;
+    
+    // Options A, B, C, D (with or without bold)
+    res = res.replace(/(?:^|\s+)(\*\*[A-D]\.\*\*|\*[A-D]\.\*|[A-D]\.)\s+/g, '\n\n$1 ');
+    
+    // Common markers (added more variations)
+    const markers = [
+      'Đáp án', 'Giải thích', 'Caption', 'Bình luận', 'Hook', 'Body', 'CTA', 'Call to action', 'Action', 'Câu hỏi',
+      'Tiêu đề', 'Mô tả', 'Text trên video', 'Text', 'Hình ảnh', 'Video', 'Hashtags', 'Hashtag', 'Lưu ý', 'Ghi chú', 
+      'Âm thanh', 'Nhạc nền', 'Voice', 'Voice off', 'Kịch bản'
+    ];
+    
+    markers.forEach(marker => {
+      // Match the marker with optional asterisks and a colon, OR just bolded marker without colon
+      const pattern = `(?:^|\\s+)(\\*\\*${marker}\\*\\*:|\\*\\*${marker}:\\*\\*|\\*${marker}\\*:|\\*${marker}:\\*|${marker}:|\\*\\*${marker}\\*\\*)\\s*`;
+      const regex = new RegExp(pattern, 'gi');
+      res = res.replace(regex, '\n\n$1 ');
+    });
+
+    // Prefix with numbers (Câu X, Clip X, Phần X, Video X, Hình X, Ảnh X, Cảnh X, Bài X)
+    const prefixRegex = /(?:^|\s+)(\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*?:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:\*\*?|(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+:|\*\*(Câu|Clip|Phần|Video|Hình|Ảnh|Cảnh|Bài)\s+\d+\*\*)\s*/gi;
+    res = res.replace(prefixRegex, '\n\n$1 ');
+    
+    // Bracketed markers like [Text trên màn hình], [Video], 【Caption】, (Voice-over)
+    const bracketRegex = /(?:^|\s+)(\[\w.*?\]|【\w.*?】|\((?:Voice-over|Audio|Visual|Voice|Nhạc nền|Hiệu ứng|Góc máy|Kịch bản|Cười)\))\s*/gi;
+    res = res.replace(bracketRegex, '\n\n$1 ');
+    
+    return res.trim();
+  };
+
+  const previewSrcDoc = React.useMemo(() => {
     if (emailSyncingRef.current && emailSrcDocRef.current) return emailSrcDocRef.current;
     if (!output) return '';
+    let cleanOutput = output.trim();
+    // Strip markdown code block wrapper if present
+    if (cleanOutput.startsWith('```markdown')) {
+      cleanOutput = cleanOutput.replace(/^```markdown\s*/i, '').replace(/\s*```$/i, '');
+    } else if (cleanOutput.startsWith('```html')) {
+      cleanOutput = cleanOutput.replace(/^```html\s*/i, '').replace(/\s*```$/i, '');
+    } else if (cleanOutput.startsWith('```')) {
+      cleanOutput = cleanOutput.replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    }
+    
+    // Markdown/plain-text fallback
+    const isFullHtmlDocument = /^\s*(<!DOCTYPE html>|<html)/i.test(cleanOutput);
+    const hasHtml = isFullHtmlDocument;
+    
+    let workingOutput = cleanOutput;
+    if (!hasHtml && cleanOutput) {
+      const formattedContent = autoFormatContent(cleanOutput);
+      const parsedHtml = marked.parse(formattedContent, { breaks: true });
+      workingOutput = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    color: #1f2328;
+    line-height: 1.6;
+    font-size: 15px;
+    padding: 24px 32px;
+    background: #ffffff;
+    margin: 0;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    color: #112250;
+    font-weight: 600;
+    margin-top: 24px;
+    margin-bottom: 16px;
+    line-height: 1.25;
+  }
+  h1 { font-size: 2em; border-bottom: 1px solid #eaecef; padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid #eaecef; padding-bottom: .3em; }
+  h3 { font-size: 1.25em; }
+  p { margin-top: 0; margin-bottom: 16px; }
+  a { color: #6A5BFF; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { margin-top: 0; margin-bottom: 16px; padding-left: 2em; }
+  li { margin-top: 0.25em; }
+  blockquote {
+    padding: 0 1em;
+    color: #656d76;
+    border-left: .25em solid #FFBD59;
+    margin: 0 0 16px 0;
+    background: #fdfaf6;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+  }
+  code {
+    padding: .2em .4em;
+    margin: 0;
+    font-size: 85%;
+    background-color: rgba(175, 184, 193, 0.2);
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+    color: #9C0612;
+  }
+  pre {
+    padding: 16px;
+    overflow: auto;
+    font-size: 85%;
+    line-height: 1.45;
+    background-color: #f6f8fa;
+    border-radius: 6px;
+  }
+  pre code {
+    padding: 0;
+    margin: 0;
+    background-color: transparent;
+    border: 0;
+    color: inherit;
+  }
+  hr {
+    height: .25em;
+    padding: 0;
+    margin: 24px 0;
+    background-color: #d0d7de;
+    border: 0;
+  }
+  strong { color: #112250; }
+</style>
+</head><body><div class="markdown-body">${parsedHtml}</div></body></html>`;
+    }
+
     const baseTag = `<base href="${window.location.origin}/">`;
 
     // Comprehensive script: drag-drop, inline editing, delete, image replace
@@ -3739,9 +4077,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 })();
 </script>`;
 
-    // Inject base tag + script
-    const bodyEndIdx = output.lastIndexOf('</body>');
-    let result = output;
+    // Inject base tag + script (operate on workingOutput — already wrapped if markdown)
+    const bodyEndIdx = workingOutput.lastIndexOf('</body>');
+    let result = workingOutput;
     if (bodyEndIdx !== -1) {
       result = result.slice(0, bodyEndIdx) + interactiveScript + result.slice(bodyEndIdx);
     } else {
@@ -3759,6 +4097,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     emailSrcDocRef.current = finalSrcDoc;
     return finalSrcDoc;
   }, [output, isEditing]);
+
+  // (T6 cutover 2026-05-17: alias `emailPreviewSrcDoc = previewSrcDoc` removed
+  //  vì ContentResultPanel consume previewSrcDoc directly.)
 
   // -- Default design system --
   const DEFAULT_DESIGN_SYSTEM = `\n\nQUY TẮC BẮT BUỘC:\n- Use my attached photo for character face.\n- Tất cả text bằng tiếng Việt có dấu\n- Người Việt thật 27-35 tuổi (KHÔNG cartoon, KHÔNG illustration)\n- Style: Luxurious, premium, high-end editorial photography — KHÔNG minimalist/tối giản\n- Lighting: cinematic golden hour, dramatic rim lighting, soft bokeh with warm tones\n- TUYỆT ĐỐI KHÔNG cho nhân vật mặc blazer, vest, suit jacket — thay bằng elegant casual: áo lụa, áo trễ vai, áo cổ V thanh lịch, hoặc outfit phù hợp ngữ cảnh\n- Background: rich textures (marble, velvet, warm wood, golden accents), NOT plain/empty\n- Tỷ lệ mặc định: 3:4 (dọc)\n\nDESIGN SYSTEM:\nNavy đậm #112250\nGold #FFBD59\nAccent: Purple #6A5BFF\nBurgundy #9C0612\nPink #FF6B9D\nText: White #FFFFFF\nFooter: "gemral.com" centered`;
@@ -3784,17 +4125,12 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     if (feedbackSent.has(key)) return;
     setFeedbackSending(key);
     try {
-      const res = await fetch('/api/knowledge/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await opsApi.submitKnowledgeFeedback({
           type,
           rule,
           suggestion,
           contentType: contentType ?? undefined,
-        }),
       });
-      const data = await res.json();
       if (data.success) {
         setFeedbackSent(prev => new Set(prev).add(key));
         addToast({ type: 'success', title: 'Đã ghi nhận', message: 'Hệ thống sẽ cải thiện từ lần tạo tiếp theo.' });
@@ -3824,7 +4160,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         content_type: contentType ?? 'social_post',
         track: 'integration',
         pillar: 'lifestyle',
-        persona: (persona !== 'auto' ? persona : (brandVoice === 'generic' ? 'jennie_educator' : 'jennie_mentor')),
+        persona: persona !== 'auto' ? persona : undefined,
         writing_mode: (writingMode !== 'auto' ? writingMode : 'mode_1_calm'),
         priority: 'medium',
         scheduled_date: calendarScheduleDate,
@@ -3890,6 +4226,9 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
           <a href="/admin/cc/calendar" className="ml-auto text-xxs text-emerald hover:underline shrink-0">Quay lại Lịch</a>
         </div>
       )}
+
+      {/* -- Media Gallery -- ĐÃ TÁCH thành section riêng (MediaGallerySection) trong
+          ContentPipelinePage → DEFAULT_AIGEN_SECTIONS 'media-gallery' (2026-05-30). -- */}
 
       {/* -- Form -- */}
       <Card variant="glass" padding="md">
@@ -4091,7 +4430,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
               {socialTopic === 'spiritual' && (
                 <CheckboxGroup
-                  label="Chủ đề Tâm Linh & Huyền Học (chọn nhiều)"
+                  label="Chủ đề Nghiên Cứu & Huyền Học (chọn nhiều)"
                   options={SOCIAL_SPIRITUAL_OPTIONS}
                   selected={socialTopicDetails}
                   onChange={setSocialTopicDetails}
@@ -4503,7 +4842,7 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
 
           {/* ── Doc-Tài Liệu Nội Dung: checkbox group cho 25 SOPs ── */}
           {isDocTaiLieu && (
-            <div className="space-y-3 p-4 rounded-card border border-border bg-glass-bg">
+            <div className="space-y-3 p-4 rounded-card border border-border bg-glass-bg" style={{ overflowAnchor: 'none' }}>
               <h4 className="text-xs font-semibold text-txt-2 uppercase tracking-wider">
                 CHỌN TÀI LIỆU SOP CẦN TẠO
               </h4>
@@ -4611,9 +4950,10 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                 </div>
               </div>
               {/* ── EMAIL META BLOCK: shown khi tick DOC-ONB-* / DOC-AFF-* / DOC-CS-011 ──
-                  Reusable cùng email job type. SSOT từ email_template_registry.json */}
-              {selectedDocIds.length > 0 && (
-                <div className="space-y-3 pt-3 border-t border-border/40 mt-3" style={{ userSelect: 'text' }}>
+                  Reusable cùng email job type. SSOT từ email_template_registry.json
+                  2026-05-20: render ALWAYS với display:none thay vì conditional mount
+                  → tránh push checkbox list xuống/lên (scroll jump fix) */}
+              <div className="space-y-3 pt-3 border-t border-border/40 mt-3" style={{ userSelect: 'text', display: selectedDocIds.length === 0 ? 'none' : undefined }}>
                   <h4 className="text-xs font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
                     <Mail size={14} />
                     Email Schema (auto-fill theo SOP, tùy chỉnh nếu muốn)
@@ -4881,20 +5221,21 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                     )}
                   </div>
                 </div>
-              )}
               {Array.from(new Set(DOC_SOP_OPTIONS.map((o) => o.group))).map((group) => (
                 <div key={group} className="space-y-1.5">
                   <div className="text-[11px] font-semibold text-txt-3 uppercase tracking-wider">{group}</div>
                   <div className="grid grid-cols-1 gap-1.5">
                     {DOC_SOP_OPTIONS.filter((o) => o.group === group).map((opt) => {
                       const checked = selectedDocIds.includes(opt.value);
-                      const isOnb = typeof opt.emailCount === 'number';
+                      // Chỉ render day-picker dropdown khi SOP có >1 email (DOC-ONB-* nhiều ngày)
+                      // DOC-SAL-LM-* mỗi cái 1 email → KHÔNG cần dropdown (chỉ có 1 option vô nghĩa)
+                      const isOnb = typeof opt.emailCount === 'number' && opt.emailCount > 1;
                       return (
-                        <div key={opt.value} className="flex items-center gap-2">
-                          <label className="flex items-center gap-2 cursor-pointer flex-1">
+                        <div key={opt.value} className="flex items-center gap-3 min-h-[28px]">
+                          <label className="flex items-center gap-2 cursor-pointer">
                             <input
                               type="checkbox"
-                              className="accent-[var(--gold)] w-4 h-4"
+                              className="accent-[var(--gold)] w-4 h-4 shrink-0"
                               checked={checked}
                               disabled={generating}
                               onChange={() => {
@@ -4905,15 +5246,15 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                                 );
                               }}
                             />
-                            <span className="text-[12px] text-txt">
+                            <span className="text-[12px] text-txt whitespace-nowrap">
                               <span className="font-mono text-[10px] text-txt-3 mr-1">{opt.value}</span>
                               {opt.label}
                             </span>
                           </label>
-                          {isOnb && checked && (
+                          {isOnb && (
                             <select
-                              className="text-[11px] px-2 py-1 rounded-md border border-border bg-bg-4 text-txt"
-                              disabled={generating}
+                              className={`text-[11px] px-2 py-1 rounded-md border border-border bg-bg-4 text-txt w-[130px] shrink-0 ${checked ? '' : 'invisible'}`}
+                              disabled={generating || !checked}
                               value={selectedDocEmailDays[opt.value] ?? 'all'}
                               onChange={(e) => setSelectedDocEmailDays((prev) => ({ ...prev, [opt.value]: e.target.value }))}
                             >
@@ -4947,6 +5288,69 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                 onChange={setEmailType}
                 disabled={generating}
               />
+
+              {/* ── Email Sub-options (checkbox nhóm, hiện khi emailType có sub-options) ── */}
+              {EMAIL_TYPE_SUBOPTIONS[emailType] && (
+                <div className="space-y-2 p-3 rounded-lg border border-border bg-bg-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-txt-2 uppercase tracking-wider">
+                      Chọn dạng nội dung cụ thể
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={generating}
+                        onClick={() => setSelectedEmailSubOptions(EMAIL_TYPE_SUBOPTIONS[emailType].map((o) => o.value))}
+                        className="text-[11px] text-blue hover:text-blue/80 disabled:opacity-50"
+                      >
+                        Chọn tất cả
+                      </button>
+                      <span className="text-txt-4 text-[11px]">·</span>
+                      <button
+                        type="button"
+                        disabled={generating}
+                        onClick={() => setSelectedEmailSubOptions([])}
+                        className="text-[11px] text-txt-3 hover:text-txt-2 disabled:opacity-50"
+                      >
+                        Bỏ chọn
+                      </button>
+                      <span className="ml-1 text-[11px] text-txt-3">
+                        Đã chọn: {selectedEmailSubOptions.length}/{EMAIL_TYPE_SUBOPTIONS[emailType].length}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1">
+                    {EMAIL_TYPE_SUBOPTIONS[emailType].map((opt) => {
+                      const checked = selectedEmailSubOptions.includes(opt.value);
+                      return (
+                        <label
+                          key={opt.value}
+                          className={`flex items-center gap-2.5 px-3 py-2 rounded-md cursor-pointer transition-all select-none ${
+                            checked
+                              ? 'bg-blue/10 border border-blue/30 text-txt'
+                              : 'bg-bg-5 border border-transparent text-txt-2 hover:border-border hover:text-txt'
+                          } ${generating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={generating}
+                            checked={checked}
+                            onChange={() =>
+                              setSelectedEmailSubOptions((prev) =>
+                                prev.includes(opt.value)
+                                  ? prev.filter((v) => v !== opt.value)
+                                  : [...prev, opt.value]
+                              )
+                            }
+                            className="w-3.5 h-3.5 accent-blue"
+                          />
+                          <span className="text-[13px]">{opt.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-txt-2 mb-1.5">Tiêu đề email (Subject)</label>
@@ -5547,84 +5951,29 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
         </div>
       )}
 
-      {/* Email Toolbox — fixed position in left margin, outside content flow */}
-      {output && isHtmlPreview && showEmailToolbox && (
-        <div
-          className="rounded-card border border-border bg-glass-bg overflow-hidden z-50"
-          style={{ position: 'fixed', right: '16px', top: '80px', width: '190px', maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}
-        >
-            {/* Toolbox Header */}
-            <div className="px-3 py-2 border-b border-border bg-gold/10 flex items-center justify-between sticky top-0 z-10">
-              <div className="flex items-center gap-2">
-                <Plus size={14} className="text-gold" />
-                <span className="text-xs font-semibold text-gold">Toolbox</span>
-              </div>
-              <button onClick={() => setShowEmailToolbox(false)} className="text-txt-3 hover:text-txt transition-colors">
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="p-2">
-              {EMAIL_TOOLBOX_CATEGORIES.map((category) => (
-                <div key={category.id} className="mb-2">
-                  <button
-                    onClick={() => setEmailToolboxCategories(prev => ({ ...prev, [category.id]: !prev[category.id] }))}
-                    className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left rounded bg-glass-bg hover:bg-bg-3 transition-colors"
-                  >
-                    {emailToolboxCategories[category.id] ? <ChevronDown size={12} className="text-txt-3" /> : <ChevronRight size={12} className="text-txt-3" />}
-                    <category.icon size={12} className="text-gold" />
-                    <span className="text-xxs font-semibold text-txt-2">{category.label}</span>
-                    <span className="text-xxs text-txt-3 ml-auto">({category.items.length})</span>
-                  </button>
-
-                  {emailToolboxCategories[category.id] && (
-                    <div className="flex flex-col gap-1 mt-1 pl-1">
-                      {category.items.map((item) => (
-                        <div
-                          key={item.id}
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = 'copy';
-                            e.dataTransfer.setData('application/x-email-toolbox', JSON.stringify(item));
-                            e.dataTransfer.setData('text/html', item.html);
-                            e.dataTransfer.setData('text/plain', item.label);
-                            // Store the HTML for the iframe postMessage handler
-                            window.__emailPendingDropHtml = item.html;
-                          }}
-                          onClick={() => handleEmailToolboxInsert(item)}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded border border-transparent bg-white/[0.03] hover:bg-gold/10 hover:border-gold/20 cursor-grab transition-all group"
-                          title={`${item.description} — Kéo vào email preview hoặc click để thêm`}
-                        >
-                          <GripVertical size={10} className="text-txt-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                          <item.icon size={12} className="text-gold flex-shrink-0" />
-                          <span className="text-xxs text-txt-2 leading-tight">{item.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {/* Hint */}
-              <div className="mt-2 p-2 rounded bg-purple/5 border border-purple/10 text-center">
-                <p className="text-xxs text-txt-3 leading-relaxed">
-                  Kéo thả trực tiếp vào email preview hoặc click để chèn
-                </p>
-              </div>
-            </div>
-          </div>
-      )}
-
-      {/* -- Kết quả -- */}
-      {output && (
+      {/* -- Kết quả -- 2026-05-13: always render so user can paste content directly even on fresh page. */}
+      <div ref={resultSectionRef}>
+        {/* Fast Scroll to Top Button */}
+        {output && !resultCollapsed && (
+          <button
+            onClick={() => resultSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            className="fixed bottom-6 right-6 z-[100] p-3 rounded-full bg-glass-bg border border-gold/30 text-gold shadow-[0_0_15px_rgba(255,189,89,0.2)] hover:bg-gold hover:text-black hover:scale-110 transition-all cursor-pointer"
+            title="Cuộn lên đầu kết quả"
+          >
+            <ArrowUp size={20} />
+          </button>
+        )}
         <Card variant="glass" padding="md">
           {/* Toolbar */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => setResultCollapsed(c => !c)}>
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 cursor-pointer select-none" onClick={() => setResultCollapsed(c => !c)}>
               <h3 className="text-sm font-semibold text-txt">Kết Quả</h3>
               <span className="text-txt-3 text-xs">{resultCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
               {savedId && (
                 <Badge text="Đã lưu tự động" variant="success" size="sm" dot />
+              )}
+              {!output && (
+                <Badge text="Trống — paste vào textarea bên dưới" variant="info" size="sm" />
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -5665,10 +6014,21 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                   Tải Về <ChevronDown size={14} className="ml-1 opacity-70" />
                 </Button>
                 {showDownloadMenu && (
-                  <div className="absolute top-full left-0 mt-1 w-40 bg-card border border-border rounded-md shadow-lg py-1 z-50 overflow-hidden">
+                  <div className="absolute top-full left-0 mt-1 w-56 bg-card border border-border rounded-md shadow-lg py-1 z-50 overflow-hidden">
+                    <div className="px-3 py-2 border-b border-border/50">
+                      <input 
+                        type="text" 
+                        value={customFilename} 
+                        onChange={(e) => setCustomFilename(e.target.value)} 
+                        placeholder={defaultFilename} 
+                        className="w-full h-8 px-2 text-sm bg-bg-4 border border-border rounded focus:border-gold/50 focus:outline-none text-txt"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Tên file sẽ tải về. Để trống sẽ dùng tên mặc định."
+                      />
+                    </div>
                     <button
                       onClick={() => { setShowDownloadMenu(false); handleDownload('file'); }}
-                      className="w-full text-left px-3 py-2 text-sm text-txt hover:bg-bg-3 transition-colors flex items-center gap-2"
+                      className="w-full text-left px-3 py-2 text-sm text-txt hover:bg-bg-3 transition-colors flex items-center gap-2 mt-1"
                     >
                       <FileText size={14} className="text-txt-3" />
                       Tải 1 file
@@ -5749,336 +6109,65 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             </div>
           )}
 
-          {/* Content: Email HTML Preview or standard markdown */}
-          {isHtmlPreview ? (
-            <div className="mb-4 space-y-3">
-              {/* Email toolbar */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => { setShowEmailPreview(true); setShowEmailSource(false); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailPreview && !showEmailSource ? 'bg-gold/20 text-gold border border-gold/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-gold/20'}`}
-                >
-                  <Eye size={14} />
-                  Preview
-                </button>
-                <button
-                  onClick={() => { setShowEmailSource(true); setShowEmailPreview(false); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailSource && !showEmailPreview ? 'bg-purple/20 text-purple border border-purple/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-purple/20'}`}
-                >
-                  <Code size={14} />
-                  HTML Source
-                </button>
-                <button
-                  onClick={() => { setShowEmailPreview(true); setShowEmailSource(true); }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailPreview && showEmailSource ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-cyan/20'}`}
-                >
-                  <Smartphone size={14} />
-                  Split View
-                </button>
-
-                <div className="w-px h-5 bg-border mx-1" />
-
-                {/* Toolbox toggle */}
-                <button
-                  onClick={() => setShowEmailToolbox(!showEmailToolbox)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium transition-all ${showEmailToolbox ? 'bg-gold/20 text-gold border border-gold/30' : 'bg-glass-bg text-txt-3 border border-border hover:border-gold/20'}`}
-                >
-                  <Layers size={14} />
-                  Toolbox
-                </button>
-
-                {/* Image Management */}
-                <input
-                  ref={emailFileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleEmailImageUpload}
-                />
-                <button
-                  onClick={() => { setEmailReplacingIdx(null); emailFileInputRef.current?.click(); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-card text-xs font-medium bg-glass-bg text-txt-3 border border-border hover:border-emerald/30 hover:text-emerald transition-all"
-                >
-                  <Upload size={14} />
-                  Thêm Hình Ảnh
-                </button>
-                {emailPlaceholders.length > 0 && (
-                  <span className="text-xxs text-txt-3">
-                    {emailPlaceholders.length} placeholder •
-                  </span>
-                )}
-                {emailPlaceholders.map((ph, i) => (
-                  <button
-                    key={i}
-                    onClick={() => { setEmailReplacingIdx(i); emailFileInputRef.current?.click(); }}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-xxs bg-amber/10 text-amber border border-amber/20 hover:bg-amber/20 transition-all"
-                    title={ph.url}
-                  >
-                    <ImageIcon size={10} />
-                    Thay #{i + 1}
-                  </button>
-                ))}
-              </div>
-
-              {/* Preview / Source area — full width since toolbox is outside Card */}
-              <div
-                className={`${showEmailPreview && showEmailSource ? 'grid grid-cols-2 gap-3' : ''}`}
-                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  // Handle image drops on the outer container
-                  handleEmailDrop(e);
-                }}
-              >
-                {/* HTML Source Editor */}
-                {showEmailSource && (
-                  <div className="rounded-card bg-glass-bg border border-border overflow-hidden">
-                    <div className="px-3 py-2 border-b border-border flex items-center gap-2">
-                      <Code size={14} className="text-purple" />
-                      <span className="text-xxs font-semibold text-txt-2 uppercase tracking-wider">HTML Source</span>
-                    </div>
-                    <textarea
-                      value={output}
-                      onChange={(e) => setOutput(e.target.value)}
-                      className="w-full bg-transparent text-xs text-txt-2 leading-relaxed focus:outline-none resize-y p-3 font-mono"
-                      style={{ minHeight: 'calc(100vh - 260px)' }}
-                      spellCheck={false}
-                    />
-                  </div>
-                )}
-
-                {/* HTML Preview */}
-                {showEmailPreview && (
-                  <div className="rounded-card border border-border overflow-hidden bg-white">
-                    <div className="px-3 py-2 border-b border-border bg-glass-bg flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Mail size={14} className="text-gold" />
-                        <span className="text-xxs font-semibold text-txt-2 uppercase tracking-wider">Email Preview</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          disabled={!canUndo}
-                          onClick={() => emailIframeRef.current?.contentWindow?.postMessage({ type: 'email-undo' }, '*')}
-                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-4 hover:text-txt transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
-                          title="Hoàn tác (Ctrl+Z)"
-                        >
-                          <RefreshCw size={12} className="scale-x-[-1]" />
-                          Undo
-                        </button>
-                        <button
-                          disabled={!canRedo}
-                          onClick={() => emailIframeRef.current?.contentWindow?.postMessage({ type: 'email-redo' }, '*')}
-                          className="h-7 px-2.5 text-[11px] font-semibold rounded-md border border-border bg-transparent text-txt-2 hover:bg-bg-4 hover:text-txt transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
-                          title="Làm lại (Ctrl+Y)"
-                        >
-                          <RefreshCw size={12} />
-                          Redo
-                        </button>
-                        <span className="text-xxs text-txt-3">600px max-width</span>
-                      </div>
-                    </div>
-                    <div className="flex justify-center bg-[#e8e8ec] p-4">
-                      <iframe
-                        ref={emailIframeRef}
-                        key="email-preview-stable"
-                        title="Email Preview"
-                        srcDoc={emailPreviewSrcDoc}
-                        className="border-0 w-full max-w-[620px] bg-white shadow-lg rounded"
-                        style={{ minHeight: '800px' }}
-                        sandbox="allow-same-origin allow-scripts"
-                        onLoad={handleEmailIframeLoad}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="p-4 rounded-card bg-card border border-border mb-4">
-              {isEditing ? (
-                <textarea
-                  value={output}
-                  onChange={(e) => setOutput(e.target.value)}
-                  className="w-full bg-transparent text-sm text-foreground leading-relaxed focus:outline-none resize-none min-h-[300px] font-sans"
-                  style={{ minHeight: `${Math.max(300, output.split('\n').length * 22)}px` }}
-                />
-              ) : (
-                <div className="prose dark:prose-invert prose-sm max-w-none text-foreground">
-                  {output.split('\n').map((line, i) => {
-                    if (line.startsWith('## ')) {
-                      return (
-                        <h2 key={i} className="font-heading text-lg text-amber-700 dark:text-gold font-semibold mt-4 mb-2">
-                          {line.replace(/^##\s+/, '')}
-                        </h2>
-                      );
-                    }
-                    if (line.startsWith('### ')) {
-                      return (
-                        <h3 key={i} className="font-heading text-md text-foreground font-semibold mt-3 mb-1">
-                          {line.replace(/^###\s+/, '')}
-                        </h3>
-                      );
-                    }
-                    if (line.trim() === '') {
-                      return <div key={i} className="h-2" />;
-                    }
-                    const renderBold = (text) => {
-                      const parts = text.split(/(\*\*.*?\*\*)/g);
-                      return parts.map((part, index) => {
-                        if (part.startsWith('**') && part.endsWith('**')) {
-                          return <strong key={index} className="text-foreground font-bold">{part.slice(2, -2)}</strong>;
-                        }
-                        return <span key={index}>{part}</span>;
-                      });
-                    };
-                    return (
-                      <p key={i} className="text-sm text-foreground leading-relaxed mb-3">
-                        {renderBold(line)}
-                      </p>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ═══ Đóng collapsible guard ═══ */}
+          {/* ═══ Đóng collapsible guard (IterateChatPanel + GenerateProgress only) ═══ */}
           </>
           )}
 
-          {/* ═══ 7 Prompt Cards — LUÔN HIỂN DÙ thu gọn ═══ */}
-          {output && output.toLowerCase().includes('prompt cho ') && (() => {
-            const firstIdx = output.toLowerCase().indexOf('prompt cho ');
-            const workingText = firstIdx >= 0 ? output.slice(firstIdx) : output;
-            const parts = workingText.split(/(?=PROMPT CHO )/i).map(s => s.trim()).filter(Boolean).slice(0, 7);
-            const cards = parts.length > 1 ? parts : (() => {
-              const lines = output.split('\n');
-              const result = [];
-              let current = '';
-              const isHead = (l) =>
-                /^(?:#{1,3}\s*)?(?:Ảnh|Anh|ANH)\s*[1-7](?:\s*[-:—]|$)/i.test(l.trim())
-                || /^PROMPT CHO /i.test(l.trim());
-              for (const line of lines) {
-                if (isHead(line)) { if (current.trim()) result.push(current.trim()); current = line + '\n'; }
-                else { current += line + '\n'; }
-              }
-              if (current.trim()) result.push(current.trim());
-              return result.length > 1 ? result.slice(0, 7) : [output];
-            })();
-            const handleCopyCard = async (text, idx) => {
-              try {
-                await navigator.clipboard.writeText(text);
-                setCopiedPromptIdx(idx); setTimeout(() => setCopiedPromptIdx(null), 2000);
-              } catch { /* ignore */ }
-            };
+          {/* Content: Global ContentResultPanel — mount OUTSIDE collapsible wrapper.
+              `collapsed` prop chỉ ẩn toolbar+content preview, prompts/resend/stats
+              vẫn visible bên dưới collapse boundary.
+              Spec: memory/reports/2026-05-17-content-result-panel-global-design.md */}
+          <ContentResultPanel
+            output={output}
+            onOutputChange={setOutput}
+            contentType={contentType}
+            previewSrcDoc={previewSrcDoc}
+            iframeRef={emailIframeRef}
+            onIframeLoad={handleEmailIframeLoad}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            placeholders={emailPlaceholders}
+            fileInputRef={emailFileInputRef}
+            onImageUpload={handleEmailImageUpload}
+            onSetReplacingIdx={setEmailReplacingIdx}
+            onDrop={handleEmailDrop}
+            toolboxCategories={EMAIL_TOOLBOX_CATEGORIES}
+            onToolboxInsert={handleEmailToolboxInsert}
+            collapsed={resultCollapsed}
+            resend={{
+              sender: emailSender,
+              subject: emailSubject,
+              recipients: emailRecipients,
+              bcc: emailBcc,
+              manualHtml: manualEmailHtml,
+              sent: emailSent,
+              sending: emailSending,
+              onSenderChange: setEmailSender,
+              onSubjectChange: setEmailSubject,
+              onRecipientsChange: setEmailRecipients,
+              onBccChange: setEmailBcc,
+              onManualHtmlChange: setManualEmailHtml,
+              onSend: handleSendEmail,
+              onScheduleClick: () => {
+                setCalendarScheduleDate(new Date().toISOString().split('T')[0] ?? '');
+                setCalendarPlatform('email');
+                setShowScheduleModal(true);
+              },
+            }}
+            stats={{
+              wordCount: outputWordCount,
+              duration: outputDuration,
+              brandResult,
+            }}
+            addToast={addToast}
+          />
 
-            const handleCopyAllCards = async () => {
-              try {
-                const fullText = cards.map(c => '=========================================\n' + c).join('\n\n');
-                await navigator.clipboard.writeText(fullText);
-                addToast({ type: 'success', message: 'Đã sao chép TẤT CẢ prompt.' });
-              } catch {
-                addToast({ type: 'error', message: 'Lỗi copy.' });
-              }
-            };
-
-            return (
-              <div className="mt-4 pt-4 border-t border-border">
-                {/* Header section với toggle toàn bộ */}
-                <div className="flex items-center justify-between mb-3">
-                  <div
-                    className="flex items-center gap-2 cursor-pointer select-none"
-                    onClick={() => setPromptSectionCollapsed(c => !c)}
-                  >
-                    <ImageIcon size={14} className="text-purple" />
-                    <h4 className="text-xs font-semibold text-purple uppercase tracking-wider">
-                      🎨 Prompt Hình Ảnh ({cards.length}/7)
-                    </h4>
-                    <span className="text-txt-3 text-xs">{promptSectionCollapsed ? '▶ Mở rộng' : '▼ Thu gọn'}</span>
-                  </div>
-                  <Button variant="outline" size="sm" icon={Copy} onClick={handleCopyAllCards}>Sao Chép Tất Cả</Button>
-                </div>
-
-                {/* 7 Cards — ẩn toàn bộ nếu section collapsed */}
-                {!promptSectionCollapsed && (
-                <div className="grid gap-2">
-                  {cards.map((card, idx) => {
-                    const isCardCollapsed = !!collapsedCards[idx];
-                    const toggleCard = () => setCollapsedCards(prev => ({ ...prev, [idx]: !prev[idx] }));
-                    return (
-                    <div key={idx} className="rounded-card border border-purple/20 bg-purple/5">
-                      {/* Card header với toggle từng card */}
-                      <div
-                        className="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-purple/10 transition-colors rounded-card"
-                        onClick={toggleCard}
-                      >
-                        <span className="text-xs font-semibold text-purple">
-                          {isCardCollapsed ? '▶' : '▼'} Ảnh {idx + 1}
-                        </span>
-                        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                          <button
-                            onClick={() => handleCopyCard(card, idx)}
-                            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-purple/30 bg-purple/10 text-purple hover:bg-purple/20 transition-all"
-                          >
-                            {copiedPromptIdx === idx ? <><Check size={11}/><span>Đã copy!</span></> : <><Copy size={11}/><span>Copy</span></>}
-                          </button>
-                        </div>
-                      </div>
-                      {/* Card content — ẩn nếu card collapsed */}
-                      {!isCardCollapsed && (
-                        <div className="px-3 pb-3">
-                          <pre className="text-xs text-txt-2 leading-relaxed whitespace-pre-wrap font-sans">{card}</pre>
-                        </div>
-                      )}
-                    </div>
-                    );
-                  })}
-                </div>
-                )}
-                <div className="mt-2 p-2 rounded-card bg-glass-bg border border-gold/20">
-                  <p className="text-xxs font-semibold text-gold mb-0.5">Design System (tự ghép khi copy từng ảnh)</p>
-                  <p className="text-xxs text-txt-3 font-mono">Navy #112250 · Gold #FFBD59 · Purple #6A5BFF · 3:4 · gemral.com</p>
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Thống kê */}
-          {generationDone && !isHtmlPreview && (
-            <div className="flex items-center gap-6 flex-wrap mb-4">
-              {brandResult && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-txt-3">Giọng thương hiệu:</span>
-                  <span className={`text-lg font-heading font-bold ${brandResult.score >= 80 ? 'text-success' : brandResult.score >= 60 ? 'text-amber' : 'text-danger'}`}>
-                    {brandResult.score}/100
-                  </span>
-                  {brandResult.passed ? (
-                    <Badge text="ĐẠT" variant="new" size="sm" />
-                  ) : (
-                    <Badge text="KHÔNG ĐẠT" variant="danger" size="sm" />
-                  )}
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <FileText size={16} className="text-txt-3" />
-                <span className="text-xs text-txt-3">Số từ:</span>
-                <span className="text-sm font-semibold text-txt">
-                  {outputWordCount.toLocaleString('vi-VN')}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Clock size={16} className="text-txt-3" />
-                <span className="text-xs text-txt-3">Thời lượng:</span>
-                <span className="text-sm font-semibold text-txt">
-                  {outputDuration}
-                </span>
-              </div>
-            </div>
-          )}
+          {/* PromptImageCards + simple stats row đã mounted inside ContentResultPanel above.
+              Brand Voice + GEM Tools Analysis Cards (extended deep analysis) giữ riêng:
+              gate đổi từ !isHtmlPreview → !isEmail && !isDocTaiLieu để preserve behavior cũ. */}
 
           {/* Brand Voice + GEM Tools Analysis Cards */}
-          {generationDone && !isHtmlPreview && (
+          {generationDone && !isEmail && !isDocTaiLieu && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               {/* Card 1: Giọng Thương Hiệu */}
               <Card variant="glass" padding="md">
@@ -6949,126 +7038,35 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             </div>
           )}
 
-          {/* ── Email: Gửi qua Resend — luôn hiển thị khi chọn email type ── */}
-          {isEmail && (
-            <div className="p-4 rounded-card border border-gold/20 bg-gold/5 space-y-4">
-              <h4 className="text-xs font-semibold text-gold uppercase tracking-wider flex items-center gap-1.5">
-                <Mail size={14} />
-                Gửi Email qua Resend
-              </h4>
-              {/* Sender & Subject & Recipients */}
-              <div className="space-y-2">
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">Gửi từ (Sender) *</label>
-                  <select
-                    value={emailSender}
-                    onChange={(e) => setEmailSender(e.target.value)}
-                    className="fi text-sm w-full"
-                  >
-                    <option value="Gemral <hello@gemral.com>">Gemral &lt;hello@gemral.com&gt;</option>
-                    <option value="Jennie Uyen Chu <jennieuyenchu@gemral.com>">Jennie Uyen Chu &lt;jennieuyenchu@gemral.com&gt;</option>
-                    <option value="Gemral <no_reply@gemral.com>">Gemral &lt;no_reply@gemral.com&gt;</option>
-                    <option value="Gemral <info@gemral.com>">Gemral &lt;info@gemral.com&gt;</option>
-                    <option value="Gemral <support@gemral.com>">Gemral &lt;support@gemral.com&gt;</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">Tiêu đề email *</label>
-                  <input
-                    type="text"
-                    value={emailSubject}
-                    onChange={(e) => setEmailSubject(e.target.value)}
-                    placeholder="Nhập tiêu đề email..."
-                    className="fi text-sm w-full"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xxs font-medium text-txt-2 mb-1">Người nhận * (dấu phẩy phân cách)</label>
-                  <input
-                    type="text"
-                    value={emailRecipients}
-                    onChange={(e) => setEmailRecipients(e.target.value)}
-                    placeholder="email1@gmail.com, email2@gmail.com"
-                    className="fi text-sm w-full"
-                  />
-                </div>
-                {/* Manual HTML — chỉ hiển thị khi chưa có output từ AI */}
-                {!output && (
-                  <div>
-                    <label className="block text-xxs font-medium text-txt-2 mb-1">
-                      HTML Email * <span className="text-txt-3 font-normal">(dán code HTML vào đây nếu không dùng AI tạo nội dung)</span>
-                    </label>
-                    <textarea
-                      value={manualEmailHtml}
-                      onChange={(e) => setManualEmailHtml(e.target.value)}
-                      placeholder="<!DOCTYPE html><html>...</html>"
-                      rows={10}
-                      className="fi text-xs w-full font-mono resize-y"
-                    />
-                    {manualEmailHtml && (
-                      <div className="mt-1 text-xxs text-txt-3">{manualEmailHtml.length.toLocaleString()} ký tự</div>
-                    )}
-                  </div>
-                )}
-                {output && (
-                  <div className="p-2 rounded bg-success/10 border border-success/20 text-xxs text-success flex items-center gap-1.5">
-                    <CheckCircle2 size={11} />
-                    Sẽ gửi nội dung AI đã tạo ({output.length.toLocaleString()} ký tự)
-                  </div>
-                )}
-              </div>
+          {/* Resend section moved into ContentResultPanel (always available, collapsible).
+              See <ContentResultPanel resend={...}/> above. */}
 
-              {/* Send result */}
-              {emailSent && (
-                <div className="flex items-center gap-2 p-3 rounded-card bg-success/10 border border-success/20">
-                  <CheckCircle2 size={14} className="text-success shrink-0" />
-                  <div className="flex-1">
-                    <p className="text-xs text-success font-medium">Email đã gửi thành công!</p>
-                    <p className="text-xxs text-success/70">ID: {emailSent.id} • {emailSent.recipients.length} người nhận</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Send button */}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  disabled={emailSending || !emailSubject.trim() || !emailRecipients.trim()}
-                  onClick={handleSendEmail}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-gold/30 bg-gold/10 text-gold hover:bg-gold/20 text-xs font-medium transition-all disabled:opacity-50"
-                >
-                  {emailSending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                  {emailSending ? 'Đang gửi...' : emailSent ? 'Gửi Lại' : 'Gửi Email'}
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(output);
-                      addToast({ type: 'success', message: 'Đã sao chép HTML email.' });
-                    } catch {
-                      addToast({ type: 'error', message: 'Không thể sao chép.' });
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-border bg-glass-bg text-txt-3 hover:bg-purple/10 hover:border-purple/30 hover:text-purple text-xs font-medium transition-all"
-                >
-                  <Copy size={12} />
-                  Sao Chép HTML
-                </button>
-                <button
-                  onClick={() => {
-                    setCalendarScheduleDate(new Date().toISOString().split('T')[0] ?? '');
-                    setCalendarPlatform('email');
-                    setShowScheduleModal(true);
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-card border border-emerald/30 bg-emerald/5 text-emerald hover:bg-emerald/10 text-xs font-medium transition-all"
-                >
-                  <CalendarPlus size={12} />
-                  Lên Lịch Gửi
-                </button>
-              </div>
+          {/* Empty-state paste textarea — visible when output is empty. 2026-05-13.
+              User can paste any content (markdown/HTML/image prompts) and the UI auto-detects
+              prompt cards via the existing `output.includes('prompt cho ')` block below. */}
+          {!output && !resultCollapsed && (
+            <div className="space-y-2 mt-2">
+              <label className="text-xs text-txt-3 block">
+                Paste nội dung vào textarea bên dưới để xem prompt cards + format đẹp:
+              </label>
+              <textarea
+                value=""
+                onChange={(e) => {
+                  setOutput(e.target.value);
+                  setGenerationDone(true);
+                }}
+                placeholder={`Paste output (markdown / HTML / image prompts) vào đây...\n\nVí dụ:\n# Tiêu đề\n\nNội dung bài viết...\n\n===IMAGE_PROMPT===\nPROMPT CHO ẢNH 1\n=========================================\n[prompt content]\n\nPROMPT CHO ẢNH 2\n=========================================\n[prompt content]`}
+                className="w-full min-h-[280px] p-3 rounded-card bg-glass-bg border border-border text-sm text-txt font-mono leading-relaxed resize-y focus:outline-none focus:border-gold/40 focus:ring-1 focus:ring-gold/20 placeholder:text-txt-3"
+                spellCheck={false}
+              />
+              <p className="text-xxs text-txt-3">
+                💡 Sau khi paste, prompt cards sẽ tự hiển thị nếu nội dung có "PROMPT CHO ẢNH N".
+                Cũng có thể edit output sau đó qua nút "Sửa" ở toolbar.
+              </p>
             </div>
           )}
         </Card>
-      )}
+      </div>{/* end ref={resultSectionRef} */}
       </div>{/* end main content */}
     </div>
   );

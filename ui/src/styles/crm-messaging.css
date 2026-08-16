@@ -1,0 +1,330 @@
+/* ════════════════════════════════════════════════════════════════════════
+   CRM Messaging — Design Tokens + Helper Classes (SSOT)
+   ------------------------------------------------------------------------
+   Ported from Gemral CRM messaging mockup
+   (docs/designs/2026-06-01-gemral-crm-messaging-layouts).
+
+   These tokens power the `CrmMessaging*` component family
+   (ui/src/components/crm-messaging/). They are SELF-CONTAINED and
+   theme-aware so the same components render correctly in Paperclip
+   (light default + `.dark`) AND can be ported to Gemral later.
+
+   ⚠️ Theme nesting is INVERTED vs the original mockup:
+     - Mockup was dark-first  (:root = dark, html.light = light override)
+     - Paperclip is light-first (:root = light, .dark = dark override)
+   So the mockup's `html.light` palette lives in `:root` here, and the
+   mockup's `:root` (dark) palette lives in `.dark`.
+
+   Tailwind v4: gem colors are registered via @theme so utility classes
+   like `bg-gem-primary/10`, `text-gem-danger`, `border-gem-border/20`
+   work with alpha modifiers (color-mix under the hood).
+   ════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  --color-gem-primary: rgb(var(--gem-primary-rgb));
+  --color-gem-gold: rgb(var(--gem-gold-rgb));
+  --color-gem-cyan: rgb(var(--gem-cyan-rgb));
+  --color-gem-success: rgb(var(--gem-success-rgb));
+  --color-gem-danger: rgb(var(--gem-danger-rgb));
+  --color-gem-warning: rgb(var(--gem-warning-rgb));
+  --color-gem-surface: rgb(var(--gem-surface-rgb));
+  --color-gem-surface-raised: rgb(var(--gem-surface-raised-rgb));
+  --color-gem-surface-overlay: rgb(var(--gem-surface-overlay-rgb));
+  --color-gem-text: rgb(var(--gem-text-rgb));
+  --color-gem-text-muted: rgb(var(--gem-text-muted-rgb));
+  --color-gem-text-faint: rgb(var(--gem-text-faint-rgb));
+  --color-gem-border: rgb(var(--gem-border-rgb));
+  --color-gem-on-surface: rgb(var(--gem-on-surface-rgb));
+}
+
+/* ── LIGHT (default :root) — from mockup html.light ────────────────────── */
+:root {
+  --gem-primary-rgb: 201 100 66; /* Warm Terracotta */
+  --gem-gold-rgb: 212 130 10;
+  --gem-cyan-rgb: 0 149 168;
+  --gem-success-rgb: 47 125 74;
+  --gem-danger-rgb: 181 58 42;
+  --gem-warning-rgb: 192 122 0;
+  --gem-surface-rgb: 246 238 229; /* #F6EEE5 */
+  --gem-surface-raised-rgb: 250 244 237; /* #FAF4ED */
+  --gem-surface-overlay-rgb: 252 248 243; /* #FCF8F3 */
+  --gem-text-rgb: 28 27 26; /* #1C1B1A */
+  --gem-text-muted-rgb: 107 105 100;
+  --gem-text-faint-rgb: 156 152 144;
+  --gem-border-rgb: 40 36 32;
+  --gem-on-surface-rgb: 28 27 26;
+
+  /* Premium depth tokens — light */
+  --gem-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 46%);
+  --gem-shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.7) inset, 0 16px 34px -16px rgb(120 70 50 / 0.22),
+    0 3px 10px -5px rgb(120 70 50 / 0.16);
+  --gem-shadow-card-hover: 0 1px 0 0 rgb(255 255 255 / 0.9) inset, 0 26px 52px -18px rgb(120 70 50 / 0.28),
+    0 0 0 1px rgb(var(--gem-primary-rgb) / 0.16) inset;
+  --gem-shadow-raised: 0 1px 0 0 rgb(255 255 255 / 0.6) inset, 0 8px 20px -12px rgb(120 70 50 / 0.18);
+  --gem-glow-primary: 0 0 26px -6px rgb(var(--gem-primary-rgb) / 0.4);
+  --gem-glow-gold: 0 0 26px -6px rgb(var(--gem-gold-rgb) / 0.4);
+  --gem-glow-cyan: 0 0 26px -6px rgb(var(--gem-cyan-rgb) / 0.4);
+  --gem-glow-success: 0 0 26px -6px rgb(var(--gem-success-rgb) / 0.4);
+  --gem-glow-danger: 0 0 26px -6px rgb(var(--gem-danger-rgb) / 0.4);
+  --gem-aura-strength: 0.1;
+  --gem-ease: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* ── DARK (.dark) — from mockup :root ──────────────────────────────────── */
+.dark {
+  --gem-primary-rgb: 106 91 255;
+  --gem-gold-rgb: 255 189 89;
+  --gem-cyan-rgb: 0 240 255;
+  --gem-success-rgb: 58 247 166;
+  --gem-danger-rgb: 255 107 107;
+  --gem-warning-rgb: 255 184 0;
+  --gem-surface-rgb: 15 16 48;
+  --gem-surface-raised-rgb: 26 27 58;
+  --gem-surface-overlay-rgb: 10 11 26;
+  --gem-text-rgb: 240 236 228;
+  --gem-text-muted-rgb: 160 160 176;
+  --gem-text-faint-rgb: 96 96 112;
+  --gem-border-rgb: 255 255 255;
+  --gem-on-surface-rgb: 255 255 255;
+
+  /* Premium depth tokens — dark */
+  --gem-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 42%);
+  --gem-shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.05) inset, 0 18px 40px -16px rgb(0 0 0 / 0.65),
+    0 4px 14px -6px rgb(0 0 0 / 0.5);
+  --gem-shadow-card-hover: 0 1px 0 0 rgb(255 255 255 / 0.08) inset, 0 28px 60px -18px rgb(0 0 0 / 0.7),
+    0 0 0 1px rgb(var(--gem-primary-rgb) / 0.18) inset;
+  --gem-shadow-raised: 0 1px 0 0 rgb(255 255 255 / 0.04) inset, 0 10px 24px -12px rgb(0 0 0 / 0.6);
+  --gem-glow-primary: 0 0 28px -4px rgb(var(--gem-primary-rgb) / 0.55);
+  --gem-glow-gold: 0 0 28px -4px rgb(var(--gem-gold-rgb) / 0.5);
+  --gem-glow-cyan: 0 0 28px -4px rgb(var(--gem-cyan-rgb) / 0.5);
+  --gem-glow-success: 0 0 28px -4px rgb(var(--gem-success-rgb) / 0.5);
+  --gem-glow-danger: 0 0 28px -4px rgb(var(--gem-danger-rgb) / 0.5);
+  --gem-aura-strength: 0.18;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Helper classes — scoped under .crm-scope so they never leak into the rest
+   of the Paperclip app. Every CrmMessaging* component root carries
+   `crm-scope`.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Premium Card (.pcard) ─────────────────────────────────────────────── */
+.crm-scope .pcard {
+  position: relative;
+  background: rgb(var(--gem-surface-rgb) / 0.62);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgb(var(--gem-border-rgb) / 0.08);
+  border-radius: 20px;
+  box-shadow: var(--gem-shadow-card);
+  overflow: hidden;
+  transition: transform 0.4s var(--gem-ease), box-shadow 0.4s var(--gem-ease),
+    border-color 0.4s var(--gem-ease);
+  display: flex;
+  flex-direction: column;
+}
+.crm-scope .pcard::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--gem-sheen);
+  pointer-events: none;
+  z-index: 1;
+}
+.crm-scope .pcard:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--gem-shadow-card-hover);
+  border-color: rgb(var(--gem-primary-rgb) / 0.28);
+}
+/* Static variant — full-workspace cards (Command Center, nested 360 card) must
+   NOT lift/jump on hover. */
+.crm-scope .pcard-static,
+.crm-scope .pcard-static:hover {
+  transform: none;
+}
+.crm-scope .pcard > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* Aura blobs (ambient glow behind cards) */
+.crm-scope .aura {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(48px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Inner raised panel */
+.crm-scope .pcard-inner {
+  background: rgb(var(--gem-surface-raised-rgb) / 0.66);
+  border: 1px solid rgb(var(--gem-border-rgb) / 0.06);
+  border-radius: 12px;
+  box-shadow: var(--gem-shadow-raised);
+}
+
+/* ── Glass Card / Button ───────────────────────────────────────────────── */
+.crm-scope .glass-card {
+  background: rgb(var(--gem-surface-rgb) / 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgb(var(--gem-primary-rgb) / 0.2);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+.crm-scope .glass-card:hover {
+  border-color: rgb(var(--gem-primary-rgb) / 0.5);
+  transform: translateY(-2px);
+}
+.crm-scope .glass-btn {
+  background: rgb(var(--gem-surface-rgb) / 0.5);
+  border: 1px solid rgb(var(--gem-border-rgb) / 0.1);
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+.crm-scope .glass-btn:hover {
+  background: rgb(var(--gem-primary-rgb) / 0.2);
+  border-color: rgb(var(--gem-primary-rgb) / 0.5);
+  box-shadow: 0 0 15px rgb(var(--gem-primary-rgb) / 0.3);
+}
+
+/* ── Chat bubbles ──────────────────────────────────────────────────────── */
+.crm-scope .chat-bubble-sent {
+  background: linear-gradient(135deg, rgb(var(--gem-primary-rgb)) 0%, rgb(var(--gem-primary-rgb) / 0.8) 100%);
+  color: #fff;
+  border-radius: 16px 16px 0 16px;
+  box-shadow: var(--gem-glow-primary);
+}
+.crm-scope .chat-bubble-received {
+  background: rgb(var(--gem-surface-raised-rgb));
+  border: 1px solid rgb(var(--gem-border-rgb) / 0.1);
+  color: rgb(var(--gem-text-rgb));
+  border-radius: 16px 16px 16px 0;
+  box-shadow: var(--gem-shadow-raised);
+}
+
+/* ── Channel pills ─────────────────────────────────────────────────────── */
+.crm-scope .channel-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.crm-scope .channel-zalo {
+  background: #0068ff;
+  color: #fff;
+}
+.crm-scope .channel-messenger {
+  background: #0084ff;
+  color: #fff;
+}
+.crm-scope .channel-telegram {
+  background: #2aabee;
+  color: #fff;
+}
+
+/* ── Custom scrollbar ──────────────────────────────────────────────────── */
+.crm-scope .custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.crm-scope .custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.crm-scope .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(var(--gem-border-rgb) / 0.2);
+  border-radius: 4px;
+}
+.crm-scope .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--gem-border-rgb) / 0.4);
+}
+
+/* ── Aura keyframe (subtle breathing) + flash pulse for urgency ────────── */
+@keyframes crm-aura-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.08);
+  }
+}
+.crm-scope .aura-pulse {
+  animation: crm-aura-pulse 6s ease-in-out infinite;
+}
+
+@keyframes crm-flash-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgb(var(--gem-danger-rgb) / 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgb(var(--gem-danger-rgb) / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(var(--gem-danger-rgb) / 0);
+  }
+}
+.crm-scope .flash-ring {
+  animation: crm-flash-ring 1.8s cubic-bezier(0.66, 0, 0, 1) infinite;
+}
+
+/* Soft fade-rise used for list / card entrance */
+@keyframes crm-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.crm-scope .crm-rise {
+  animation: crm-rise 0.45s var(--gem-ease) both;
+}
+
+/* Shimmer sweep — Command Center brain-activity feed + win-rate bar.
+   The element should be an absolutely-positioned gradient overlay inside an
+   overflow-hidden parent; it sweeps left→right. */
+@keyframes crm-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.crm-scope .crm-shimmer {
+  animation: crm-shimmer 2s linear infinite;
+}
+
+/* Short attention bounce — Command Center "AI Capture Review" button. */
+@keyframes crm-bounce-short {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.crm-scope .crm-bounce-short {
+  animation: crm-bounce-short 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crm-scope .aura-pulse,
+  .crm-scope .flash-ring,
+  .crm-scope .crm-rise,
+  .crm-scope .crm-shimmer,
+  .crm-scope .crm-bounce-short {
+    animation: none;
+  }
+  .crm-scope .pcard {
+    transition: none;
+  }
+}

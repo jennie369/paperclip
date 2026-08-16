@@ -71,12 +71,22 @@ function saveCustomTemplates(t: string[]) {
 interface Props {
   onSend: (text: string, replyToId?: string) => Promise<void>;
   channelName: string | null;
+  threadId?: string | null;
+  threadType?: string;
   replyTo?: ReplyToInfo | null;
   onCancelReply?: () => void;
 }
 
-export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props) {
+export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, onCancelReply }: Props) {
   const [text, setText] = useState("");
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  // Lỗi khi GỬI TIN (25/07). Trước đây `onSend` reject chỉ khôi phục chữ rồi `throw` tiếp
+  // vào handler async KHÔNG AI BẮT ⇒ unhandled rejection, người trực chỉ thấy "không có gì
+  // xảy ra". Đặt surface lỗi Ở ĐÂY (không phải ở caller) vì 2 lý do:
+  //   1. caller nuốt lỗi = `setText(trimmed)` bên dưới KHÔNG chạy ⇒ MẤT chữ vừa gõ;
+  //   2. đặt ở đây tự phủ MỌI caller của ChatInput, không phải vá từng màn.
+  // Dùng lại y khuôn `uploadError` ngay dưới — vốn sinh ra từ đúng bệnh này (01/07).
+  const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -90,6 +100,7 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
   const allTemplates = [...DEFAULT_TEMPLATES, ...customTemplates];
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendingRef = useRef(false); // synchronous guard chống double-submit (state async không kịp)
   const fileRef = useRef<HTMLInputElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const quickReplyRef = useRef<HTMLDivElement>(null);
@@ -110,21 +121,32 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    // Guard đồng bộ qua ref: chặn click/Enter thứ hai trước khi state kịp cập nhật
+    if (!trimmed || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
+    setSendError(null); // xoá lỗi lần trước, kẻo banner dính vĩnh viễn
+    // Clear ô input NGAY để tránh user tưởng chưa gửi (Zalo send delay ~2s) rồi bấm lại → double
+    setText("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
     try {
       await onSend(trimmed, replyTo?.id);
-      setText("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
+    } catch (err: any) {
+      // Gửi thất bại → khôi phục nội dung để user thử lại + NÓI CHO NGƯỜI TRỰC BIẾT.
+      // (Kênh chưa hỗ trợ gửi tay trả 400 ở đây — trước đây im lặng hoàn toàn.)
+      setText(trimmed);
+      setSendError(err?.message || "Gửi tin thất bại.");
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [text, sending, onSend, replyTo]);
+  }, [text, onSend, replyTo]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter = gửi; Shift+Enter = xuống dòng. Guard IME tiếng Việt (Telex/VNI) đang ghép ký tự.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
@@ -157,11 +179,23 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !channelName) return;
+    // BUG-fix 2026-07-01: trước đây truyền threadId="" → route /upload trả 400 rồi
+    // catch{} NUỐT lỗi im lặng → chị bấm gửi ảnh không thấy gì. Truyền threadId thật
+    // + surface lỗi (route + protocol Zalo trả {success,error}).
+    if (!threadId) {
+      setUploadError("Không xác định được cuộc trò chuyện để gửi ảnh.");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
     setUploading(true);
+    setUploadError(null);
     try {
-      await channelsApi.uploadImage(channelName, "", file);
-    } catch {
-      // Silent — toast would be better
+      const result = await channelsApi.uploadImage(channelName, threadId, file, threadType || "dm");
+      if (!result?.success) {
+        setUploadError(result?.error || "Gửi ảnh thất bại (kênh chưa kết nối hoặc lỗi Zalo).");
+      }
+    } catch (err: any) {
+      setUploadError(err?.message || "Gửi ảnh thất bại.");
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -170,6 +204,20 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
 
   return (
     <div className="border-t px-3 py-2">
+      {/* Send error banner — cùng khuôn với uploadError bên dưới (25/07) */}
+      {sendError && (
+        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-[11px]">
+          <span className="flex-1 min-w-0">⚠️ {sendError}</span>
+          <button onClick={() => setSendError(null)} className="shrink-0 hover:opacity-70" title="Đóng">✕</button>
+        </div>
+      )}
+      {/* Upload error banner — không còn nuốt lỗi im lặng khi gửi ảnh/file thất bại */}
+      {uploadError && (
+        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-[11px]">
+          <span className="flex-1 min-w-0">⚠️ {uploadError}</span>
+          <button onClick={() => setUploadError(null)} className="shrink-0 hover:opacity-70" title="Đóng">✕</button>
+        </div>
+      )}
       {/* FIX 3: Reply-to preview bar */}
       {replyTo && (
         <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-muted/50 border border-border/60">
@@ -203,7 +251,8 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          /* CSKH (in-app) gửi được cả ảnh LẪN tệp; Zalo chỉ ảnh (sendImage). */
+          accept={channelName?.startsWith("cskh") ? undefined : "image/*"}
           className="hidden"
           onChange={handleFileUpload}
         />
@@ -358,7 +407,7 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
           onClick={handleSend}
           disabled={!text.trim() || sending}
           className="p-1.5 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-30 shrink-0"
-          title="Gửi (Ctrl+Enter)"
+          title="Gửi (Enter)"
         >
           {sending ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -368,7 +417,7 @@ export function ChatInput({ onSend, channelName, replyTo, onCancelReply }: Props
         </button>
       </div>
       <div className="text-[10px] text-muted-foreground mt-1 text-right">
-        Ctrl+Enter gửi · Shift+Enter xuống dòng
+        Enter gửi · Shift+Enter xuống dòng
       </div>
     </div>
   );

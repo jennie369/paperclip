@@ -1,7 +1,7 @@
 // Channel visual system — color, label, platform detection
 // SSOT for channel display across inbox, chat header, analytics
 
-export type Platform = "facebook" | "zalo" | "telegram" | "instagram" | "email" | "web" | "unknown";
+export type Platform = "facebook" | "zalo" | "telegram" | "instagram" | "email" | "web" | "cskh" | "unknown";
 
 export interface ChannelVisual {
   color: string;
@@ -17,6 +17,7 @@ const PLATFORM_PATTERNS: { pattern: RegExp; platform: Platform; color: string }[
   { pattern: /telegram/i, platform: "telegram", color: "#0088CC" },
   { pattern: /instagram/i, platform: "instagram", color: "#E4405F" },
   { pattern: /email/i, platform: "email", color: "#6B7280" },
+  { pattern: /cskh|support|hỗ trợ/i, platform: "cskh", color: "#14B8A6" },
   { pattern: /web|widget|live/i, platform: "web", color: "#10B981" },
 ];
 
@@ -68,6 +69,7 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   instagram: "IG",
   email: "Email",
   web: "Web",
+  cskh: "CSKH",
   unknown: "—",
 };
 

@@ -412,7 +412,7 @@ export function TimetableTableRow({
                   navigate(`/issues/${row.issueId}`);
                 } else if (row.sourceTable === "issues") {
                   navigate(`/issues/${row.sourceId}`);
-                } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_runs") && row.agent) {
+                } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_task_sessions") && row.agent) {
                   navigate(`/agents/${row.agent.id}/runs/${row.sourceId}`);
                 }
               }}
@@ -557,7 +557,7 @@ export function TimetableTable({
   return (
     <>
       {/* Mobile: card list — 9-col table is unreadable under 640px. */}
-      <div className="md:hidden">
+      <div className="lg:hidden">
         {rows.map((row) => (
           <TimetableCardRow
             key={row.id}
@@ -572,7 +572,7 @@ export function TimetableTable({
 
       {/* Desktop: full table. */}
       <table
-        className="hidden w-full text-sm md:table"
+        className="hidden w-full text-sm lg:table"
         style={{ minWidth: `${minWidth}px` }}
       >
         <thead className="bg-slate-100 dark:bg-slate-800/80 text-[11px] uppercase tracking-wider text-slate-700 dark:text-slate-200 border-b-2 border-border">
@@ -660,7 +660,7 @@ function TimetableCardRow({
                 navigate(`/issues/${row.issueId}`);
               } else if (row.sourceTable === "issues") {
                 navigate(`/issues/${row.sourceId}`);
-              } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_runs") && row.agent) {
+              } else if ((row.sourceTable === "heartbeat_runs" || row.sourceTable === "routine_runs" || row.sourceTable === "agent_task_sessions") && row.agent) {
                 navigate(`/agents/${row.agent.id}/runs/${row.sourceId}`);
               }
             }}

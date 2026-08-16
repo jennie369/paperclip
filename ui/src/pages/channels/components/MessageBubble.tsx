@@ -1,7 +1,10 @@
 // Phase 0: Message bubble — inbound (left) / outbound (right)
 // Shows sender name, timestamp, content, media, agent badge
 
+import { Bot } from "lucide-react";
 import { type ConversationMessage } from "@/api/channels";
+import { isHumanSent } from "@/lib/sent-by";
+import { useImageLightbox } from "@/components/ImageLightbox";
 import { MessageRenderer } from "./MessageRenderer";
 
 interface Props {
@@ -16,7 +19,25 @@ function formatTime(ts: string): string {
 }
 
 export function MessageBubble({ message: msg }: Props) {
+  const { openImage } = useImageLightbox();
   const isOutbound = msg.direction === "outbound";
+
+  // Tin đã thu hồi: chặn TRƯỚC mọi nhánh — không dựng ảnh (`msg.media`), không đọc nội dung.
+  // Giữ nguyên chỗ đứng và giờ gửi để mạch hội thoại không đứt quãng.
+  if (msg.is_recalled) {
+    return (
+      <div className={`flex ${isOutbound ? "justify-end" : "justify-start"} mb-1.5`}>
+        <div className="max-w-[70%]">
+          <div className={`flex items-center gap-1.5 mb-0.5 ${isOutbound ? "justify-end" : ""}`}>
+            <span className="text-[10px] text-muted-foreground">{formatTime(msg.timestamp)}</span>
+          </div>
+          <div className="rounded-xl border border-dashed border-border px-3 py-2 text-[12px] italic text-muted-foreground">
+            Tin nhắn đã được thu hồi
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex ${isOutbound ? "justify-end" : "justify-start"} mb-1.5`}>
@@ -28,9 +49,9 @@ export function MessageBubble({ message: msg }: Props) {
               {msg.senderName || "Khách"}
             </span>
           )}
-          {isOutbound && msg.handledBy && msg.handledBy !== "manual" && (
-            <span className="text-[11px] font-medium text-violet-500">
-              🤖 {msg.handledBy}
+          {isOutbound && msg.handledBy && !isHumanSent(msg.handledBy) && (
+            <span className="text-[11px] font-medium text-violet-500 inline-flex items-center gap-1">
+              <Bot className="h-3 w-3 shrink-0" /> {msg.handledBy}
             </span>
           )}
           <span className="text-[10px] text-muted-foreground">
@@ -47,18 +68,19 @@ export function MessageBubble({ message: msg }: Props) {
           }`}
         >
           {/* Media/images */}
-          {msg.media && msg.media.length > 0 && (
+          {Array.isArray(msg.media) && msg.media.length > 0 && (
             <div className="mb-1.5 space-y-1">
               {msg.media.map((url, i) => (
                 <div key={i}>
-                  {/\.(jpg|jpeg|png|gif|webp)$/i.test(url) ? (
+                  {typeof url === "string" && /\.(jpg|jpeg|png|gif|webp)$/i.test(url) ? (
                     <img
                       src={url}
                       alt="attachment"
                       className="max-w-[300px] rounded-lg cursor-pointer hover:opacity-90"
-                      onClick={() => window.open(url, "_blank")}
+                      data-lightbox=""
+                      onClick={() => openImage(url, "Hình ảnh")}
                     />
-                  ) : (
+                  ) : typeof url === "string" ? (
                     <a
                       href={url}
                       target="_blank"
@@ -67,7 +89,7 @@ export function MessageBubble({ message: msg }: Props) {
                     >
                       📎 {url.split("/").pop()}
                     </a>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -76,8 +98,8 @@ export function MessageBubble({ message: msg }: Props) {
           {/* Smart content render */}
           <MessageRenderer
             body={msg.content || ""}
-            content_type={msg.contentType}
-            extra_data={Array.isArray(msg.media) ? undefined : (msg.media ?? msg.extraData) as Record<string, unknown> | undefined}
+            content_type={msg.contentType || msg.content_type}
+            extra_data={Array.isArray(msg.media) ? undefined : (msg.media ?? msg.extraData ?? msg.extra_data) as Record<string, unknown> | undefined}
           />
 
           {/* Skipped indicator */}

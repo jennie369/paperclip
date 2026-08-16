@@ -185,9 +185,11 @@ async function runCuratedCommand(
   let stdout = "";
   let stderr = "";
 
+  child.stdout?.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
   });
+  child.stderr?.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
     stderr += String(chunk);
   });

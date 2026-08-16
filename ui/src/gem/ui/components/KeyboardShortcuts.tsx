@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useCallback, useRef } from 'react';
+import { lockBodyScroll } from '../../../lib/body-scroll-lock';
 import {
   X,
   Keyboard,
@@ -339,11 +340,11 @@ export function KeyboardShortcutsHelp({
     if (!isOpen) return;
 
     document.addEventListener('keydown', handleKeyDown, true);
-    document.body.style.overflow = 'hidden';
+    const releaseScroll = lockBodyScroll();
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
-      document.body.style.overflow = '';
+      releaseScroll();
     };
   }, [isOpen, handleKeyDown]);
 

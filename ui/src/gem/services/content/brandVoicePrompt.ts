@@ -103,7 +103,7 @@ const TRACK_DESCRIPTIONS: Readonly<Record<Track, string>> = {
 
 const PILLAR_DESCRIPTIONS: Readonly<Record<Pillar, string>> = {
   spiritual:
-    'Trụ cột Tâm Linh: năng lượng, tần số, thiền định, chữa lành, chiêm tinh.',
+    'Trụ cột Nghiên Cứu: năng lượng, tần số, thiền định, chữa lành, chiêm tinh.',
   trading:
     'Trụ cột Giao Dịch: phân tích kỹ thuật, chiến lược, quản lý rủi ro, tâm lý trading.',
   latc_money:
@@ -395,7 +395,7 @@ function buildTermConversionTable(): string {
 function buildForbiddenTermsList(): string {
   return (
     'THUẬT NGỮ CẤM — Không bao giờ sử dụng:\n\n' +
-    '• "tâm linh" → THAY BẰNG "tâm thức" (kênh tên "Thức Tỉnh Tâm Thức", không phải "tâm linh")\n' +
+    '• "nghiên cứu" → THAY BẰNG "tâm thức" (kênh tên "Thức Tỉnh Tâm Thức", không phải "nghiên cứu")\n' +
     '• "dạy crypto" → THAY BẰNG "giúp bạn hiểu năng lượng đồng tiền"\n' +
     '• "đảm bảo lợi nhuận" → XÓA HOÀN TOÀN (vi phạm pháp luật tài chính)\n' +
     '• "giàu nhanh" → XÓA HOÀN TOÀN (tạo kỳ vọng sai lệch)\n' +

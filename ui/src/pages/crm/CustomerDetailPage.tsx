@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { useNavigate } from "@/lib/router";
-import { ArrowLeft, RefreshCw, Link2, Phone, Mail, Calendar, User, ShoppingBag, Ticket, MessageSquare, Brain, StickyNote, History, Network } from "lucide-react";
+import { ArrowLeft, RefreshCw, Link2, Phone, Mail, Calendar, User, ShoppingBag, Ticket, MessageSquare, Brain, StickyNote, History, Network, X } from "lucide-react";
 import KGMiniGraph from "@/components/knowledge-graph/KGMiniGraph";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LeadScoreBadge } from "./components/LeadScoreBadge";
 import { crmApi } from "@/api/crm";
+import { CustomerNotes } from "./components/CustomerNotes";
+import { EditableSummary } from "../channels/components/CustomerSidebar";
 
 function formatVND(n: number): string {
   return new Intl.NumberFormat('vi-VN').format(n || 0) + '₫';
@@ -29,6 +31,8 @@ const statusLabels: Record<string, string> = {
   dang_tu_van: 'Tư vấn', cho_thanh_toan: 'Chờ TT', da_mua: 'Đã mua',
   khach_vip: 'VIP', khach_than_thiet: 'Thân thiết', churned: 'Churned', blacklist: 'Blacklist',
 };
+const tempLabel = (t?: string): string =>
+  ({ cold: 'Lạnh', warm: 'Ấm', hot: 'Nóng', on_fire: 'Rất nóng' }[t || 'cold'] || 'Lạnh');
 
 const tabs = [
   { key: 'overview', label: 'Tổng quan', icon: User },
@@ -46,7 +50,15 @@ export function CustomerDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState('overview');
-  const [newNote, setNewNote] = useState('');
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+
+  // Back: ưu tiên ?from= (deep-link/refresh), fallback lịch sử trình duyệt
+  const goBack = () => {
+    const from = new URLSearchParams(window.location.search).get('from');
+    if (from) navigate(from);
+    else navigate(-1);
+  };
 
   const { data: customer, isLoading, error } = useQuery({
     queryKey: ['crm', 'customer', id],
@@ -64,20 +76,28 @@ export function CustomerDetailPage() {
     onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
   });
 
-  const addNoteMut = useMutation({
-    mutationFn: () => fetch(`/api/channels/crm/customers/${id}/notes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: newNote, note_type: 'manual', created_by: 'board' }),
-    }),
-    onSettled: () => { qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }); setNewNote(''); },
+  // Tags — gán/gỡ từ bộ tag CRM (crm_tags), nhóm theo category
+  const { data: allTags = [] } = useQuery({ queryKey: ['crm', 'tags'], queryFn: () => crmApi.getTags() });
+  // Segments — read-only: segment ĐỘNG theo rule (không gán tay), đánh giá best-effort
+  const { data: segments = [] } = useQuery({
+    queryKey: ['crm', 'customer-segments', id],
+    queryFn: () => crmApi.getCustomerSegments(id!),
+    enabled: !!id,
+  });
+  const addTagMut = useMutation({
+    mutationFn: (tagId: string) => crmApi.addTag(id!, tagId),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
+  });
+  const removeTagMut = useMutation({
+    mutationFn: (tagId: string) => crmApi.removeTag(id!, tagId),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] }),
   });
 
   if (isLoading) return <div className="p-6"><Skeleton className="h-96 w-full" /></div>;
   if (error || !customer) return (
     <div className="p-6 text-center">
       <p className="text-destructive">Không tìm thấy khách hàng</p>
-      <Button variant="outline" className="mt-4" onClick={() => navigate('/crm/customers')}>Quay lại</Button>
+      <Button variant="outline" className="mt-4" onClick={goBack}>Quay lại</Button>
     </div>
   );
 
@@ -88,21 +108,58 @@ export function CustomerDetailPage() {
     <div className="flex h-full">
       {/* LEFT PANEL — Profile */}
       <div className="w-80 shrink-0 border-r p-5 space-y-4 overflow-y-auto">
-        <Button variant="ghost" size="sm" onClick={() => navigate('/crm/customers')}>
-          <ArrowLeft className="mr-1.5 h-4 w-4" /> Danh sách
+        <Button variant="ghost" size="sm" onClick={goBack}>
+          <ArrowLeft className="mr-1.5 h-4 w-4" /> Quay lại
         </Button>
 
         <div className="text-center">
           <div className="mx-auto h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary">
             {(c.display_name || '?')[0]}
           </div>
-          <h2 className="mt-2 text-lg font-bold">{c.display_name}</h2>
+          {editingName ? (
+            <Input
+              autoFocus
+              value={nameDraft}
+              onChange={e => setNameDraft(e.target.value)}
+              onBlur={() => {
+                const v = nameDraft.trim();
+                if (v && v !== c.display_name) updateMut.mutate({ display_name: v });
+                setEditingName(false);
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') setEditingName(false);
+              }}
+              className="mt-2 text-center text-lg font-bold h-9"
+            />
+          ) : (
+            <h2
+              className="mt-2 text-lg font-bold cursor-text rounded px-1 hover:bg-muted/50 inline-block"
+              title="Bấm để sửa tên"
+              onClick={() => { setNameDraft(c.display_name || ''); setEditingName(true); }}
+            >
+              {c.display_name || 'Chưa có tên'}
+            </h2>
+          )}
           <LeadScoreBadge score={c.lead_score} temperature={c.lead_temperature} size="md" />
         </div>
 
         <div className="space-y-2 text-sm">
           {c.phone && <div className="flex items-center gap-2 text-muted-foreground"><Phone className="h-3.5 w-3.5" />{c.phone}</div>}
           {c.email && <div className="flex items-center gap-2 text-muted-foreground"><Mail className="h-3.5 w-3.5" />{c.email}</div>}
+          {c.email && (c as any).email_status && (
+            <div className="flex items-center gap-2 text-xs" title="Trạng thái gửi email. Đăng ký/huỷ newsletter quản lý ở Resend (suppression list), không sửa tại đây.">
+              <span className="text-muted-foreground">Newsletter:</span>
+              <span className={`px-1.5 py-0.5 rounded ${
+                (c as any).email_status === 'active' ? 'bg-green-500/10 text-green-600'
+                : (c as any).email_status === 'unsubscribed' ? 'bg-muted text-muted-foreground'
+                : 'bg-amber-500/10 text-amber-600'
+              }`}>
+                {(c as any).email_status === 'active' ? 'Đang nhận' : (c as any).email_status === 'unsubscribed' ? 'Đã huỷ' : (c as any).email_status}
+              </span>
+              <span className="text-muted-foreground/60">· qua Resend</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 text-muted-foreground"><Calendar className="h-3.5 w-3.5" />Liên hệ: {timeAgo(c.last_contact_at)}</div>
         </div>
 
@@ -114,22 +171,84 @@ export function CustomerDetailPage() {
           </select>
         </div>
 
-        {/* Giai đoạn */}
+        {/* Nhiệt độ lead — mặc định auto (tính từ lead_score), cho phép override tay.
+            Ghi vào lead_temperature_manual; '__auto__' = xoá override → quay về auto. */}
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Giai đoạn</label>
+          <label className="text-xs font-medium text-muted-foreground">
+            Nhiệt độ lead {c.lead_temperature_manual ? '· tay' : `· tự động (${c.lead_score ?? 0}đ)`}
+          </label>
           <select
-            value={(c as any).stage || 'new'}
-            onChange={e => updateMut.mutate({ stage: e.target.value })}
+            value={c.lead_temperature_manual || '__auto__'}
+            onChange={e => updateMut.mutate({ lead_temperature_manual: e.target.value === '__auto__' ? null : e.target.value })}
             className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
           >
-            <option value="new">Mới</option>
-            <option value="dang_tu_van">Đang tư vấn</option>
-            <option value="cho_chot">Chờ chốt</option>
-            <option value="da_mua">Đã mua</option>
-            <option value="active">Active</option>
-            <option value="loyal">Loyal</option>
+            <option value="__auto__">Tự động ({tempLabel(c.lead_temperature)})</option>
+            <option value="cold">Lạnh</option>
+            <option value="warm">Ấm</option>
+            <option value="hot">Nóng</option>
+            <option value="on_fire">Rất nóng</option>
           </select>
         </div>
+
+        {/* Nguồn (read-only, từ metadata) + Hẹn follow-up */}
+        {(c.metadata?.source || c.metadata?.lead_source) && (
+          <div className="text-sm">
+            <span className="text-xs font-medium text-muted-foreground">Nguồn</span>
+            <div className="mt-0.5 capitalize">{c.metadata?.source || c.metadata?.lead_source}</div>
+          </div>
+        )}
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Hẹn follow-up</label>
+          <input
+            type="date"
+            value={c.next_follow_up_at ? c.next_follow_up_at.slice(0, 10) : ''}
+            onChange={e => updateMut.mutate({ next_follow_up_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
+            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm mt-1"
+          />
+        </div>
+
+        {/* Tags — gán/gỡ từ bộ tag CRM (crm_tags), inline autosave */}
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">Phân loại (Tags)</label>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {((c.tags as any[]) || []).map((t: any) => (
+              <span key={t.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border bg-muted/40">
+                {t.name}
+                <button onClick={() => removeTagMut.mutate(t.id)} className="hover:text-destructive" title="Gỡ tag">
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {((c.tags as any[]) || []).length === 0 && <span className="text-xs text-muted-foreground">Chưa có tag</span>}
+          </div>
+          <select
+            value=""
+            onChange={e => { if (e.target.value) addTagMut.mutate(e.target.value); }}
+            disabled={addTagMut.isPending}
+            className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs mt-1.5"
+          >
+            <option value="">+ Thêm tag...</option>
+            {(allTags as any[])
+              .filter((t: any) => !((c.tags as any[]) || []).some((ct: any) => ct.id === t.id))
+              .map((t: any) => <option key={t.id} value={t.id}>{t.category ? `[${t.category}] ` : ''}{t.name}</option>)}
+          </select>
+        </div>
+
+        {/* Segments — READ-ONLY: audience động theo rule, tự gom (không gán tay) */}
+        {segments.length > 0 && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground" title="Segment là nhóm động tự gom theo điều kiện — không gán tay. Đánh giá best-effort theo dữ liệu CRM.">
+              Segment (tự động)
+            </label>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {segments.map((s) => (
+                <span key={s.id} className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium border border-dashed bg-primary/5 text-primary">
+                  {s.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 gap-2 text-center text-xs">
@@ -174,10 +293,14 @@ export function CustomerDetailPage() {
           {/* TAB: Tổng quan */}
           {activeTab === 'overview' && (
             <div className="space-y-4">
-              {c.ai_summary && (
+              {c?.id && (
                 <Card className="p-4">
                   <h3 className="text-sm font-medium mb-2">Tóm tắt AI</h3>
-                  <p className="text-sm text-muted-foreground">{c.ai_summary}</p>
+                  <EditableSummary
+                    value={String(c.ai_summary || "")}
+                    pending={updateMut.isPending}
+                    onSave={(v) => updateMut.mutate({ ai_summary: v || null })}
+                  />
                   {(c as any).ai_summary_updated_at && <p className="text-xs text-muted-foreground mt-1">Cập nhật: {timeAgo((c as any).ai_summary_updated_at)}</p>}
                 </Card>
               )}
@@ -391,14 +514,13 @@ export function CustomerDetailPage() {
                 <p className="text-sm text-muted-foreground mb-3">
                   Thông tin AI ghi nhớ từ các cuộc hội thoại trước. Agent sẽ tự động sử dụng memory này khi chat với khách.
                 </p>
-                {c.ai_summary ? (
-                  <div className="rounded-lg bg-muted/30 p-4 text-sm whitespace-pre-wrap">{c.ai_summary}</div>
-                ) : (
-                  <div className="py-8 text-center">
-                    <History className="h-10 w-10 mx-auto text-muted-foreground/30 mb-2" />
-                    <p className="text-sm text-muted-foreground">Chưa có memory nào.</p>
-                    <p className="text-xs text-muted-foreground mt-1">Memory sẽ được tạo tự động sau khi agent chat với khách.</p>
-                  </div>
+                <EditableSummary
+                  value={String(c.ai_summary || "")}
+                  pending={updateMut.isPending}
+                  onSave={(v) => updateMut.mutate({ ai_summary: v || null })}
+                />
+                {!c.ai_summary && (
+                  <p className="text-xs text-muted-foreground mt-1">Memory sẽ được tạo tự động sau khi agent chat với khách, hoặc bấm để tự nhập.</p>
                 )}
               </Card>
               <Card className="p-4">
@@ -430,23 +552,14 @@ export function CustomerDetailPage() {
           )}
 
           {activeTab === 'notes' && (
-            <div className="space-y-4">
-              <div className="flex gap-2">
-                <Input value={newNote} onChange={e => setNewNote(e.target.value)} placeholder="Thêm ghi chú..." className="flex-1"
-                  onKeyDown={e => { if (e.key === 'Enter' && newNote.trim()) addNoteMut.mutate(); }} />
-                <Button size="sm" disabled={!newNote.trim() || addNoteMut.isPending} onClick={() => addNoteMut.mutate()}>Thêm</Button>
-              </div>
-              {(c.notes || []).length === 0 ? (
-                <p className="text-sm text-muted-foreground py-8 text-center">Chưa có ghi chú nào.</p>
-              ) : (
-                <div className="space-y-2">
-                  {(c.notes || []).map((n: any) => (
-                    <Card key={n.id} className="p-3">
-                      <p className="text-sm">{n.content}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{n.created_by} — {timeAgo(n.created_at)}</p>
-                    </Card>
-                  ))}
-                </div>
+            <div className="max-w-xl">
+              <CustomerNotes
+                customerId={id!}
+                notes={(c.notes as any[]) || []}
+                onChanged={() => qc.invalidateQueries({ queryKey: ['crm', 'customer', id] })}
+              />
+              {((c.notes as any[]) || []).length === 0 && (
+                <p className="text-sm text-muted-foreground py-6 text-center">Chưa có ghi chú nào.</p>
               )}
             </div>
           )}

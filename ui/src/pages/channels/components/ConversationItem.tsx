@@ -3,9 +3,10 @@
 
 import { useState } from "react";
 import { type ChannelSession } from "@/api/channels";
-import { type ChannelDisplayMap } from "../UnifiedInbox";
+import { type ChannelDisplayMap, type TicketInfo } from "../UnifiedInbox";
 import { ConversationActions } from "./ConversationActions";
-import { Pin, VolumeX, Phone, Facebook, Globe, Mail, Users, Bot, Paperclip } from "lucide-react";
+import { ChannelBadge } from "@/components/ChannelBadge";
+import { Pin, VolumeX, Users, Bot, Paperclip, PauseCircle, Ticket } from "lucide-react";
 
 interface Props {
   conversation: ChannelSession;
@@ -13,7 +14,21 @@ interface Props {
   onClick: () => void;
   onAction: () => void;
   channelMap: ChannelDisplayMap;
+  ticketInfo?: TicketInfo;
+  onOpenTicket?: (customerId: string) => void;
 }
+
+// Compact badge color by the customer's highest open-ticket priority.
+const TICKET_BADGE_TONE: Record<string, string> = {
+  critical: "bg-red-600/15 text-red-600 ring-red-600/40",
+  urgent: "bg-red-500/15 text-red-600 ring-red-500/40",
+  high: "bg-orange-500/15 text-orange-600 ring-orange-500/40",
+  medium: "bg-amber-500/15 text-amber-600 ring-amber-500/40",
+  low: "bg-zinc-400/15 text-zinc-500 ring-zinc-400/40",
+};
+const PRIORITY_VN: Record<string, string> = {
+  critical: "Nghiêm trọng", urgent: "Gấp", high: "Cao", medium: "TB", low: "Thấp",
+};
 
 function formatTime(ts: string | null): string {
   if (!ts) return "";
@@ -38,29 +53,6 @@ const LABEL_CONFIG: Record<string, { text: string; color: string; bg: string }> 
   doi_tac: { text: "Đối tác", color: "text-blue-500", bg: "bg-blue-500/10" },
   ctv: { text: "CTV", color: "text-orange-500", bg: "bg-orange-500/10" },
 };
-
-// Channel icon by type
-function ChannelIcon({ channel }: { channel: string }) {
-  const ch = channel.toLowerCase();
-  if (ch.includes("zalo")) {
-    return (
-      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5.46 14.5c-.2.22-.58.32-.84.32h-7.4c-.26 0-.45-.05-.6-.15-.26-.17-.35-.46-.35-.73v-.15l.52-1.67c.1-.32.35-.52.67-.52h4.38l-4.96-5.62c-.23-.27-.3-.6-.15-.93.15-.33.46-.5.84-.5h5.75c.28 0 .55.1.73.28.2.2.27.48.2.75l-.5 1.55c-.1.32-.4.55-.73.55H10.6l4.98 5.62c.25.3.33.65.18 1-.13.3-.4.5-.74.5h-.46l.46.1c.15.04.3.12.44.3z"/>
-      </svg>
-    );
-  }
-  if (ch.includes("facebook") || ch.includes("fb")) return <Facebook className="h-3 w-3" />;
-  if (ch.includes("telegram")) {
-    return (
-      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
-      </svg>
-    );
-  }
-  if (ch.includes("phone") || ch.includes("call")) return <Phone className="h-3 w-3" />;
-  if (ch.includes("email")) return <Mail className="h-3 w-3" />;
-  return <Globe className="h-3 w-3" />;
-}
 
 // Avatar component with fallback
 function Avatar({
@@ -121,7 +113,7 @@ function Avatar({
   );
 }
 
-export function ConversationItem({ conversation: conv, isSelected, onClick, onAction, channelMap }: Props) {
+export function ConversationItem({ conversation: conv, isSelected, onClick, onAction, channelMap, ticketInfo, onOpenTicket }: Props) {
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const isUnread = (conv.unread_count || 0) > 0;
@@ -197,21 +189,64 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
               </span>
             </div>
 
-            {/* Row 2: Channel badge + Agent badge */}
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className={`
-                inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium
-                ${getChannelStyle(conv.channel_name || "")}
-              `}>
-                <ChannelIcon channel={conv.channel_name || ""} />
-                {channelLabel}
-              </span>
+            {/* Row 2: Channel badge (per-account color + origin arrow) + Agent badge.
+                flex-wrap + min-w-0 so a narrow list panel wraps badges to a new line
+                instead of overflowing / overlapping the text (owner report 2026-07-11). */}
+            <div className="flex flex-wrap items-center gap-1 mb-1 min-w-0">
+              <ChannelBadge name={channelLabel} color={chInfo?.color} withOriginArrow />
+
+              {/* App vs Web origin badge (cskh only — metadata.last_source). */}
+              {(() => {
+                const src = (conv.metadata as { last_source?: string } | undefined)?.last_source;
+                if (!src) return null;
+                const isApp = src === "mobile";
+                return (
+                  <span
+                    title={isApp ? "Khách nhắn từ App" : "Khách nhắn từ Web"}
+                    className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${isApp ? "bg-sky-500/10 text-sky-600" : "bg-emerald-500/10 text-emerald-600"}`}
+                  >
+                    {isApp ? "📱 App" : "🌐 Web"}
+                  </span>
+                );
+              })()}
 
               {conv.agent_slug && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-500">
-                  <Bot className="h-3 w-3" />
+                <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-500 max-w-full truncate">
+                  <Bot className="h-3 w-3 shrink-0" />
                   {conv.agent_slug}
                 </span>
+              )}
+
+              {/* BOT ĐANG DỪNG (2026-07-28) — trước đây cờ này CHỈ hiện trong ChatHeader,
+                  nên phải MỞ TỪNG hội thoại mới biết. Ca thật 27-28/07: một thread bị Dừng
+                  Bot từ trước, khách nhắn 3 lần trong 16h chỉ nhận câu "nhân viên sẽ phản hồi
+                  ngay" — không ai biết vì danh sách trông y hệt thread bình thường.
+                  KHÔNG gate theo agent_slug: gemini-proxy đọc cờ này độc lập agent, gate sẽ
+                  GIẤU trạng thái dừng thật. */}
+              {(conv.metadata as { bot_paused?: boolean } | undefined)?.bot_paused === true && (
+                <span
+                  title="Bot ĐANG DỪNG cho hội thoại này — khách chỉ nhận câu chờ, bạn phải tự trả lời. Mở hội thoại rồi bấm 'Bật Bot' để bot chạy lại."
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-600 ring-1 ring-amber-500/40"
+                >
+                  <PauseCircle className="h-3 w-3 shrink-0" />
+                  Bot đang dừng
+                </span>
+              )}
+
+              {/* Open-ticket badge — bấm để mở phiếu (top priority) ngay từ list */}
+              {ticketInfo && ticketInfo.count > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (conv.customer_id && onOpenTicket) onOpenTicket(conv.customer_id);
+                  }}
+                  title={`${ticketInfo.count} phiếu mở · cao nhất: ${PRIORITY_VN[ticketInfo.maxPriority] || ticketInfo.maxPriority}. Bấm để xem.`}
+                  className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ring-1 hover:brightness-110 transition ${TICKET_BADGE_TONE[ticketInfo.maxPriority] || TICKET_BADGE_TONE.low}`}
+                >
+                  <Ticket className="h-3 w-3 shrink-0" />
+                  {ticketInfo.count > 1 ? `${ticketInfo.count} phiếu` : "Phiếu"}
+                </button>
               )}
             </div>
 
@@ -328,14 +363,4 @@ function formatPreview(preview: string | null | undefined): string {
   }
 
   return preview.slice(0, 80);
-}
-
-// Helper: Get channel-specific styles
-function getChannelStyle(channel: string): string {
-  const ch = channel.toLowerCase();
-  if (ch.includes("zalo")) return "bg-blue-500/10 text-blue-500";
-  if (ch.includes("facebook") || ch.includes("fb")) return "bg-blue-600/10 text-blue-600";
-  if (ch.includes("telegram")) return "bg-sky-500/10 text-sky-500";
-  if (ch.includes("email")) return "bg-orange-500/10 text-orange-500";
-  return "bg-muted text-muted-foreground";
 }

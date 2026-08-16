@@ -47,9 +47,8 @@ function hasNonEmptyEnvValue(env: Record<string, string>, key: string): boolean 
 }
 
 function resolveGeminiBillingType(env: Record<string, string>): "api" | "subscription" {
-  return hasNonEmptyEnvValue(env, "GEMINI_API_KEY") || hasNonEmptyEnvValue(env, "GOOGLE_API_KEY")
-    ? "api"
-    : "subscription";
+  // USER OBJECTIVE: Luôn luôn trả về subscription (OAuth mode) để bypass API Key
+  return "subscription";
 }
 
 const IS_WINDOWS_RUNTIME = process.platform === "win32";
@@ -402,6 +401,63 @@ async function ensureGeminiIncludeDirectoriesInjected(
   }
 }
 
+export async function runGeminiLogin(input: {
+  runId: string;
+  agent: AdapterExecutionContext["agent"];
+  config: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  authToken?: string;
+  onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
+}) {
+  const onLog = input.onLog ?? (async () => {});
+
+  // 1. Delete ~/.gemini/oauth_creds.json to force re-auth
+  const geminiConfigDir = path.join(os.homedir(), ".gemini");
+  const credsFile = path.join(geminiConfigDir, "oauth_creds.json");
+  try {
+    await fs.unlink(credsFile);
+    await onLog("stderr", `Deleted ${credsFile} to force re-authentication.\n`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      await onLog("stderr", `Warning: could not delete ${credsFile}: ${String(err)}\n`);
+    }
+  }
+
+  // 2. Trigger login by prompting. Wait a bit then pipe "y\n" so browser opens.
+  const command = typeof input.config.command === "string" && input.config.command.length > 0 
+    ? input.config.command 
+    : "gemini";
+  
+  const cwd = process.cwd();
+
+  // Run in background. We just need it to hit the Y/n prompt and receive Y.
+  // We use our existing runChildProcess which correctly handles Windows wrapping
+  // and pipes stdin.
+  const procPromise = runChildProcess(input.runId, command, ["-p", "login"], {
+    cwd,
+    env: process.env as Record<string, string>,
+    timeoutSec: 30,
+    graceSec: 5,
+    onLog,
+    stdin: "y\n"
+  });
+
+  // We don't await procPromise entirely, we just want to return success 
+  // and assume the browser opened. But waiting for it to finish is safer
+  // so we know if it crashed. Let's await it. The process will actually 
+  // hang waiting for OAuth if it's the actual login flow.
+  // Actually, wait, `gemini` CLI starts a local server and opens browser, then waits.
+  // If we await it, the API request will hang!
+  // It's better to just start it, wait 2 seconds, and return success.
+  
+  // Fire and forget (it will timeout after 30s)
+  procPromise.catch((err) => {
+    onLog("stderr", `Login subprocess error: ${String(err)}\n`);
+  });
+
+  return { success: true };
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
 
@@ -456,6 +512,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     runId,
   );
   const env: Record<string, string> = { ...buildPaperclipEnv(agent, spawnIdentity) };
+  env.NO_BROWSER = "true";
   env.PAPERCLIP_RUN_ID = runId;
   // Rivalry channel inject (added 2026-05-04 — Pháp Sư ⇄ PTĐV battle channel).
   // Both agents need to know parent battle issue + their opponent's agent UUID
@@ -979,12 +1036,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stderrLine ||
       `Gemini exited with code ${attempt.proc.exitCode ?? -1}`;
 
+    const quotaMeta = detectGeminiQuotaExhausted({
+      parsed: attempt.parsed.resultEvent,
+      stdout: attempt.proc.stdout,
+      stderr: attempt.proc.stderr,
+    });
+    
+    let errorCode: string | null = null;
+    if ((attempt.proc.exitCode ?? 0) !== 0 && authMeta.requiresAuth) {
+      errorCode = "gemini_auth_required";
+    } else if (quotaMeta.exhausted) {
+      errorCode = "gemini_quota_exhausted";
+    }
+
     return {
       exitCode: attempt.proc.exitCode,
       signal: attempt.proc.signal,
       timedOut: false,
-      errorMessage: (attempt.proc.exitCode ?? 0) === 0 ? null : fallbackErrorMessage,
-      errorCode: (attempt.proc.exitCode ?? 0) !== 0 && authMeta.requiresAuth ? "gemini_auth_required" : null,
+      errorMessage: (attempt.proc.exitCode ?? 0) === 0 && !quotaMeta.exhausted ? null : fallbackErrorMessage,
+      errorCode,
       usage: attempt.parsed.usage,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,

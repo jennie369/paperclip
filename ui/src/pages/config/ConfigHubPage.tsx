@@ -704,12 +704,16 @@ function AgentRow({
                     value={edit.model ?? a.model ?? "claude-sonnet-4-6"}
                     onChange={(e) => onEditChange("model", e.target.value)}
                   >
+                    <option value="claude-opus-4-8">claude-opus-4-8</option>
+                    <option value="claude-opus-5">claude-opus-5</option>
                     <option value="claude-opus-4-7">claude-opus-4-7</option>
                     <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
                     <option value="claude-opus-4-6">claude-opus-4-6</option>
                     <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</option>
                     <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                     <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                    <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                    <option value="gemma-4-31b">gemma-4-31b</option>
                     <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                     <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                     <option value="gemini-2.0-flash">gemini-2.0-flash</option>
@@ -1132,7 +1136,9 @@ function EmailTemplatesTab() {
     setSendingTest(templateKey);
     setTestResult(null);
     try {
-      const r = await fetch("https://pgfkbcnzqozzkohwbgbk.supabase.co/functions/v1/send-email", {
+      // send-email lockdown (2026-07-24): browser KHÔNG cầm secret → qua paperclip-server proxy
+      // (giữ SB_SECRET_BACKEND server-side, forward tới send-email). Route sau remoteApiKeyGuard.
+      const r = await fetch("/api/tools/send-test-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: testEmail, template: templateKey, data: { name: "Test User", tier: "Tier 1" } }),

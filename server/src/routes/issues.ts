@@ -984,8 +984,22 @@ export function issueRoutes(db: Db, storage: StorageService) {
     }
 
     const actor = getActorInfo(req);
+    // Scheduled one-shot wake: validator hands us an ISO string — convert to
+    // Date BEFORE it reaches drizzle (string would throw at insert mapping).
+    // A scheduled issue is parked in `backlog` (never wakes early) until the
+    // scheduler tick (scheduled-issue-wakeups.ts) flips it to todo + wakes.
+    const { scheduledWakeAt: scheduledWakeAtRaw, ...createBody } = req.body;
+    let scheduledWakeAt: Date | null = null;
+    if (scheduledWakeAtRaw) {
+      scheduledWakeAt = new Date(scheduledWakeAtRaw);
+      if (scheduledWakeAt.getTime() <= Date.now()) {
+        res.status(400).json({ error: "scheduledWakeAt must be in the future" });
+        return;
+      }
+    }
     const issue = await svc.create(companyId, {
-      ...req.body,
+      ...createBody,
+      ...(scheduledWakeAt ? { scheduledWakeAt, status: "backlog" as const } : {}),
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
     });
@@ -1059,6 +1073,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       reopen: reopenRequested,
       interrupt: interruptRequested,
       hiddenAt: hiddenAtRaw,
+      scheduledWakeAt: scheduledWakeAtRaw,
       ...updateFields
     } = req.body;
     let interruptedRunId: string | null = null;
@@ -1095,6 +1110,27 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
     if (hiddenAtRaw !== undefined) {
       updateFields.hiddenAt = hiddenAtRaw ? new Date(hiddenAtRaw) : null;
+    }
+    if (scheduledWakeAtRaw !== undefined) {
+      if (scheduledWakeAtRaw) {
+        const wakeAt = new Date(scheduledWakeAtRaw);
+        if (wakeAt.getTime() <= Date.now()) {
+          res.status(400).json({ error: "scheduledWakeAt must be in the future" });
+          return;
+        }
+        updateFields.scheduledWakeAt = wakeAt;
+      } else {
+        updateFields.scheduledWakeAt = null;
+      }
+    } else if (
+      req.body.status !== undefined &&
+      req.body.status !== "backlog" &&
+      existing.scheduledWakeAt
+    ) {
+      // A human (or agent) manually pulling a scheduled issue out of backlog
+      // means "work it now" — drop the pending schedule so the scheduler tick
+      // doesn't double-fire later.
+      updateFields.scheduledWakeAt = null;
     }
     if (commentBody && reopenRequested === true && isClosed && updateFields.status === undefined) {
       updateFields.status = "todo";
@@ -1266,9 +1302,16 @@ export function issueRoutes(db: Db, storage: StorageService) {
       // the issue via /agents/me/inbox-lite (which filters to todo|in_progress|blocked) and
       // escalation breaks silently. SKILL.md tells the assignee to honor PAPERCLIP_TASK_ID,
       // so the wake context + env var will route them straight to the delegated issue.
+      // Never wake the assignee when the issue is already closed (cancelled / done).
+      // Reassigning a cancelled issue is a board housekeeping operation — no work for the agent.
+      const isIssueClosed = issue.status === "cancelled" || issue.status === "done";
+      const issueStillScheduled =
+        issue.scheduledWakeAt && new Date(issue.scheduledWakeAt).getTime() > Date.now();
       const shouldWakeOnAssigneeChange =
         assigneeChanged &&
         issue.assigneeAgentId &&
+        !isIssueClosed &&
+        !issueStillScheduled &&
         (issue.status !== "backlog" || actor.actorType === "agent");
       if (shouldWakeOnAssigneeChange) {
         wakeups.set(issue.assigneeAgentId!, {

@@ -437,9 +437,19 @@ router.get('/training/stats', async (_req, res) => {
 router.get('/content-calendar', async (req, res) => {
   try {
     const { status, from } = req.query;
-    let q = supabase.from('cc_calendar_events').select('*').order('scheduled_at', { ascending: true }).limit(500);
+    // Column is `scheduled_date` (DATE) — `scheduled_at` never existed, so this
+    // endpoint answered 500 every time. "Upcoming" also has to mean upcoming:
+    // without a floor the 500-row window filled with the oldest events in the
+    // table, which for a calendar is the exact opposite of what it promises.
+    const floor = (from as string) || new Date().toISOString().slice(0, 10);
+    let q = supabase
+      .from('cc_calendar_events')
+      .select('*')
+      .gte('scheduled_date', floor)
+      .order('scheduled_date', { ascending: true })
+      .order('scheduled_time', { ascending: true, nullsFirst: true })
+      .limit(500);
     if (status) q = q.eq('status', status as string);
-    if (from) q = q.gte('scheduled_at', from as string);
     const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);
@@ -450,10 +460,10 @@ router.get('/content-calendar', async (req, res) => {
 
 router.get('/content-calendar/stats', async (_req, res) => {
   try {
-    const now = new Date().toISOString();
+    const today = new Date().toISOString().slice(0, 10);
     const [total, upcoming, published] = await Promise.all([
       supabase.from('cc_calendar_events').select('*', { count: 'exact', head: true }),
-      supabase.from('cc_calendar_events').select('*', { count: 'exact', head: true }).gte('scheduled_at', now),
+      supabase.from('cc_calendar_events').select('*', { count: 'exact', head: true }).gte('scheduled_date', today),
       supabase.from('cc_calendar_events').select('*', { count: 'exact', head: true }).eq('status', 'published'),
     ]);
     res.json({
@@ -755,7 +765,9 @@ router.post('/scripts/:id/execute', async (req, res) => {
       child.kill('SIGKILL');
     }, TIMEOUT_MS);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); if (stdout.length > 200_000) stdout = stdout.slice(-200_000); });
+    child.stderr?.setEncoding("utf8");
     child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); if (stderr.length > 50_000) stderr = stderr.slice(-50_000); });
 
     child.on('close', (code) => {
@@ -831,7 +843,9 @@ router.post('/mcp/:id/test', async (req, res) => {
     let err = '';
     const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout?.on('data', (c) => { out += c.toString(); if (out.length > 5_000) out = out.slice(-5_000); });
+    child.stderr?.setEncoding("utf8");
     child.stderr?.on('data', (c) => { err += c.toString(); if (err.length > 5_000) err = err.slice(-5_000); });
 
     child.on('close', (code) => {

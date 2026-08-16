@@ -4,14 +4,32 @@
 // Integrates with the Channel-Agent Auto-Reply consumer pipeline via bus.publishInbound()
 
 import { Router, type Request, type Response } from 'express';
+import { promises as fsp } from 'fs';
+import path from 'path';
+import { randomUUID } from 'crypto';
 import { bus } from '../bus.js';
 import { supabase } from '../zalo-personal/supabase.js';
+import { deliverReplyOnce } from '../deliver-once.js';
 import type { InboundMessage, OutboundMessage } from '../types.js';
 
 const router = Router();
 
 const FB_VERIFY_TOKEN = process.env.FB_VERIFY_TOKEN || 'gemral-fb-webhook-verify-2026';
 const GRAPH_API = 'https://graph.facebook.com/v24.0';
+
+// ─── OAuth (Facebook Login for Business) — lấy Page token mới khớp app 998 ───
+const FB_APP_ID = process.env.FB_APP_ID || '';
+const FB_LOGIN_CONFIG_ID = process.env.FB_LOGIN_CONFIG_ID || '';
+const FB_REDIRECT_URI =
+  process.env.FB_REDIRECT_URI ||
+  'https://gemops.gemcapitalholding.com/api/channels/facebook/oauth/callback';
+
+// Page ID → tên biến .env để ghi đè token bền qua restart
+const PAGE_ENV_KEY: Record<string, string> = {
+  [process.env.FB_PAGE_ID_JENNIE || '101609408467458']: 'FB_PAGE_TOKEN_JENNIE',
+  [process.env.FB_PAGE_ID_GEMRAL || '893324337205554']: 'FB_PAGE_TOKEN_GEMRAL',
+  [process.env.FB_PAGE_ID_YINYANG || '844146582110162']: 'FB_PAGE_TOKEN_YINYANG',
+};
 
 // Page tokens map (loaded from env)
 const PAGE_TOKENS: Record<string, string> = {};
@@ -98,8 +116,15 @@ router.post('/webhook', async (req: Request, res: Response) => {
 async function handleMessagingEvent(pageId: string, channelName: string, event: any): Promise<void> {
   const senderId: string = event.sender?.id;
 
-  // Skip messages sent BY the page (echo)
-  if (event.message?.is_echo) return;
+  // ── ECHO = tin do PAGE gửi (bot Send API / chị gõ tay Messenger / facebook-web / Business Suite) ──
+  // Track B (plan CSKH-BOT-PAUSE-UX): trước đây nuốt SẠCH → tin chị gõ tay Messenger vô hình với agent.
+  // Ghi sổ 'manual_fb' để Track A tiêm cho agent thấy (KHÔNG auto-pause — OD-2). Phân loại phòng thủ
+  // nhiều lớp (app_id KHÔNG đủ: facebook-web dùng BUSINESS_APP_ID trùng Page inbox — vòng 1 ROLL-F2).
+  if (event.message?.is_echo) {
+    await handleEchoEvent(channelName, event).catch((err) =>
+      console.error('[FB echo] handler failed:', err?.message || err));
+    return;
+  }
 
   // Skip if no message content and no postback
   if (!event.message && !event.postback) return;
@@ -154,6 +179,73 @@ async function handleMessagingEvent(pageId: string, channelName: string, event: 
   };
 
   await bus.publishInbound(inbound);
+}
+
+/** Postgres unique-violation (idx_csm_platform_mid) — race 2 webhook cùng mid → 1 thắng, bỏ qua. */
+function isDupErr(err: { code?: string } | null | undefined): boolean {
+  return err?.code === '23505';
+}
+
+/**
+ * Xử lý ECHO của Facebook (tin do Page gửi). Ghi 'manual_fb' CHỈ khi là tin NGƯỜI gõ tay,
+ * KHÔNG ghi cho tin bot (Send API / facebook-web / Business Suite auto-reply).
+ * ⚠️ Cần bật field webhook `message_echoes` ở App Dashboard mỗi Page, nếu không echo không về.
+ */
+async function handleEchoEvent(channelName: string, event: any): Promise<void> {
+  const threadId: string | undefined = event.recipient?.id; // ECHO: recipient = KHÁCH (sender = Page!)
+  const mid: string | undefined = event.message?.mid;
+  if (!threadId || !mid) return;
+
+  const text: string = event.message?.text || '';
+  const attachments: any[] = event.message?.attachments || [];
+  const appId: string | null = event.message?.app_id != null ? String(event.message.app_id) : null;
+  const body = text || (attachments.length ? '[đính kèm]' : '');
+
+  // Lớp (b) — LƯỚI CHÍNH: đối chiếu tin hệ-thống-mình vừa gửi theo (thread_id, body, 5') trên MỌI
+  // channel (bot Send API đã stamp mid, bot facebook-web, auto-reply Business Suite). Không phụ thuộc app_id.
+  const since = new Date(Date.now() - 5 * 60_000).toISOString();
+  const { data: recent } = await supabase
+    .from('channel_sent_messages')
+    .select('id, platform_message_id')
+    .eq('thread_id', threadId)
+    .eq('body', body)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (recent && recent.length > 0) {
+    // Tin của hệ thống mình → chỉ stamp mid nếu chưa có (để echo sau tra trúng), KHÔNG insert bản thứ 2.
+    const row = recent[0] as { id: string; platform_message_id: string | null };
+    if (!row.platform_message_id) {
+      const { error } = await supabase.from('channel_sent_messages')
+        .update({ platform_message_id: mid }).eq('id', row.id);
+      if (error && !isDupErr(error)) console.warn('[FB echo] stamp mid failed:', error.message);
+    }
+    return;
+  }
+
+  // Lớp (a) — DỰ PHÒNG: app_id trùng app bot Send API của mình mà body-match trượt (chưa kịp ghi row)
+  //           → vẫn coi là bot, KHÔNG ghi manual. facebook-web/Business Suite đã do lớp (b) bắt.
+  if (appId && FB_APP_ID && appId === FB_APP_ID) {
+    console.log(`[FB echo] app_id=${appId} khớp app bot Send API (body-match trượt) → coi là bot, skip`);
+    return;
+  }
+
+  // Lớp (c) — còn lại = chị/nhân viên GÕ TAY trong Messenger/Page inbox → ghi sổ manual_fb cho Track A.
+  const media = attachments.filter((a: any) => a.payload?.url).map((a: any) => a.payload.url as string);
+  const { error } = await supabase.from('channel_sent_messages').insert({
+    channel_name: channelName,
+    thread_id: threadId,
+    thread_type: 'dm',
+    to_uid: threadId,
+    body: body || '[Tin nhân viên]',
+    content_type: attachments.length > 0 && !text ? 'image' : 'text',
+    media: media.length > 0 ? media : null,
+    status: 'sent',
+    sent_by: 'manual_fb',
+    platform_message_id: mid,
+  });
+  if (error && !isDupErr(error)) console.error('[FB echo] insert manual_fb failed:', error.message);
+  else if (!error) console.log(`[FB echo] ✓ manual_fb logged thread=${threadId}: ${body.slice(0, 50)}`);
 }
 
 /**
@@ -276,7 +368,9 @@ router.post('/send', async (req: Request, res: Response) => {
       return;
     }
 
-    // Log to channel_sent_messages for audit trail (non-blocking)
+    // Log to channel_sent_messages for audit trail (non-blocking).
+    // B5 (Track B): STAMP platform_message_id = mid Send API trả về → khi echo của tin BOT này
+    // về, lớp (b) body-match / unique index tra trúng, KHÔNG ghi nhầm thành 'manual_fb' (vòng 1 RACE-F15).
     void supabase.from('channel_sent_messages').insert({
       channel_name: PAGE_CHANNEL[page_id] || `fb-${page_id}`,
       thread_id: recipient_id,
@@ -286,6 +380,7 @@ router.post('/send', async (req: Request, res: Response) => {
       content_type: 'text',
       status: 'sent',
       sent_by: 'api',
+      platform_message_id: result.message_id || null,
     }).then(() => {}, () => {});
 
     res.json({ success: true, message_id: result.message_id });
@@ -378,57 +473,200 @@ bus.on('outbound', async (msg: OutboundMessage) => {
 
   const peerKind = msg.metadata?.peerKind as string | undefined;
   const commentId = msg.metadata?.comment_id as string | undefined;
+  const threadId = (peerKind === 'comment' ? commentId : msg.chatId) as string;
+  const threadType = peerKind === 'comment' ? 'comment' : 'dm';
 
-  try {
+  // The customer-visible send (Graph API). Throws on a Graph error so the Reply
+  // Gateway (or the manual catch below) treats it as failed (Codex F2).
+  const doSend = async (): Promise<{ platformMessageId: string | null }> => {
     if (peerKind === 'comment' && commentId) {
-      // ── Comment reply: POST /{comment_id}/comments ──
       const fbRes = await fetch(`${GRAPH_API}/${commentId}/comments?access_token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg.content }),
       });
-
       const result = await fbRes.json();
-      if (result.error) {
-        console.error(`[FB] Outbound comment reply error on ${msg.channel}:`, result.error);
-        return;
-      }
-
+      if (result.error) throw new Error(`FB comment reply error: ${JSON.stringify(result.error)}`);
       console.log(`[FB] Comment reply sent on ${msg.channel} → ${commentId}: "${msg.content.slice(0, 60)}"`);
+      return { platformMessageId: result.id ?? null };
     } else {
-      // ── Messenger DM: POST /{page_id}/messages ──
       const fbRes = await fetch(`${GRAPH_API}/${pageId}/messages?access_token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipient: { id: msg.chatId },
-          message: { text: msg.content },
-          messaging_type: 'RESPONSE',
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient: { id: msg.chatId }, message: { text: msg.content }, messaging_type: 'RESPONSE' }),
       });
-
       const result = await fbRes.json();
-      if (result.error) {
-        console.error(`[FB] Outbound DM error on ${msg.channel}:`, result.error);
-        return;
-      }
-
+      if (result.error) throw new Error(`FB DM error: ${JSON.stringify(result.error)}`);
       console.log(`[FB] DM sent on ${msg.channel} → ${msg.chatId}: "${msg.content.slice(0, 60)}"`);
+      return { platformMessageId: result.message_id ?? null };
     }
+  };
 
-    // Log to channel_sent_messages (non-blocking)
-    void supabase.from('channel_sent_messages').insert({
-      channel_name: msg.channel,
-      thread_id: peerKind === 'comment' ? commentId : msg.chatId,
-      thread_type: peerKind === 'comment' ? 'comment' : 'dm',
-      to_uid: msg.chatId,
-      body: msg.content,
-      content_type: 'text',
-      status: 'sent',
-      sent_by: msg.metadata?.agentSlug || 'system',
-    }).then(() => {}, () => {});
+  const logRow = {
+    channel_name: msg.channel, thread_id: threadId, thread_type: threadType,
+    to_uid: msg.chatId, body: msg.content, content_type: 'text',
+    sent_by: msg.metadata?.agentSlug || 'system',
+  };
+
+  try {
+    if (msg.dedupeKey) {
+      // Reply Gateway: claim-before-send owns the channel_sent_messages row.
+      await deliverReplyOnce(msg.dedupeKey, logRow, doSend);
+    } else {
+      // Manual path (no idempotency key): send + best-effort log, unchanged.
+      await doSend();
+      void supabase.from('channel_sent_messages').insert({ ...logRow, status: 'sent' }).then(() => {}, () => {});
+    }
   } catch (err: any) {
     console.error(`[FB] Outbound send failed on ${msg.channel}:`, err.message);
+  }
+});
+
+// ─── Token setter: nạp nóng in-memory + đăng ký routing map + ghi .env (OD-1 A) ───
+// (Opus CRITICAL F1) PHẢI đăng ký CẢ PAGE_CHANNEL + CHANNEL_PAGE, nếu không POST /webhook
+// gặp pageId lạ → "Unknown page ID" → tin DROP CÂM.
+async function setPageToken(pageId: string, token: string, channelName?: string): Promise<void> {
+  PAGE_TOKENS[pageId] = token;
+  const ch = channelName || PAGE_CHANNEL[pageId] || `fb-${pageId}`;
+  PAGE_CHANNEL[pageId] = ch;
+  CHANNEL_PAGE[ch] = pageId;
+
+  // Ghi bền vào .env (chỉ 3 page đã biết có biến env; page lạ chỉ nạp nóng)
+  const envKey = PAGE_ENV_KEY[pageId];
+  if (!envKey) return;
+  try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    let content = await fsp.readFile(envPath, 'utf8');
+    const line = `${envKey}=${token}`;
+    const re = new RegExp(`^${envKey}=.*$`, 'm');
+    content = re.test(content) ? content.replace(re, line) : `${content.replace(/\s*$/, '')}\n${line}\n`;
+    await fsp.writeFile(envPath, content, 'utf8');
+    console.log(`[FB] Persisted ${envKey} to .env (page ${pageId} → ${ch})`);
+  } catch (err: any) {
+    console.warn(`[FB] Could not persist ${envKey} to .env:`, err.message);
+  }
+}
+
+// CSRF state store (in-memory, TTL 10 phút) — Opus LOW F8
+const oauthStates = new Map<string, number>();
+function newState(): string {
+  const s = randomUUID();
+  oauthStates.set(s, Date.now() + 600_000);
+  return s;
+}
+function consumeState(s: string): boolean {
+  const exp = oauthStates.get(s);
+  oauthStates.delete(s);
+  return !!exp && exp > Date.now();
+}
+
+/**
+ * GET /api/channels/facebook/oauth/start — bắt đầu luồng "Đăng nhập bằng Facebook"
+ * → redirect tới Business Login dialog (config_id). User consent → callback.
+ */
+router.get('/oauth/start', (_req: Request, res: Response) => {
+  if (!FB_APP_ID || !FB_LOGIN_CONFIG_ID) {
+    res.status(500).send('Thiếu FB_APP_ID / FB_LOGIN_CONFIG_ID trong .env');
+    return;
+  }
+  const state = newState();
+  const url =
+    `https://www.facebook.com/v24.0/dialog/oauth?` +
+    `client_id=${encodeURIComponent(FB_APP_ID)}` +
+    `&config_id=${encodeURIComponent(FB_LOGIN_CONFIG_ID)}` +
+    `&redirect_uri=${encodeURIComponent(FB_REDIRECT_URI)}` +
+    `&state=${encodeURIComponent(state)}` +
+    `&response_type=code`;
+  res.redirect(url);
+});
+
+/**
+ * GET /api/channels/facebook/oauth/callback — nhận code → đổi ra Page token(s) never-expires,
+ * lưu (.env + nạp nóng), auto-subscribe từng Page vào webhook app.
+ */
+router.get('/oauth/callback', async (req: Request, res: Response) => {
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  const err = req.query.error_description as string | undefined;
+
+  if (err) { res.status(400).send(`Facebook trả lỗi: ${err}`); return; }
+  if (!code || !state || !consumeState(state)) {
+    res.status(400).send('State không hợp lệ hoặc thiếu code (thử đăng nhập lại).');
+    return;
+  }
+
+  const appSecret = process.env.FB_APP_SECRET || '';
+  if (!FB_APP_ID || !appSecret) { res.status(500).send('Thiếu FB_APP_ID / FB_APP_SECRET.'); return; }
+
+  try {
+    // 1) code → short-lived user token
+    const tokRes = await fetch(
+      `${GRAPH_API}/oauth/access_token?client_id=${encodeURIComponent(FB_APP_ID)}` +
+      `&client_secret=${encodeURIComponent(appSecret)}` +
+      `&redirect_uri=${encodeURIComponent(FB_REDIRECT_URI)}` +
+      `&code=${encodeURIComponent(code)}`
+    );
+    const tok = await tokRes.json();
+    if (tok.error) throw new Error(`exchange code: ${JSON.stringify(tok.error)}`);
+    const shortUserToken = tok.access_token as string;
+
+    // 2) short → long-lived user token (page tokens dẫn xuất từ đây = never-expires)
+    const llRes = await fetch(
+      `${GRAPH_API}/oauth/access_token?grant_type=fb_exchange_token` +
+      `&client_id=${encodeURIComponent(FB_APP_ID)}` +
+      `&client_secret=${encodeURIComponent(appSecret)}` +
+      `&fb_exchange_token=${encodeURIComponent(shortUserToken)}`
+    );
+    const ll = await llRes.json();
+    const longUserToken = (ll.error ? shortUserToken : ll.access_token) as string;
+
+    // 3) /me/accounts → danh sách Page + page access_token
+    const accRes = await fetch(
+      `${GRAPH_API}/me/accounts?fields=id,name,access_token&limit=100&access_token=${encodeURIComponent(longUserToken)}`
+    );
+    const acc = await accRes.json();
+    if (acc.error) throw new Error(`me/accounts: ${JSON.stringify(acc.error)}`);
+    const pages: Array<{ id: string; name: string; access_token: string }> = acc.data || [];
+    if (pages.length === 0) {
+      res.status(200).send('Đăng nhập OK nhưng không có Page nào được cấp quyền. Thử lại và chọn Page.');
+      return;
+    }
+
+    // 4) lưu token + 5) auto-subscribe từng Page vào webhook app
+    const results: Array<{ name: string; id: string; subscribed: boolean }> = [];
+    for (const p of pages) {
+      await setPageToken(p.id, p.access_token, PAGE_CHANNEL[p.id]);
+      let subscribed = false;
+      try {
+        const subRes = await fetch(
+          `${GRAPH_API}/${p.id}/subscribed_apps?access_token=${encodeURIComponent(p.access_token)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // +message_echoes (Track B): nhận bản sao tin Page gửi ra (kể cả chị gõ tay Messenger)
+            // → agent thấy nhân viên đã trả gì. Giữ trong code để OAuth re-subscribe không rớt field.
+            body: JSON.stringify({ subscribed_fields: ['messages', 'messaging_postbacks', 'feed', 'message_echoes'] }),
+          }
+        );
+        const sub = await subRes.json();
+        subscribed = !!sub.success;
+        if (sub.error) console.warn(`[FB] subscribe ${p.id}:`, JSON.stringify(sub.error));
+      } catch (e: any) {
+        console.warn(`[FB] subscribe ${p.id} failed:`, e.message);
+      }
+      console.log(`[FB] OAuth connected Page ${p.name} (${p.id}) → ${PAGE_CHANNEL[p.id]} · subscribed=${subscribed}`);
+      results.push({ name: p.name, id: p.id, subscribed });
+    }
+
+    const rows = results
+      .map((r) => `<li><b>${r.name}</b> (${r.id}) — ${r.subscribed ? '✅ đã kết nối webhook' : '⚠️ chưa subscribe'}</li>`)
+      .join('');
+    res.status(200).send(
+      `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;max-width:560px;margin:48px auto;padding:0 16px">` +
+      `<h2>✅ Đã kết nối Facebook</h2><p>Các Page đã lấy token mới (khớp app Gemral Growth) + đăng ký nhận tin:</p>` +
+      `<ul>${rows}</ul><p style="color:#666">Bạn có thể đóng cửa sổ này.</p></body>`
+    );
+  } catch (e: any) {
+    console.error('[FB] OAuth callback error:', e.message);
+    res.status(500).send(`Lỗi khi lấy token: ${e.message}`);
   }
 });
 

@@ -8,6 +8,11 @@ import { resolve as pathResolve, join as pathJoin } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { spawnHidden } from '../spawn-hidden.js';
+import {
+  findAntigravityReplyByTurnMarker,
+  looksLikeSystemPromptLeak as agyLooksLikeLeak,
+  defaultAgyCommand,
+} from '@paperclipai/adapter-antigravity-local/server';
 
 const PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
 const SKILLS_STORE = pathResolve(PROJECT_ROOT, 'skills-store');
@@ -34,7 +39,6 @@ streamEvents.setMaxListeners(100);
 
 const AGENT_TIMEOUT_MS = 300_000; // 300 seconds (5 min — Gemini CLI cold-start + large prompts)
 const DEFAULT_AGENT = 'sales-closer';
-const FALLBACK_REPLY = 'Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau.';
 
 // Cache channel → agent slug mapping for 60s
 const agentCache = new Map<string, { slug: string; expiresAt: number }>();
@@ -55,7 +59,45 @@ const CONFIG_CACHE_TTL_MS = 60_000;
  *   Tier 2: CUSTOMER-SPECIFIC AGENT — override per sender/chat
  *   Tier 3: CHANNEL DEFAULT — agent assigned to channel
  */
+/**
+ * Gate a resolved agent slug on paperclip_agents.enabled (chatbot SSOT — RULE 5).
+ * A DISABLED agent must NOT reply on any channel: return '' so the consumer
+ * treats it like "no agent" (saves the message to the human inbox, sends
+ * nothing). Without this, runAgent() returns the fallback string for a disabled
+ * agent and the consumer still publishes it — i.e. "tắt rồi vẫn trả lời".
+ * Only blocks the explicit enabled=false case; missing/true row → unchanged.
+ */
+async function gateEnabledSlug(msg: InboundMessage, slug: string): Promise<string> {
+  if (!slug) return '';
+  const { data: pa } = await supabase
+    .from('paperclip_agents')
+    .select('enabled')
+    .eq('slug', slug)
+    .single();
+  if (pa && pa.enabled === false) {
+    (msg as any)._skipReason = 'agent_disabled';
+    return '';
+  }
+  return slug;
+}
+
 export async function resolveAgent(msg: InboundMessage): Promise<string> {
+  // ── Tier 0: COMMENT never gets a real-time agent reply ──
+  // Bình luận trên bài viết (FB `facebook/webhook.ts` handleCommentEvent +
+  // `youtube/comments.ts` poller — 2 producer duy nhất của peerKind='comment')
+  // KHÔNG do agent kênh trả real-time. Chúng thuộc agent hẹn-giờ `comment-responder`
+  // (wake 08:00/20:00 HCM) quét + trả BATCH qua Graph API
+  // (scripts/facebook_api/fb_comments.py · scripts/youtube_api/yt_comments.py) —
+  // đường đó đọc thẳng Graph API, KHÔNG phụ thuộc pipeline này.
+  // Trả '' = "no agent" (cùng pattern gateEnabledSlug) → consumer vẫn lưu session
+  // cho hộp thư người, KHÔNG gửi gì ra ngoài. DM/group thật đi tiếp Tier 1-3.
+  // Lý do: sales-closer (agent mặc định kênh fb-*) đã trả 54 bình luận công khai,
+  // gồm câu lỗi "Xin lỗi, em không thể xử lý yêu cầu này." (2026-08-05).
+  if (msg.peerKind === 'comment') {
+    (msg as any)._skipReason = 'comment_no_realtime';
+    return '';
+  }
+
   // ── Tier 1: Check ignored chats ──
   const { data: ignored } = await supabase
     .from('chat_ignored')
@@ -85,7 +127,7 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
     }
     if (ov.agent_slug) {
       (msg as any)._routeTier = 'override';
-      return ov.agent_slug;
+      return await gateEnabledSlug(msg, ov.agent_slug);
     }
   }
 
@@ -94,7 +136,7 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
   const cached = agentCache.get(cacheKey);
 
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.slug;
+    return await gateEnabledSlug(msg, cached.slug);
   }
 
   const { data: instance } = await supabase
@@ -110,7 +152,7 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
 
-  return slug;
+  return await gateEnabledSlug(msg, slug);
 }
 
 /**
@@ -143,7 +185,7 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
     display_name: pa?.display_name || data.name,
     description: pa?.description || data.capabilities || null,
     avatar: pa?.avatar || data.icon || null,
-    provider: (pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : 'openrouter')) as any,
+    provider: (pa?.provider || (data.adapter_type === 'claude_local' ? 'claude' : data.adapter_type === 'gemini_local' ? 'gemini' : data.adapter_type === 'antigravity_local' ? 'antigravity' : 'openrouter')) as any,
     model: pa?.model || ac.model || 'claude-sonnet-4-6',
     temperature: pa?.temperature != null ? parseFloat(pa.temperature) : (parseFloat(ac.temperature) || 0.7),
     max_tokens: parseInt(ac.maxTokens) || 4096,
@@ -152,12 +194,14 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
     language: pa?.language || ac.language || 'vi',
     tools: pa?.tools || ac.tools || [],
     can_escalate_to: ac.canEscalateTo || [],
-    fallback_message: ac.fallbackMessage || 'Xin lỗi, tôi không thể xử lý yêu cầu này.',
+    fallback_message: ac.fallbackMessage || 'Xin lỗi, em không thể xử lý yêu cầu này.',
     effort_mode: ac.effortMode || ac.thinkingEffort || 'auto',
     max_turns: pa?.max_turns != null ? parseInt(pa.max_turns) : (parseInt(ac.maxTurns) || 1),
     history_limit: parseInt(ac.historyLimit) || 20,
     session_timeout: 3600,
     enabled: pa?.enabled ?? (data.status !== 'paused'),
+    // Antigravity (agy) seeded brain id — see AgentConfig.conversation_id.
+    conversation_id: ac.conversationId || pa?.conversation_id || null,
     created_at: data.created_at,
     updated_at: pa?.updated_at || data.updated_at,
   };
@@ -173,25 +217,49 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
 /**
  * Run an agent: resolve config, load history, execute, save history.
  */
+/**
+ * Thrown when an agent run is cancelled by an EXTERNAL AbortSignal (a new customer
+ * message arrived mid-generation → cancel-in-flight re-coalesce). Kept DISTINCT
+ * from a genuine empty reply ('') so the consumer can un-claim + re-coalesce
+ * instead of marking the batch agent_silent (which would lose the reply). Also
+ * distinct from an internal timeout (that stays a provider failure → '').
+ */
+export class AgentAbortedError extends Error {
+  constructor(msg = 'agent run aborted (cancel-in-flight)') {
+    super(msg);
+    this.name = 'AgentAbortedError';
+  }
+}
+
 export async function runAgent(
   agentSlug: string,
   sessionKey: string,
   message: string,
   originalMsg: InboundMessage,
   history?: SessionMessage[],
+  signal?: AbortSignal,
 ): Promise<string> {
   try {
-    const config = await loadAgentConfig(agentSlug);
+    const baseConfig = await loadAgentConfig(agentSlug);
 
-    if (!config) {
-      // Fallback to old Claude CLI behavior for unknown agents
-      console.warn(`[Router] ❌ No config for agent "${agentSlug}" — returning fallback reply`);
-      return FALLBACK_REPLY;
+    if (!baseConfig) {
+      // No config → stay SILENT (no fallback message). Consumer saves to inbox.
+      console.warn(`[Router] ❌ No config for agent "${agentSlug}" — staying silent`);
+      return '';
     }
 
-    if (!config.enabled) {
-      return config.fallback_message || FALLBACK_REPLY;
+    if (!baseConfig.enabled) {
+      // Disabled agent → NO reply at all (no fallback). Normally already gated
+      // in resolveAgent; this is defense-in-depth.
+      return '';
     }
+
+    // PER-REQUEST CLONE (provider-agnostic safety). loadAgentConfig returns a
+    // SHARED cached object; mutating it with per-message data
+    // (_customerContext/_media/_companyId) bleeds across CONCURRENT messages —
+    // customer A's reply addressed customer B by name ("Anh Tam" incident).
+    // Clone so every in-flight message owns its own property bag.
+    const config = { ...baseConfig } as AgentConfig;
 
     // Attach customer context from consumer if available
     if ((originalMsg as any)?._customerContext) {
@@ -208,9 +276,12 @@ export async function runAgent(
     // Load history from session if not provided
     const sessionHistory = history || await loadHistory(sessionKey, config.history_limit);
 
-    const reply = await runAgentWithConfig(config, sessionKey, message, sessionHistory);
+    const reply = await runAgentWithConfig(config, sessionKey, message, sessionHistory, signal);
 
-    // Save history (single writer — stamps agent_session_id on each entry)
+    // Save history (single writer — stamps agent_session_id on each entry).
+    // NOTE (Codex D2): this runs ONLY on a successful (non-aborted) run — an
+    // AgentAbortedError thrown by runAgentWithConfig short-circuits to the catch
+    // below, so an aborted reply never enters history (no phantom assistant turn).
     const senderNameForHist = (originalMsg as any)?.senderName || null;
     await saveHistory(sessionKey, message, reply, config, senderNameForHist);
 
@@ -223,10 +294,21 @@ export async function runAgent(
       (originalMsg as any)._outboundMedia = outMedia;
     }
 
+    // Bridge escalation intent (set by postProcessReply) back to the message so
+    // consumer.ts can fire handleEscalation (ticket + bot_paused + CS ping).
+    const esc = (config as any)._escalation;
+    if (esc) {
+      (originalMsg as any)._escalation = esc;
+    }
+
     return reply;
   } catch (err: any) {
+    // Cancel-in-flight: propagate abort so the consumer can un-claim + re-coalesce.
+    // Do NOT swallow to '' (that would look like a genuine empty reply → the batch
+    // would be marked agent_silent and the customer's message lost). Codex C1.
+    if (err instanceof AgentAbortedError) throw err;
     console.error(`[Router] ❌ Agent "${agentSlug}" failed:`, err.message);
-    return FALLBACK_REPLY;
+    return '';  // no fallback — stay silent; consumer saves to inbox
   }
 }
 
@@ -239,7 +321,9 @@ export async function runAgentWithConfig(
   sessionKey: string,
   message: string,
   history?: SessionMessage[],
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();  // already cancelled before we start
   const customerContext = (config as any)._customerContext || null;
   // Company context resolved either from the config override (set by SOP
   // executor or channel consumer) or the single-tenant default GEMRAL.
@@ -247,31 +331,52 @@ export async function runAgentWithConfig(
   const systemPrompt = await buildSystemPrompt(config, customerContext, companyId);
   const chatHistory = history || [];
 
+  // PROVIDER-AGNOSTIC identity header: prepend WHO this message is from so the
+  // model never confuses customers in a shared context — applies to every
+  // provider below (CLI claude/gemini AND API nvidia/openrouter + future).
+  const messageForAgent = buildIdentityHeader(customerContext) + message;
+
   try {
     let reply: string;
 
     switch (config.provider) {
       case 'claude':
-        reply = await runViaClaude(config, systemPrompt, chatHistory, message, sessionKey);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
         break;
       case 'gemini':
-        reply = await runViaGemini(config, systemPrompt, chatHistory, message, sessionKey);
+        reply = await runViaGemini(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
+        break;
+      case 'antigravity':
+        reply = await runViaAntigravity(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
         break;
       case 'nvidia_nim':
-        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, message);
+        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, messageForAgent, signal);
         break;
       case 'openrouter':
-        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, message);
+        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, messageForAgent, signal);
         break;
       default:
         console.warn(`[Router] Unknown provider: ${config.provider}, falling back to Claude`);
-        reply = await runViaClaude(config, systemPrompt, chatHistory, message);
+        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
     }
+    if (signal?.aborted) throw new AgentAbortedError();  // aborted during generation → skip postProcess/side-effects
 
-    return reply.trim() || config.fallback_message || FALLBACK_REPLY;
+    // ── HOISTED customer-facing contract (Reply Gateway P1) ──
+    // Single chokepoint: scrub banned phrases + parse [[SEND_MEDIA]]/[[ESCALATE]]
+    // markers + collapse-guard runs here for EVERY provider — not inside each
+    // runVia*. This closes the gap where nvidia_nim/openrouter returned RAW
+    // (never scrubbed). The 3 CLI providers no longer call postProcessReply
+    // internally; they return the raw model reply and this is the only place it
+    // is cleaned. Side-channels (_escalation/_outboundMedia) are set on `config`
+    // (same object the consumer reads after runAgent returns).
+    const mediaLib = loadMediaLibrary(config.slug);
+    reply = await postProcessReply(reply, config, mediaLib);
+
+    return reply.trim();  // empty → consumer stays silent (no fallback)
   } catch (err: any) {
+    if (err instanceof AgentAbortedError) throw err;  // cancel-in-flight — do NOT swallow to '' (Codex C1)
     console.error(`[Router] Provider ${config.provider} failed for ${config.slug}:`, err.message);
-    return config.fallback_message || FALLBACK_REPLY;
+    return '';  // no fallback — stay silent
   }
 }
 
@@ -334,9 +439,11 @@ async function runViaClaude(
   history: SessionMessage[],
   message: string,
   sessionKey: string = '',
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   // 1. Check persistent session
-  const sessionId = await getAgentSessionId(config.slug);
+  const sessionId = await getThreadSessionId(sessionKey);
 
   // 2. Build skills dir (matches execute.ts — triggers Skills/Tools)
   const skillsDir = buildSkillsDirForChat();
@@ -363,18 +470,15 @@ async function runViaClaude(
   // 4. Build user prompt (message only — context is in instructions file)
   // [Khách:] prefix is injected in BOTH new-session and resume paths so the
   // AgentLogDrawer can always extract customer name + channel from JSONL turns.
-  const ctx = (config as any)._customerContext;
-  const contextLine = ctx?.name
-    ? `[Khách: ${ctx.name} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
-    : '';
+  // `message` already carries the [NGUỒN TIN NHẮN] identity header (prepended in
+  // runAgentWithConfig) so the model always knows which customer it is replying to.
   let userPrompt: string;
   if (!sessionId) {
-    // First message — instructions file has system prompt.
-    // Inject [Khách:] inside the message so it lands in the JSONL user turn.
-    userPrompt = buildFullPrompt(history, contextLine + message);
+    // First message — instructions file has system prompt; identity header is in message.
+    userPrompt = buildFullPrompt(history, message);
   } else {
-    // Resume — only new message + brief context
-    userPrompt = `${contextLine}${message}`;
+    // Resume — only the new message (already carries identity header)
+    userPrompt = message;
   }
 
   // 5. Build args — matches execute.ts buildClaudeArgs()
@@ -384,6 +488,13 @@ async function runViaClaude(
     '--output-format', 'stream-json',      // streaming (not json)
     '--verbose',
     '--dangerously-skip-permissions',
+    // Force DEFAULT output style for customer-facing agents. The subprocess runs
+    // with cwd=PROJECT_ROOT, which loads crypto-pattern-scanner/.claude/settings.local.json
+    // where outputStyle="Explanatory" (Jennie's dev mode) — that makes the agent
+    // leak "★ Insight ───" educational blocks into customer replies (incident
+    // 2026-06-10: scrub then collapsed them to a lone backtick). CLI --settings
+    // overrides project-local settings, so this neutralizes it at the source.
+    '--settings', '{"outputStyle":"default"}',
   ];
 
   if (sessionId) {
@@ -469,22 +580,42 @@ async function runViaClaude(
 
     let stdout = '';
     let stderr = '';
+    // Cancel-in-flight: a new customer message arrived mid-generation → kill the
+    // CLI now (stop wasting tokens + release the session lock fast) and reject
+    // with AgentAbortedError so the consumer un-claims + re-coalesces. `settled`
+    // guards the close handler from running its parse/resolve side-effects after
+    // an abort (Codex C4 — first-settle-wins; skip the rest).
+    let settled = false;
     const timeout = setTimeout(() => {
+      settled = true;
       child.kill('SIGTERM');
       reject(new Error(`Claude CLI timed out for ${config.slug}`));
     }, AGENT_TIMEOUT_MS);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      reject(new AgentAbortedError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
       stdout += text;
       streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: text, partial: stdout });
     });
 
+    child.stderr?.setEncoding("utf8");
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf-8');
     });
 
     child.on('close', async (code) => {
+      if (settled) return;   // aborted/timed-out already — skip parse/resolve side-effects
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
       clearTimeout(timeout);
 
       // Cleanup temp dir
@@ -494,7 +625,7 @@ async function runViaClaude(
         console.error(`[Router] Claude CLI exited ${code}: ${stderr.substring(0, 200)}`);
         if (sessionId && (stderr.includes('session') || stderr.includes('resume'))) {
           console.log(`[Router] Clearing stale session for ${config.slug}`);
-          await clearAgentSession(config.slug);
+          await clearThreadSession(sessionKey);
         }
         streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: stderr.substring(0, 200) });
         reject(new Error(stderr.substring(0, 200) || `Exit code ${code}`));
@@ -553,7 +684,7 @@ async function runViaClaude(
 
         // Save session ID
         if (newSessionId && !sessionId) {
-          await saveAgentSession(config.slug, newSessionId);
+          await saveThreadSessionId(sessionKey, newSessionId);
         }
 
         // Expose session_id via side-channel so saveHistory() can stamp it
@@ -563,8 +694,9 @@ async function runViaClaude(
 
         console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars, session=${newSessionId?.substring(0, 8) || 'none'}`);
 
-        // ── Provider-agnostic post-processing: scrub + parse media markers ──
-        reply = await postProcessReply(reply, config, mediaLib);
+        // NOTE: customer-facing post-processing (scrub + media/escalation markers)
+        // is HOISTED to runAgentWithConfig (Reply Gateway P1) — the single chokepoint
+        // for every provider. This returns the RAW model reply; do NOT scrub here.
 
         // Track usage via RPC
         try {
@@ -663,6 +795,103 @@ async function clearAgentSession(slug: string): Promise<void> {
     .eq('agent_slug', slug);
 }
 
+// ─── PER-THREAD architecture (provider-agnostic: claude / gemini / future) ───
+// Two cross-customer bleed vectors are closed here:
+//  1. CLI session must be PER customer thread (sessionKey), NOT per agent slug —
+//     otherwise every customer resumes the same CLI session and the model "remembers"
+//     other customers (the "Anh Tam" incident on Claude resume).
+//  2. Each message carries an explicit identity header so the model always knows
+//     WHO it is replying to (Telegram-style source tag) — defense-in-depth for any
+//     provider, including API providers that keep no CLI session.
+
+/**
+ * Build the per-message identity header. Provider-agnostic — prepended to the
+ * user message in runAgentWithConfig so EVERY provider (CLI or API) receives it.
+ */
+function buildIdentityHeader(ctx: any): string {
+  if (!ctx) return '';
+  const id = ctx.sender_id || ctx.account_id || '?';
+  const name = ctx.name || ctx.sender_name || 'Chưa rõ';
+  const GENDER_LABELS: Record<string, string> = {
+    nam: 'Nam (khách nam → xưng hô phù hợp: gọi khách là "anh")',
+    nu: 'Nữ (khách nữ → xưng hô phù hợp: gọi khách là "chị")',
+  };
+  const gender = ctx.gender
+    ? (GENDER_LABELS[ctx.gender] || ctx.gender)
+    : 'chưa rõ — tự suy luận theo cách khách xưng hô';
+  const channel = ctx.channel_name || 'Zalo';
+  const crmId = ctx.customer_id || null;
+  const lines = [
+    `[NGUỒN TIN NHẮN] account_id=${id} | tên=${name} | giới_tính=${gender} | kênh=${channel}`,
+  ];
+  if (crmId) {
+    lines.push(
+      `crm_customer_id=${crmId}  ← BẮT BUỘC truyền id NÀY vào tham số customer_id của MỌI CRM tool `
+        + `(create_ticket, get_customer_info, check_course_access, crm_update, recall_memory...).`,
+    );
+  }
+  lines.push(`→ CHỈ trả lời cho người này. KHÔNG dùng thông tin/tên của khách khác trong lịch sử.`, '');
+  return lines.join('\n');
+}
+
+/** Resolve the CLI session for a specific customer thread (sessionKey). */
+async function getThreadSessionId(sessionKey: string): Promise<string | null> {
+  if (!sessionKey) return null;
+  const { data } = await supabase
+    .from('channel_sessions')
+    .select('cli_session_id')
+    .eq('session_key', sessionKey)
+    .maybeSingle();
+  const sessionId = (data as any)?.cli_session_id || null;
+  if (!sessionId) return null;
+  // Verify the session file still exists (Claude JSONL OR Gemini JSON). If the
+  // CLI cleaned it up, a --resume would fail; return null so a fresh session is
+  // created instead of breaking the customer's reply.
+  try {
+    const { homedir } = await import('node:os');
+    const short8 = String(sessionId).substring(0, 8);
+    const claudeRoot = pathResolve(homedir(), '.claude', 'projects');
+    if (existsSync(claudeRoot)) {
+      for (const dir of readdirSync(claudeRoot)) {
+        if (existsSync(pathJoin(claudeRoot, dir, `${sessionId}.jsonl`))) return sessionId;
+      }
+    }
+    const geminiRoot = pathResolve(homedir(), '.gemini', 'tmp');
+    if (existsSync(geminiRoot)) {
+      for (const proj of readdirSync(geminiRoot)) {
+        const chatsDir = pathJoin(geminiRoot, proj, 'chats');
+        if (!existsSync(chatsDir)) continue;
+        if (readdirSync(chatsDir).some((f) => f.endsWith(`-${short8}.json`))) return sessionId;
+      }
+    }
+    return null; // file gone → fresh session
+  } catch {
+    return sessionId; // check failed → optimistically resume
+  }
+}
+
+/** Persist the CLI session id for a specific customer thread. */
+async function saveThreadSessionId(sessionKey: string, sessionId: string): Promise<void> {
+  if (!sessionKey || !sessionId) return;
+  try {
+    await supabase.from('channel_sessions')
+      .update({ cli_session_id: sessionId })
+      .eq('session_key', sessionKey);
+  } catch (err: any) {
+    console.warn(`[Router] saveThreadSessionId failed for ${sessionKey}: ${err.message}`);
+  }
+}
+
+/** Clear the CLI session for a thread (e.g. on resume failure → next run is fresh). */
+async function clearThreadSession(sessionKey: string): Promise<void> {
+  if (!sessionKey) return;
+  try {
+    await supabase.from('channel_sessions')
+      .update({ cli_session_id: null })
+      .eq('session_key', sessionKey);
+  } catch { /* non-blocking */ }
+}
+
 /**
  * Run via Gemini CLI — async spawn with streaming.
  * Matches Gemini Core execute.ts pattern:
@@ -674,12 +903,14 @@ async function runViaGemini(
   history: SessionMessage[],
   message: string,
   sessionKey: string = '',
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   // Model from UI Cấu hình Agent → paperclip_agents.model (SSOT)
   const model = config.model || 'gemini-2.5-flash';
 
   // Session
-  const sessionId = await getAgentSessionId(config.slug);
+  const sessionId = await getThreadSessionId(sessionKey);
 
   // Load media library (provider-agnostic — same helper as Claude)
   const mediaLib = loadMediaLibrary(config.slug);
@@ -694,14 +925,11 @@ async function runViaGemini(
 
   // Build full prompt (system + history + message)
   // [Khách:] prefix injected so any JSONL log viewer can extract customer identity.
-  const ctx = (config as any)._customerContext;
-  const contextLine = ctx?.name
-    ? `[Khách: ${ctx.name} · ${ctx.stage || 'new'} · ${ctx.channel_name || 'Zalo'}]\n`
-    : '';
-  const messageWithCtx = contextLine + message;
+  // `message` already carries the [NGUỒN TIN NHẮN] identity header (prepended in
+  // runAgentWithConfig) so the model always knows which customer it is replying to.
   const fullPrompt = augmentedSystemPrompt
-    ? [augmentedSystemPrompt, '', buildFullPrompt(history, messageWithCtx)].join('\n')
-    : buildFullPrompt(history, messageWithCtx);
+    ? [augmentedSystemPrompt, '', buildFullPrompt(history, message)].join('\n')
+    : buildFullPrompt(history, message);
 
   // Gemini CLI: pipe prompt via stdin, use -p to signal non-interactive mode
   // Can't use -p with long prompts (Windows 8K cmd limit)
@@ -712,6 +940,12 @@ async function runViaGemini(
     '-m', model,                               // --model
     '-y',                                      // --yolo (auto-approve all)
   ];
+
+  // Scope MCP to ONLY the servers this agent needs (crm gated CRM tools incl
+  // lookup_order_shopify/create_ticket/check_course_access + marketing assets +
+  // DB + email). Without this whitelist gemini connects ALL ~16 global
+  // ~/.gemini servers per reply → heavy latency.
+  args.push('--allowed-mcp-server-names', 'crm', 'marketing-asset-search', 'supabase', 'resend');
 
   // Session resume
   if (sessionId) {
@@ -739,6 +973,12 @@ async function runViaGemini(
   // exceeds AGENT_TIMEOUT_MS. Sandbox dir is empty → 5-15s startup.
   // Confirmed empirically 2026-05-05: cps cwd = 86s, paperclip cwd = 16s,
   // empty sandbox cwd should be even faster.
+  // Empty shared sandbox for fast gemini startup. The agent's MCP servers (crm:
+  // lookup_order_shopify/create_ticket/check_course_access, marketing-asset-search)
+  // are installed at the USER scope in ~/.gemini/settings.json + enabled in
+  // ~/.gemini/mcp-server-enablement.json — gemini DISABLES workspace-level MCP
+  // servers, so per-agent workspace settings.json does NOT work. The
+  // --allowed-mcp-server-names whitelist (above) scopes which of those connect.
   const sandboxDir = pathJoin(PROJECT_ROOT, '.gemini', 'chatbot-sandbox');
   mkdirSync(sandboxDir, { recursive: true });
   const cwd = sandboxDir;
@@ -753,6 +993,13 @@ async function runViaGemini(
       cwd,
       env: {
         ...process.env,
+        // Creds for the agent-scoped MCP servers (crm → DB+Shopify, marketing-asset → DB, resend → email)
+        GEMRAL_SUPABASE_URL: process.env.GEMRAL_SUPABASE_URL || '',
+        GEMRAL_SUPABASE_SERVICE_KEY: process.env.GEMRAL_SUPABASE_SERVICE_KEY || '',
+        SUPABASE_URL: process.env.SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co',
+        SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL || '',
+        SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN || '',
+        RESEND_API_KEY: process.env.RESEND_API_KEY || '',
         // Identity gate context for any MCP server the Gemini CLI may spawn
         PAPERCLIP_AGENT_SLUG: config.slug,
         PAPERCLIP_SESSION_KEY: sessionKey,
@@ -794,12 +1041,14 @@ async function runViaGemini(
       reject(new Error(`Gemini CLI timed out for ${config.slug}`));
     }, AGENT_TIMEOUT_MS);
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
       stdout += text;
       streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: text });
     });
 
+    child.stderr?.setEncoding("utf8");
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf-8');
     });
@@ -810,7 +1059,7 @@ async function runViaGemini(
       if (code !== 0 && !stdout.trim()) {
         console.error(`[Router] Gemini CLI exited ${code}: ${stderr.substring(0, 200)}`);
         if (sessionId && stderr.includes('session')) {
-          await clearAgentSession(config.slug);
+          await clearThreadSession(sessionKey);
         }
         streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: stderr.substring(0, 200) });
         reject(new Error(stderr.substring(0, 200) || `Exit code ${code}`));
@@ -864,7 +1113,7 @@ async function runViaGemini(
         }
 
         if (newSessionId && !sessionId) {
-          await saveAgentSession(config.slug, newSessionId);
+          await saveThreadSessionId(sessionKey, newSessionId);
         }
 
         // Expose session_id via side-channel (see runViaClaude for rationale).
@@ -872,12 +1121,269 @@ async function runViaGemini(
 
         console.log(`[Router/${config.provider}] ${config.slug}: reply ${reply.length} chars`);
 
-        // Provider-agnostic post-processing: scrub + parse [[SEND_MEDIA:]] markers
-        reply = await postProcessReply(reply, config, mediaLib);
+        // NOTE: post-processing (scrub + markers) HOISTED to runAgentWithConfig
+        // (Reply Gateway P1) — returns RAW reply here, do NOT scrub in this fn.
       } catch (parseErr) {
         console.warn(`[Router/${config.provider}] ${config.slug}: parse failed`, parseErr);
         // NEVER return raw stdout — return safe fallback
         reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+      }
+
+      try {
+        await supabase.rpc('increment_agent_usage', {
+          p_slug: config.slug, p_input: 0, p_output: 0, p_cost: 0, p_duration: 0,
+        });
+      } catch { /* ignore usage tracking errors */ }
+
+      streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
+      resolve(reply);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Run via Antigravity CLI (`agy` → Gemini 3.1 Pro High, Google AI Ultra).
+ *
+ * agy follows the Claude-Code model: it reads context from a FILE POINTER (no
+ * stdin), so we write the full system prompt + history to a temp file and pass a
+ * short `-p "Đọc <file>. Trả lời: <msg>"`. CWD = PROJECT_ROOT (agy native file
+ * tools are safe, no heavy cwd scan like gemini-cli).
+ *
+ * TWO Windows constraints (lesson evolution-log/08-windows.md, verified 15/06):
+ *  1. agy prints the reply to CONOUT$ (TTY) → the stdout pipe is EMPTY. The reply
+ *     MUST be read from the brain transcript.jsonl (PLANNER_RESPONSE after the
+ *     USER_INPUT containing this run's unique temp-prompt filename = turnMarker).
+ *  2. agy `-p` headless CANNOT create a brain for an unknown --conversation id.
+ *     The brain must be pre-seeded ONCE via `agy --conversation <id>` interactive.
+ *     So this provider REQUIRES config.conversation_id (a real seeded brain).
+ *     Per-customer isolation comes from the injected system prompt + identity
+ *     header + history (the file pointer), NOT from per-customer brains.
+ */
+/**
+ * Extract the customer message from the [[REPLY]]...[[/REPLY]] envelope the
+ * antigravity reply prompt asks for (2026-08-11 contract).
+ *
+ * - Multiple envelopes: prefer the LAST one that does NOT trip the
+ *   operator-report guard (models sometimes append a self-check envelope after
+ *   the real reply — and in the 2026-08-11 incident the real reply sat in the
+ *   MIDDLE, so "last" alone is not a safe heuristic).
+ * - Open marker without a closing pair (truncated output): take everything
+ *   after the last [[REPLY]] — that at least severs the report preamble; the
+ *   operator-report guard still checks the remainder.
+ * - No marker at all: return the input unchanged (fail-open; guard downstream).
+ */
+export function extractEnvelopedReply(raw: string): string {
+  if (!raw) return raw;
+  try {
+    const matches = [...raw.matchAll(/\[\[\s*REPLY\s*\]\]([\s\S]*?)\[\[\s*\/\s*REPLY\s*\]\]/gi)]
+      .map((m) => (m[1] || '').trim())
+      .filter((c) => /[\p{L}\p{N}]/u.test(c));
+    if (matches.length > 0) {
+      if (matches.length > 1) {
+        console.warn(`[Router/antigravity] ${matches.length} [[REPLY]] envelopes in one output — model is drifting off-frame`);
+      }
+      const clean = [...matches].reverse().find((c) => !detectOperatorReportLeak(c));
+      return clean ?? matches[matches.length - 1];
+    }
+    const openIdx = raw.toUpperCase().lastIndexOf('[[REPLY]]');
+    if (openIdx >= 0) {
+      const tail = raw.slice(openIdx + '[[REPLY]]'.length).trim();
+      if (/[\p{L}\p{N}]/u.test(tail)) return tail;
+    }
+  } catch (err) {
+    console.error('[Router/antigravity] envelope extraction errored (returning raw)', err);
+  }
+  return raw;
+}
+
+async function runViaAntigravity(
+  config: AgentConfig,
+  systemPrompt: string,
+  history: SessionMessage[],
+  message: string,
+  sessionKey: string = '',
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
+  const model = config.model || 'Gemini 3.1 Pro (High)';
+
+  // Conversation id passed to agy. If a brain with this id exists, agy RESUMES it;
+  // otherwise agy IGNORES it and auto-creates its OWN brain (we then locate the real
+  // brain + reply via the turnMarker below). So a pre-seeded brain is NOT required —
+  // fall back to the per-customer sessionKey for a stable-ish handle. (Full history
+  // is re-injected via the file pointer each turn, so brain-memory continuity is not
+  // critical for correctness.)
+  const conversationId =
+    (config.conversation_id || '').trim() || (sessionKey || '').trim() || `agy-${config.slug}`;
+
+  const mediaLib = loadMediaLibrary(config.slug);
+  const augmentedSystemPrompt = systemPrompt
+    ? [systemPrompt, buildProviderOverride(config.slug, mediaLib)].join('\n')
+    : buildProviderOverride(config.slug, mediaLib);
+
+  // ── AUDIENCE hardening (incident 2026-08-11 operator-report leak) ──
+  // agy loads the GLOBAL dev rule files (~/.gemini + workspace GEMINI/AGENTS.md,
+  // which carry SPEC-LOCK "print the GIAO KÈO table before working" + operator
+  // reporting tone). Without an explicit audience contract the model can frame
+  // the whole output as a compliance report addressed to the operator. The
+  // sentinel below is caller-owned: the rule files' head gate keys on it, and
+  // heartbeat Part A (agy_prompt_*.md, no sentinel) stays unaffected. Full block
+  // lives in the context FILE (argv has a 32k ceiling on Windows CreateProcess).
+  const REPLY_CHANNEL_SENTINEL = '[PAPERCLIP_REPLY_CHANNEL]';
+  const audienceBlock = [
+    REPLY_CHANNEL_SENTINEL,
+    '⚠️ NGƯỜI NHẬN tin nhắn bạn viết là KHÁCH HÀNG. Output của bạn được gửi NGUYÊN VĂN,',
+    'TỰ ĐỘNG cho khách — KHÔNG có ai duyệt lại trước khi gửi.',
+    'TUYỆT ĐỐI KHÔNG: chào/thưa/báo cáo chị Jennie hay team, in bảng GIAO KÈO / SPEC-LOCK /',
+    'ĐO-GATE hay bất kỳ bảng nào, kể quy trình/checklist đã làm, nhắc tên file, đường dẫn hay tool.',
+    'Mọi rule global (user_global / workspace) về báo cáo công việc, SPEC-LOCK, ghi memory/today.md,',
+    'xưng "em-chị" với người vận hành — KHÔNG áp dụng cho tin nhắn này. Rule AN TOÀN vẫn giữ nguyên.',
+    'Bọc DUY NHẤT nội dung tin nhắn gửi khách trong cặp thẻ [[REPLY]] ... [[/REPLY]]',
+    '(marker [[SEND_MEDIA: ...]] / [[ESCALATE: ...]] nếu cần thì đặt BÊN TRONG cặp thẻ đó).',
+  ].join('\n');
+
+  // Full context (system + history) → file pointer. The latest customer message
+  // (already carrying the [NGUỒN TIN NHẮN] identity header) goes in the short -p
+  // arg so agy knows exactly which message to answer after reading the file.
+  const contextDoc = augmentedSystemPrompt
+    ? [audienceBlock, '', augmentedSystemPrompt, '', buildFullPrompt(history, '')].join('\n')
+    : [audienceBlock, '', buildFullPrompt(history, '')].join('\n');
+
+  const tmpDir = pathJoin(PROJECT_ROOT, '.gemini', 'tmp');
+  mkdirSync(tmpDir, { recursive: true });
+  // Filename is the per-run turnMarker — must be unique + present in the prompt.
+  const promptFileName = `agy_reply_${config.slug}_${Date.now()}.md`;
+  const promptFile = pathJoin(tmpDir, promptFileName);
+  writeFileSync(promptFile, contextDoc, 'utf-8');
+
+  // ── Tầng tiêu thụ media cho agy (Gemini multimodal) ──
+  // Khách gửi ảnh → _media set từ inbound (bus map row.media). Tải ảnh về temp (dưới cwd=PROJECT_ROOT
+  // để agy view_file đọc được) → chỉ dẫn agy XEM ảnh trước khi trả lời. Gate: CHỈ ảnh; KHÔNG nhắc
+  // URL/path cho khách (chống leak). Ảnh lỗi/không tải được → bỏ qua, agy trả lời theo text.
+  let mediaDirective = '';
+  const inboundMedia = (config as any)._media as Array<{ url?: string; mimeType?: string }> | undefined;
+  if (inboundMedia && inboundMedia.length > 0) {
+    const imgPaths: string[] = [];
+    for (const m of inboundMedia.slice(0, 3)) {
+      try {
+        if (!m.url) continue;
+        const isImg = (m.mimeType || '').startsWith('image') || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(m.url);
+        if (!isImg) continue;
+        const r = await fetch(m.url);
+        if (!r.ok) continue;
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.byteLength > 15 * 1024 * 1024) continue;
+        const ext = (m.mimeType || '').includes('png') ? 'png' : (m.mimeType || '').includes('webp') ? 'webp' : 'jpg';
+        const imgFile = pathJoin(tmpDir, `agy_img_${config.slug}_${Date.now()}_${imgPaths.length}.${ext}`);
+        writeFileSync(imgFile, buf);
+        imgPaths.push(imgFile.replace(/\\/g, '/'));
+      } catch { /* ảnh lỗi → bỏ qua */ }
+    }
+    if (imgPaths.length > 0) {
+      mediaDirective = [
+        '',
+        `⚠️ Khách VỪA GỬI ${imgPaths.length} HÌNH ẢNH. BẮT BUỘC dùng view_file XEM từng ảnh sau TRƯỚC khi trả lời, rồi tư vấn dựa trên NỘI DUNG ẢNH:`,
+        ...imgPaths,
+        'TUYỆT ĐỐI KHÔNG nhắc đường dẫn/URL ảnh cho khách — chỉ trả lời tự nhiên về nội dung bạn thấy.',
+      ].join('\n');
+    }
+  }
+
+  const pointerPrompt = [
+    REPLY_CHANNEL_SENTINEL,
+    'Dùng công cụ đọc file (view_file) đọc TOÀN BỘ bối cảnh + hướng dẫn + lịch sử hội thoại trong file sau NGAY LẬP TỨC, trước khi trả lời:',
+    promptFile.replace(/\\/g, '/'),
+    'Sau khi đọc xong, trả lời tin nhắn mới nhất của khách dưới đây bằng tiếng Việt, đúng vai trò + giọng đã mô tả trong file. TUYỆT ĐỐI KHÔNG đọc lại / trích lại nội dung file cho khách — chỉ trả lời tự nhiên như đang nhắn tin. Bọc DUY NHẤT tin nhắn gửi khách trong [[REPLY]] ... [[/REPLY]]:',
+    mediaDirective,
+    message,
+  ].join('\n');
+
+  const agy = defaultAgyCommand();
+  const args: string[] = [
+    '-p', pointerPrompt,
+    '--model', model,
+    '--dangerously-skip-permissions',
+    '--conversation', conversationId,
+  ];
+
+  const streamKey = `${config.slug}:${Date.now()}`;
+  streamEvents.emit('agent:start', { agentSlug: config.slug, streamKey });
+  console.log(`[Router] Antigravity ${config.slug}: model=${model}, brain=${conversationId.substring(0, 8)}, ctx=${contextDoc.length} chars`);
+
+  return new Promise<string>((resolve, reject) => {
+    // agy is a real .exe → spawnHidden spawns it directly (full path resolved).
+    // No stdin (agy reads the prompt from the -p arg / file pointer).
+    const child = spawnHidden(agy, args, {
+      cwd: PROJECT_ROOT,
+      env: {
+        ...process.env,
+        GEMRAL_SUPABASE_URL: process.env.GEMRAL_SUPABASE_URL || '',
+        GEMRAL_SUPABASE_SERVICE_KEY: process.env.GEMRAL_SUPABASE_SERVICE_KEY || '',
+        SUPABASE_URL: process.env.SUPABASE_URL || 'https://pgfkbcnzqozzkohwbgbk.supabase.co',
+        SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL || '',
+        SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN || '',
+        RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+        PAPERCLIP_AGENT_SLUG: config.slug,
+        PAPERCLIP_SESSION_KEY: sessionKey,
+        PAPERCLIP_CHANNEL_NAME: (config as any)._customerContext?.channel_name || '',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`Antigravity CLI timed out for ${config.slug}`));
+    }, AGENT_TIMEOUT_MS);
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout.on('data', (chunk: Buffer) => {
+      streamEvents.emit('agent:chunk', { agentSlug: config.slug, streamKey, chunk: chunk.toString('utf-8') });
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
+
+    child.on('close', async (code) => {
+      clearTimeout(timeout);
+      try { rmSync(promptFile, { force: true }); } catch {}
+
+      let reply = '';
+      try {
+        // Windows TTY trap + agy auto-brain: agy may IGNORE the --conversation id
+        // and create its own brain, so scan brains by THIS run's turnMarker (unique
+        // temp-prompt filename) to find the real brain + reply (poll-retry for flush).
+        const t = await findAntigravityReplyByTurnMarker(promptFileName);
+        reply = (t.reply || '').trim();
+
+        // Reply-envelope contract (2026-08-11): keep only the customer message.
+        reply = extractEnvelopedReply(reply);
+
+        // Leak-guard: never return injected system context to a customer.
+        if (reply && agyLooksLikeLeak(reply)) {
+          console.error(`[Router] Antigravity ${config.slug}: REFUSED system-context leak in reply.`);
+          reply = '';
+        }
+
+        if (!reply) {
+          console.warn(`[Router] Antigravity ${config.slug}: empty reply (exit ${code}). stderr=${stderr.substring(0, 200)}`);
+          reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+        }
+
+        // Expose the brain id via side-channel (mirrors runViaClaude/Gemini).
+        (config as any)._agent_session_id = conversationId;
+        console.log(`[Router/antigravity] ${config.slug}: reply ${reply.length} chars`);
+
+        // NOTE: post-processing (scrub + [[SEND_MEDIA]]/[[ESCALATE]] markers)
+        // HOISTED to runAgentWithConfig (Reply Gateway P1) — returns RAW reply
+        // here, do NOT scrub in this fn.
+      } catch (parseErr) {
+        console.warn(`[Router/antigravity] ${config.slug}: parse failed`, parseErr);
+        reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
       }
 
       try {
@@ -906,7 +1412,9 @@ async function runViaOpenRouter(
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error('OPENROUTER_API_KEY not set');
@@ -1315,16 +1823,151 @@ export interface MessageChunk {
   media?: MediaFile[];
 }
 
+/** Strip Vietnamese accents + lowercase for fuzzy product-name matching. */
+function stripAccentsLower(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/đ/gi, 'd').toLowerCase();
+}
+
+// Tag values that are generic (không phải danh tính sản phẩm) — bỏ qua khi auto-match.
+const GENERIC_MEDIA_TAGS = new Set([
+  'image', 'crystal', 'set', 'pdf', 'video', 'vi', 'stone', 'course', 'trading',
+  'feng_shui', 'yinyang_masters', 'starter', 'tier0', 'tier1', 'tier2', 'tier3',
+  'wealth', 'love', 'purple', 'pink', 'yellow', 'guide', 'infographic', 'brand',
+  'logo', 'demo', 'tool', 'ritual', 'spiritual', 'wellness', 'healing', 'mixed',
+  'tien_tai', 'binh_an', 'tinh_yeu', 'bao_ve', 'jennie', 'profile', 'founder',
+  'chart', 'education', 'banner', 'promo', 'sale', 'catalog', 'overview',
+]);
+
+// Multi-ảnh/sản phẩm (2026-07-16): cap số ảnh gửi cho 1 item/lần (upload bucket tuần tự
+// ở CSKH, tránh spam N tin + latency). Áp cho CẢ marker lẫn fallback auto-match.
+const MEDIA_MAX_PER_MARKER = 6;
+
+// Suy mimeType từ đuôi path (all_images là list PATH, mỗi ảnh có thể khác loại) → fallback item.mimeType.
+function mimeFromExt(p: string): string | undefined {
+  const ext = p.toLowerCase().match(/\.([a-z0-9]+)(?:\?|$)/)?.[1];
+  switch (ext) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'gif': return 'image/gif';
+    case 'pdf': return 'application/pdf';
+    case 'mp4': return 'video/mp4';
+    default: return undefined;
+  }
+}
+
+// SSOT resolve 1 media-library item → N MediaFile (multi-ảnh 2026-07-16). Dùng CHUNG cho
+// parseMediaMarkers ([[SEND_MEDIA]]) + autoMatchMediaFromReply (fallback quên marker) → chống
+// split-brain. item.all_images (list PATH) → N ảnh (cap); item chỉ url/path (không all_images)
+// → 1 MediaFile GIỮ url-only backward-compat (Codex: fallback all_images||[path] rớt url).
+function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile[] {
+  if (item.all_images && item.all_images.length) {
+    const capped = item.all_images.slice(0, MEDIA_MAX_PER_MARKER);
+    if (item.all_images.length > MEDIA_MAX_PER_MARKER) {
+      console.log(`[Router/media] capped ${item.all_images.length}→${MEDIA_MAX_PER_MARKER} images for id=${item.id}`);
+    }
+    return capped.map((p) => ({
+      path: p,
+      mimeType: mimeFromExt(p) || item.mimeType,
+      filename: item.name,
+      caption: item.description,
+    }));
+  }
+  return [{
+    url: item.url || undefined,
+    path: item.path || undefined,
+    mimeType: item.mimeType,
+    filename: item.name,
+    caption: item.description,
+  }];
+}
+
+/**
+ * FALLBACK auto-media (2026-07-01): agy/Gemini Flash hay HỨA gửi ảnh trong prose
+ * ("Em gửi bạn xem hình ảnh…") mà KHÔNG emit `[[SEND_MEDIA: id]]` → khách không
+ * nhận ảnh, agent tưởng đã gửi (silent). Khi reply hứa media + 0 marker → match
+ * media theo TÊN sản phẩm/set (tag danh-tính) xuất hiện trong reply → đính kèm.
+ * Precise: chỉ match tag ≥6 ký tự, không generic; cap tổng MEDIA_MAX_PER_MARKER.
+ */
+function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaFile[] {
+  if (!lib?.items?.length || !text) return [];
+  const PROMISE_RE = /(g[uử]i|xem|đính\s*kèm|k[eè]m)[\s\S]{0,30}(h[ìi]nh|ảnh|photo|catalog|b[ải]ng\s*gi[áa]|file)/i;
+  if (!PROMISE_RE.test(text)) return [];
+
+  const norm = stripAccentsLower(text);
+  const scored: { item: MediaLibrary['items'][number]; keyLen: number }[] = [];
+  for (const it of lib.items) {
+    let best = 0;
+    for (const tag of it.tags || []) {
+      if (GENERIC_MEDIA_TAGS.has(tag)) continue;
+      const phrase = stripAccentsLower(tag.replace(/_/g, ' ').trim());
+      if (phrase.length >= 6 && norm.includes(phrase)) best = Math.max(best, phrase.length);
+    }
+    if (best > 0) scored.push({ item: it, keyLen: best });
+  }
+  scored.sort((a, b) => b.keyLen - a.keyLen); // ưu tiên khớp cụ thể nhất
+  const picked: MediaFile[] = [];
+  const seen = new Set<string>();
+  for (const s of scored) {
+    if (seen.has(s.item.id)) continue;
+    seen.add(s.item.id);
+    picked.push(...itemToMediaFiles(s.item)); // multi-ảnh: item → N MediaFile (helper chung)
+    if (picked.length >= MEDIA_MAX_PER_MARKER) break; // cap TỔNG media, KHÔNG phải số item (Codex R2)
+  }
+  return picked.slice(0, MEDIA_MAX_PER_MARKER); // item cuối có thể đẩy vượt → cắt tổng
+}
+
+/**
+ * Strip INTERNAL agent markers (e.g. `[[CALL: crm_update(...)]]`) from a reply while
+ * PRESERVING the two markers the pipeline consumes (`[[SEND_MEDIA:...]]`, `[[MSG_BREAK]]`)
+ * AND genuine customer double-brackets (`[[bao nhiêu]]`, `[[3,4]]`). Must run on the
+ * WHOLE text BEFORE the MSG_BREAK split so a marker can't be severed across chunks and
+ * leak its tail — that severing was the root cause of the `..., lifecycle_stage="consideration")]]`
+ * leak (2026-07-10 fix, Codex-reviewed). NOT a blanket `[[...]]` strip.
+ */
+export function stripInternalMarkers(text: string): string {
+  return text.replace(/\[\[[\s\S]*?\]\]/g, (m) => {
+    if (/\bSEND_MEDIA\b/i.test(m) || /\bMSG_BREAK\b/i.test(m)) return m; // preserve real markers
+    const markerLike =
+      /\[\[\s*(CALL|FUNCTION|TOOL|TICKET|QUERY|API|MCP[_A-Z]*|SET_STAGE|CRM_UPDATE|UPDATE|ESCALATE)\b/i.test(m) ||
+      /\[\[\s*[A-Z_]{3,}\s*:/.test(m) ||          // uppercase keyword + colon (invented markers)
+      /[a-z_]+\s*=\s*"[^"]*"/i.test(m);           // key="value" args (CALL-style)
+    return markerLike ? '' : m;                    // keep genuine customer [[...]]
+  });
+}
+
+/**
+ * Defensive cleanup for an ORPHANED marker fragment left when a marker was severed
+ * before this ran (e.g. a leading `..., key="val")]]` tail, or a trailing unclosed
+ * `[[CALL ...`). BOUNDED — only marker-like fragments; never a blanket `]]` / `[[`
+ * removal, so ordinary customer text (`mảng [1,2]`, a stray `]]`) survives.
+ */
+function stripOrphanMarkerFragments(text: string): string {
+  return text
+    // leading severed CALL-arg tail: `[…]key="value"[)]]]` at the start of a line/chunk
+    .replace(/^\s*[^\n[]*?[a-z_]+\s*=\s*"[^"]*"\s*\)?\s*\]\]/gim, '')
+    // trailing unclosed internal marker opener (not SEND_MEDIA/MSG_BREAK)
+    .replace(/\[\[\s*(?!SEND_MEDIA|MSG_BREAK)(?:CALL|FUNCTION|TOOL|TICKET|QUERY|API|MCP[_A-Z]*|[A-Z_]{3,}\s*:)[^\]]*$/g, '')
+    .trim();
+}
+
 async function parseMediaMarkers(
   text: string,
   lib: MediaLibrary | null,
 ): Promise<{ cleanedText: string; media: MediaFile[]; chunks: MessageChunk[] }> {
   if (!text) return { cleanedText: text, media: [], chunks: [{ text }] };
 
-  // ── Step 1: Split on [[MSG_BREAK]] BEFORE any other marker processing ──
-  // This must run first so that media markers stay with their chunk.
+  // ── Step 0 (2026-07-10): strip internal markers on the WHOLE text FIRST ──
+  // Removing full `[[CALL: ...]]` markers before the MSG_BREAK split prevents a
+  // marker from being severed across chunks (root cause of the leaked tail).
+  // Genuine customer [[...]] and the SEND_MEDIA/MSG_BREAK markers are preserved.
+  const preSplit = stripInternalMarkers(text);
+
+  // ── Step 1: Split on [[MSG_BREAK]] ──
+  // Media markers stay with their chunk.
   const MSG_BREAK_RE = /\[\[\s*MSG_BREAK\s*\]\]/gi;
-  const rawChunks = text.split(MSG_BREAK_RE);
+  const rawChunks = preSplit.split(MSG_BREAK_RE);
 
   const allMedia: MediaFile[] = [];
   const seenGlobal = new Set<string>();
@@ -1332,9 +1975,6 @@ async function parseMediaMarkers(
 
   // Match [[SEND_MEDIA: some_id]] (with or without spaces, case-insensitive)
   const SEND_MEDIA_RE = /\[\[\s*SEND_MEDIA\s*:\s*([a-zA-Z0-9_\-]+)\s*\]\]/gi;
-  // Anti-leak: strip ANY remaining [[...]] marker the LLM might have hallucinated
-  // (CALL, FUNCTION, TICKET, QUERY, etc.) so the user never sees raw syntax.
-  const HALLUCINATED_MARKER_RE = /\[\[[\s\S]*?\]\]/g;
 
   for (const rawChunk of rawChunks) {
     const chunkMedia: MediaFile[] = [];
@@ -1346,24 +1986,17 @@ async function parseMediaMarkers(
       const fullMatch = match[0];
       const id = match[1];
 
-      let mediaFile: MediaFile | null = null;
+      // Multi-ảnh (2026-07-16): 1 marker → N MediaFile (item.all_images) qua helper chung.
+      let mediaFiles: MediaFile[] = [];
 
       // 1. Local static library lookup
       if (lib) {
         const item = lib.items.find((x) => x.id === id);
-        if (item) {
-          mediaFile = {
-            url: item.url || undefined,
-            path: item.path || undefined,
-            mimeType: item.mimeType,
-            filename: item.name,
-            caption: item.description,
-          };
-        }
+        if (item) mediaFiles = itemToMediaFiles(item);
       }
 
-      // 2. Supabase DB lookup if UUID format
-      if (!mediaFile && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      // 2. Supabase DB lookup if UUID format (single asset — marketing_assets 1 file/id)
+      if (mediaFiles.length === 0 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
         try {
           const { data, error } = await supabase
             .from('marketing_assets')
@@ -1372,41 +2005,40 @@ async function parseMediaMarkers(
             .single();
 
           if (data && !error && data.file_path) {
-            mediaFile = {
+            mediaFiles = [{
               path: pathJoin(PROJECT_ROOT, data.file_path),
               mimeType: data.type === 'video' ? 'video/mp4' : (data.type === 'document' ? 'application/pdf' : 'image/jpeg'),
               filename: data.file_path.split('/').pop() || 'media',
               caption: [data.title, data.description].filter(Boolean).join('\n'),
-            };
+            }];
           }
         } catch (e) {
           console.error(`[Router/media] Supabase query failed for ${id}:`, e);
         }
       }
 
-      if (!mediaFile) {
+      if (mediaFiles.length === 0) {
         console.warn(`[Router/media] Marker [[SEND_MEDIA: ${id}]] — id not found in library or DB`);
         chunkText = chunkText.replace(fullMatch, '');
         continue;
       }
 
+      // Dedup theo id (1 marker = 1 set, kể cả agent emit id 2 lần) → push CẢ N ảnh.
       if (!seenGlobal.has(id)) {
         seenGlobal.add(id);
-        chunkMedia.push(mediaFile);
-        allMedia.push(mediaFile);
+        for (const mf of mediaFiles) { chunkMedia.push(mf); allMedia.push(mf); }
       }
 
       chunkText = chunkText.replace(fullMatch, '');
     }
 
-    // Step 2b: scrub any leftover hallucinated markers
-    const leakedMarkers = chunkText.match(HALLUCINATED_MARKER_RE);
-    if (leakedMarkers && leakedMarkers.length > 0) {
-      console.warn(
-        `[Router/media] Stripped ${leakedMarkers.length} hallucinated markers: `
-          + leakedMarkers.map((m) => m.substring(0, 60)).join(' | '),
-      );
-      chunkText = chunkText.replace(HALLUCINATED_MARKER_RE, '');
+    // Step 2b: defensive orphan-fragment cleanup (BOUNDED — internal markers were
+    // already stripped whole at Step 0, so this only catches a severed tail that
+    // somehow survived; it never blanket-strips [[...]] or ]] from customer text).
+    const before = chunkText;
+    chunkText = stripOrphanMarkerFragments(chunkText);
+    if (before !== chunkText) {
+      console.warn(`[Router/media] Stripped orphan marker fragment from chunk`);
     }
 
     // Step 2c: tidy whitespace
@@ -1431,6 +2063,21 @@ async function parseMediaMarkers(
   // return at least one empty chunk so consumer.ts has something to send.
   if (chunks.length === 0) {
     chunks.push({ text: '' });
+  }
+
+  // ── FALLBACK auto-media: agent hứa gửi ảnh trong prose nhưng KHÔNG emit marker
+  // (agy/Gemini Flash hay quên) → match media theo tên sản phẩm/set → đính kèm.
+  // Logged (KHÔNG silent) để verify được. Chỉ chạy khi 0 marker nào resolve.
+  if (allMedia.length === 0) {
+    const auto = autoMatchMediaFromReply(text, lib);
+    if (auto.length > 0) {
+      console.log(
+        `[Router/media] FALLBACK auto-attached ${auto.length} media (agent hứa ảnh nhưng KHÔNG emit marker): ${auto.map((m) => m.filename).join(', ')}`,
+      );
+      for (const m of auto) allMedia.push(m);
+      const lastChunk = [...chunks].reverse().find((c) => c.text) || chunks[chunks.length - 1];
+      if (lastChunk) lastChunk.media = [...(lastChunk.media || []), ...auto];
+    }
   }
 
   // Backward-compat: cleanedText is the chunks joined by double newlines.
@@ -1490,7 +2137,96 @@ function buildProviderOverride(agentSlug: string, mediaLib: MediaLibrary | null)
  *
  * Returns the cleaned reply text (without markers, safe to send to customer).
  */
-async function postProcessReply(
+// Trailing self-narration / task-completion leak (2026-06-29). Anchors are tokens that
+// NEVER appear in a real Vietnamese customer reply — internal file paths or operator-facing
+// self-report phrasings (the project CLAUDE.md "Task Completion Protocol" leaking through a
+// provider=claude agent). Used BOTH to strip the block (scrubBannedPhrases Rule 8b) and to
+// classify a fully-collapsed reply as benign-silent vs corrupted-escalate (postProcessReply).
+// No `g` flag → safe for repeated `.test()`.
+const SELF_NARRATION_LEAK_RE =
+  /(?:^|\n)[ \t]*[^\n]*?(?:today\.md|docs\/tasksdone|tasksdone|MEMORY\.md|memory\/|evolution-log|active-tasks|CLAUDE\.md|đã đọc xong bối cảnh|soạn (?:lại\s+)?(?:tin nhắn|tin)\s+(?:phản hồi|gửi)|log tiến độ|tạo báo cáo\s+(?:trong|vào))[\s\S]*$/i;
+
+// ── Operator-report leak detector (incident 2026-08-11, gem-master Tarot) ────
+// agy obeyed the GLOBAL dev rules (~/.gemini SPEC-LOCK: "print the GIAO KÈO
+// table BEFORE working" + "em-chị" reporting tone) inside a customer-reply
+// session and sent the customer a full compliance report addressed to the
+// operator — the real reply buried in the middle. Detection is STRUCTURAL /
+// mechanical first (markdown tables, absolute paths, owner identifiers, UUIDs),
+// vocabulary second: the leak vocabulary is open-ended because the rule files
+// keep evolving, so single keywords can never be the primary axis.
+//
+// Corpus-checked 2026-08-11 against ALL history (882 channel_sent_messages +
+// 253 cskh assistant rows): 0 false positives on every axis below AFTER masking
+// media markers + URLs (legit replies carry [[SEND_MEDIA: C:/...]] local paths
+// and supabase-storage URLs containing the project ref + UUIDs — mask them
+// before testing, or attachments would refuse-loop).
+//
+// NO salvage by design (2026-08-01 agent-trace lesson: never salvage a
+// corrupted output — the "clean part" of a report can still carry sensitive
+// prose that matches no marker). Refuse whole + escalate.
+// Plan: crypto docs/plans_reports/2026-08-11-GEM-MASTER-INTERNAL-THOUGHT-LEAK_ARCHITECTURE_PLAN.md
+const OPREPORT_STRONG_RES: Array<[string, RegExp]> = [
+  ['spec_table', /\|\s*#\s*\|\s*Ràng buộc\s*\||RULE\[user_global\]|agy_reply_[\w-]+\.md|BẢNG GIAO KÈO SPEC-LOCK|ĐO-GATE NGHIỆM THU/i],
+  // Absolute Windows paths / dotdirs / repo-relative internal paths never belong in a customer chat.
+  ['pathy', /[A-Za-z]:[\\/]Users[\\/]|~[\\/]\.(?:gemini|claude)\b|(?:^|\s)(?:memory|docs|scripts|skills-store)[\\/][\w./-]{3,}/m],
+  // Owner identifiers (Telegram chat_id, admin emails, supabase project ref, TG handle).
+  ['owner_id', /6486938519|baobao_lawbewbew|jenniechu68@|maow390@|pgfkbcnzqozzkohwbgbk/i],
+  // Raw UUIDs (session/user/run ids) — legit ones only ever appear inside URLs, which are masked.
+  ['uuid', /\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/i],
+];
+// Customer replies are plain text by contract (buildProviderOverride: "TEXT THUẦN,
+// không markdown") — ≥2 pipe-table lines is a report table of ANY vocabulary.
+const OPREPORT_MDTABLE_RE = /^[ \t]*\|.*\|[^\n]*\n[ \t]*\|.*\|/m;
+const OPREPORT_WEAK_RES: RegExp[] = [/SPEC-LOCK/i, /ĐO[- ]GATE/i, /GIAO KÈO/i];
+// Pre-scrub reality: the operator greeting reads "chị Jennie" here (scrubBannedPhrases
+// rewrites it to "team chuyên môn cấp cao" LATER), so match both forms.
+const OPREPORT_ADDR_RE =
+  /Em chào\s+(?:chị\s+Jennie|team)\b|(?:gửi|trình|báo cáo)\s+(?:chị|team)[^\n]{0,40}(?:duyệt|kiểm tra|xem lại)|Chị xem[^\n]{0,60}giúp em/i;
+// Behavioral pair — self-narrated process + operator-facing deliverable framing.
+// Both must hit: a bot never tells the CUSTOMER it is handing content to someone else.
+const OPREPORT_PROCESS_RE =
+  /\b(?:em|mình)\s+(?:đã|vừa|sẽ)\s+(?:kiểm tra|rà(?:\s*soát)?|đo|chạy|verify|đối chiếu|hoàn thành|làm xong)\b/i;
+const OPREPORT_METADELIV_RE =
+  /(?:gửi|trình|nhờ)\s+(?:chị|anh|team)\b[^\n]{0,40}(?:nội dung|tin nhắn|kết quả|bảng|duyệt)|nội dung\s+(?:trả lời|gửi)\s+(?:cho\s+)?khách|đủ\s+\d+\s+(?:ràng buộc|yêu cầu|tiêu chí|bước)/i;
+
+/**
+ * Returns the matched-axis label when `reply` looks like an internal
+ * operator-report leak, or null when clean. Exported for unit tests and for the
+ * antigravity envelope extractor (which prefers the last NON-leaky envelope).
+ */
+export function detectOperatorReportLeak(reply: string): string | null {
+  if (!reply) return null;
+  // NFC-normalize (NFD output would dodge the Vietnamese patterns), then mask
+  // the two legit carriers of paths/UUIDs: media/escalate markers + URLs.
+  const masked = reply
+    .normalize('NFC')
+    .replace(/\[\[\s*(?:SEND_MEDIA|ESCALATE)[\s\S]*?\]\]/gi, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ');
+  for (const [label, re] of OPREPORT_STRONG_RES) {
+    if (re.test(masked)) return label;
+  }
+  if (OPREPORT_MDTABLE_RE.test(masked)) return 'md_table';
+  // Count NON-OVERLAPPING weak spans ("BẢNG GIAO KÈO" must not double-count as
+  // two distinct hits through nested patterns — that is why the list holds only
+  // disjoint tokens).
+  const weakSpans: Array<[number, number]> = [];
+  for (const re of OPREPORT_WEAK_RES) {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+    for (const m of masked.matchAll(g)) {
+      const start = m.index ?? 0;
+      const end = start + m[0].length;
+      if (!weakSpans.some(([s, e]) => start < e && end > s)) weakSpans.push([start, end]);
+    }
+  }
+  const weak = weakSpans.length;
+  if (weak >= 2) return 'weak_x2';
+  if (weak >= 1 && masked.length > 1500) return 'weak_long';
+  if (weak >= 1 && OPREPORT_ADDR_RE.test(masked)) return 'weak_addr';
+  if (OPREPORT_PROCESS_RE.test(masked) && OPREPORT_METADELIV_RE.test(masked)) return 'process_meta';
+  return null;
+}
+
+export async function postProcessReply(
   reply: string,
   config: AgentConfig,
   mediaLib: MediaLibrary | null,
@@ -1509,7 +2245,115 @@ async function postProcessReply(
     return 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
   }
 
+  // ── Final defense: refuse Antigravity/Gemini function-call TRACE leak (incident
+  // 2026-08-01, cskh-shopify: customer Hồ Thị Mỹ Huệ received the agent's raw brain
+  // transcript — `default_api:run_command{CommandLine:python "...antigravity-cli\\brain
+  // \\...\\inspect_tables.py",...ExitCode:0,Output:=== GET SCHEMA DEFINITIONS ===...task-36}`
+  // — prepended to the real reply). The model serialized an internal tool-call turn as
+  // TEXT instead of executing it, and the antigravity reply-extractor (brain transcript
+  // turnMarker) pulled the whole transcript. These tokens NEVER appear in a real
+  // Vietnamese customer reply. Do NOT salvage the "clean" tail — a bled transcript can
+  // carry another customer's data (task-36 referenced a different order). Refuse the whole
+  // reply, hand off, and escalate so the session pauses (the agent is malfunctioning and
+  // would re-leak on the next turn). Distinct from jsonlLeakRegex (raw JSONL stream) and
+  // SELF_NARRATION_LEAK_RE (CLAUDE.md protocol leak on provider=claude).
+  const agentTraceLeakRegex =
+    /default_api\s*:\s*\w+\s*\{|run_command\s*\{|antigravity-cli[\\/]+brain|ExitCode\s*:\s*-?\d|=== GET SCHEMA DEFINITIONS ===/i;
+  if (agentTraceLeakRegex.test(reply)) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: postProcessReply REFUSED agent-trace leak `
+        + `(${reply.length} chars). Suppressing + escalating. `
+        + `Head: ${JSON.stringify(reply.slice(0, 300))}`,
+    );
+    (config as any)._escalation = {
+      reason: 'agent_output_corrupted',
+      priority: 'high',
+      summary: 'Bot rò rỉ trace nội bộ (default_api / run_command / brain transcript) — đã chặn gửi, cần người tiếp quản.',
+    };
+    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+  }
+
   let cleaned = scrubBannedPhrases(reply, config.slug);
+
+  // ── Collapse guard: scrub nuked ALL real content (incident 2026-06-10) ──
+  // When the agent leaks Claude-Code explanatory output (★ Insight blocks, **bold**,
+  // bullets) the defense-in-depth scrub above can strip the ENTIRE reply down to
+  // stray punctuation — observed: a lone backtick `` ` `` reaching the customer for
+  // turn after turn. NEVER send that. Suppress the garbage with a safe handoff line
+  // AND escalate so the session pauses (bot_paused) + a ticket fires + CS is pinged;
+  // otherwise the next customer message re-triggers the same broken agent.
+  const hasLetters = (s: string) => /[\p{L}\p{N}]/u.test(s);
+
+  // ── Self-narration collapse → SILENT skip (2026-06-29) ──
+  // When the agent's ENTIRE reply was internal task-completion narration (CLAUDE.md
+  // protocol leak: "*** Em đã đọc xong bối cảnh ... log tiến độ vào today.md và tạo báo
+  // cáo trong docs/tasksdone rồi ạ"), Rule 8 strips it to empty. The agent simply had
+  // NOTHING to say to the customer — this is NOT a malfunction needing a human. Send
+  // nothing (return '' → consumer stays silent), do NOT escalate, do NOT send a handoff.
+  // Must run BEFORE the generic collapse guard below (which would otherwise escalate).
+  if (hasLetters(reply) && !hasLetters(cleaned) && SELF_NARRATION_LEAK_RE.test(reply)) {
+    console.warn(
+      `[Router/${config.provider}] ${config.slug}: reply was pure self-narration `
+        + `(${reply.length} chars) — staying SILENT (skipped, no send, no escalation). `
+        + `Head: ${JSON.stringify(reply.slice(0, 200))}`,
+    );
+    return '';
+  }
+
+  if (hasLetters(reply) && !hasLetters(cleaned)) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: scrub COLLAPSED reply to no-content `
+        + `(${reply.length}→${cleaned.trim().length} chars). Suppressing + escalating. `
+        + `Original head: ${JSON.stringify(reply.slice(0, 300))}`,
+    );
+    (config as any)._escalation = {
+      reason: 'agent_output_corrupted',
+      priority: 'high',
+      summary: 'Bot trả lời lỗi định dạng (rò rỉ output-style nội bộ) — đã chặn gửi, cần người tiếp quản.',
+    };
+    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+  }
+
+  // ── Final defense: refuse operator-report leak (incident 2026-08-11) ──
+  // See detectOperatorReportLeak above. Tests the PRE-scrub `reply` (the
+  // operator greeting still reads "chị Jennie" here; scrub already rewrote
+  // `cleaned`). Runs AFTER the self-narration silent-skip + collapse guards on
+  // purpose: a pure-narration reply must stay silently skipped (2026-06-29
+  // design), not converted into a handoff. Whole-reply refuse, no salvage. The
+  // guard must never take the channel down: internal error → treat as clean.
+  let opReportAxis: string | null = null;
+  try {
+    opReportAxis = detectOperatorReportLeak(reply);
+  } catch (guardErr) {
+    console.error(`[Router/${config.provider}] ${config.slug}: operator-report guard errored (treating as clean)`, guardErr);
+  }
+  if (opReportAxis) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: postProcessReply REFUSED operator-report leak `
+        + `(axis=${opReportAxis}, ${reply.length} chars). Suppressing + escalating. `
+        + `Head: ${JSON.stringify(reply.slice(0, 300))}`,
+    );
+    (config as any)._escalation = {
+      reason: 'agent_output_corrupted',
+      priority: 'high',
+      summary: `Bot lộ báo cáo nội bộ (operator-report leak, axis=${opReportAxis}) — đã chặn gửi, cần người kiểm tra.`,
+    };
+    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+  }
+
+  // Parse + strip [[ESCALATE: ...]] FIRST and stash the intent on config so the
+  // consumer can fire handleEscalation (ticket + bot_paused + CS Telegram ping).
+  // Previously this marker was never parsed here → escalation never fired
+  // (crm_tickets stayed empty; agent "promised" escalation but did nothing).
+  const escParsed = parseEscalationMarker(cleaned);
+  cleaned = escParsed.cleanedText;
+  if (escParsed.escalation) {
+    (config as any)._escalation = escParsed.escalation;
+    console.log(
+      `[Router/${config.provider}] ${config.slug}: ESCALATE parsed `
+        + `(reason=${escParsed.escalation.reason}, priority=${escParsed.escalation.priority})`,
+    );
+  }
 
   const mediaParsed = await parseMediaMarkers(cleaned, mediaLib);
   cleaned = mediaParsed.cleanedText;
@@ -1556,6 +2400,7 @@ const ESCALATION_REASON_WHITELIST = new Set([
   'prolonged_frustration',
   'compliance_request',
   'ceo_request',
+  'agent_output_corrupted',
 ]);
 
 /**
@@ -1580,7 +2425,7 @@ const ESCALATION_REASON_WHITELIST = new Set([
  *
  * Logs a warning when a violation is scrubbed so we can audit prompt drift.
  */
-function scrubBannedPhrases(text: string, agentSlug: string): string {
+export function scrubBannedPhrases(text: string, agentSlug: string): string {
   if (!text) return text;
   let scrubbed = text;
   const violations: string[] = [];
@@ -1613,10 +2458,26 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
   // Catches: [MCP_xxx], [CALL: ...], [TOOL: ...], [FUNCTION: ...], [DEBUG: ...]
   // EXCLUDED: SEND_MEDIA, MSG_BREAK, STAGE, ESCALATE — those are real markers
   // parsed downstream by parseMediaMarkers / parseStageMarker / parseEscalationMarker.
-  const toolMarkerRe = /\[{1,2}\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\]]*\]{1,2}/gi;
+  // P18 fix (2026-07-16): form [[...]] phải match tới ]] ĐÓNG (nhánh double-bracket lazy
+  // [\s\S]*?\]\]) — KHÔNG dùng [^\]]* (dừng ở ] lồng trong args như JSON array tags=["a","b"]
+  // hoặc ngoặc khách echo → CẮT marker, leak đuôi `..., key="v")]]`). Nhánh single [TOOL:...]
+  // dùng [^\][]* (loại cả [ và ]) để không nuốt bracket khách. SEND_MEDIA/MSG_BREAK không nằm
+  // trong keyword list → vẫn preserve (parseMediaMarkers xử downstream). Verified 9/9 test.
+  const toolMarkerRe = /\[\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*[\s\S]*?\]\]|\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\][]*\]/gi;
   if (toolMarkerRe.test(scrubbed)) {
     violations.push('tool_markers');
-    scrubbed = scrubbed.replace(/\[{1,2}\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\]]*\]{1,2}/gi, '');
+    scrubbed = scrubbed.replace(/\[\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*[\s\S]*?\]\]|\[\s*(?:MCP|CALL|TOOL|FUNCTION|BROWSE|SEARCH|UPDATE|INSERT|DELETE|QUERY|FETCH|API|RPC|LOG|DEBUG)[_A-Z0-9]*\s*[:=]?[^\][]*\]/gi, '');
+  }
+
+  // Rule 3c: Strip reply-envelope + reply-channel sentinel tokens (2026-08-11).
+  // [[REPLY]]/[[/REPLY]] is the antigravity reply contract and
+  // [PAPERCLIP_REPLY_CHANNEL] is the rule-file gate sentinel — a model echoing
+  // either must never reach the customer, and an echo is NOT a leak by itself
+  // (do not refuse on it — just strip).
+  const envelopeTokenRe = /\[\[\s*\/?\s*REPLY\s*\]\]|\[PAPERCLIP_REPLY_CHANNEL\]/gi;
+  if (envelopeTokenRe.test(scrubbed)) {
+    violations.push('envelope_tokens');
+    scrubbed = scrubbed.replace(/\[\[\s*\/?\s*REPLY\s*\]\]|\[PAPERCLIP_REPLY_CHANNEL\]/gi, '');
   }
 
   // Rule 4: Strip ALL special formatting characters (★, •, **, ##, etc.)
@@ -1636,11 +2497,17 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     scrubbed = scrubbed.replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1');
   }
 
-  // Rule 4: Strip "Insight" sections entirely (Claude Code output style leak)
-  if (/Insight/i.test(scrubbed)) {
+  // Rule 4: Strip Claude-Code "★ Insight ───…" fenced blocks (output-style leak).
+  // BOUNDED to the box-drawing/dash fence so a stray word "insight" in normal prose
+  // does NOT nuke everything to end-of-reply (the 2026-06-10 backtick incident: the
+  // old `Insight[\s\S]*$` deleted from the first "Insight" to the very end). Require
+  // a fence of ≥2 rule chars after the header, then lazily stop at the closing fence
+  // / blank line / end. If a leak slips past this, the collapse guard in
+  // postProcessReply catches the all-content-stripped result.
+  const insightBlockRe = /[-★•]?\s*Insight[ \t]*[─━—–=_-]{2,}[\s\S]*?(?:[─━—–=_-]{2,}|\n\s*\n|$)/gi;
+  if (insightBlockRe.test(scrubbed)) {
     violations.push('insight_section');
-    // Remove from "Insight" to end, or just the line
-    scrubbed = scrubbed.replace(/[-★•]?\s*Insight[\s\S]*$/gi, '');
+    scrubbed = scrubbed.replace(insightBlockRe, '');
   }
 
   // Rule 5: Strip internal system mentions (CRM, tracking, database, etc.)
@@ -1656,6 +2523,80 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
     }
   }
 
+  // Rule 6: Strip code fences / stray backticks (2026-06-10 backtick-leak class).
+  // outputStyle:default (--settings) prevents the source, but defense-in-depth at the
+  // router per BUG-022+026 (enforce customer-facing rules at ROUTER, not just prompt —
+  // the small reply model ignores prompt bans). Vietnamese customer chat never uses
+  // backticks, so dropping fences + leftover backticks is safe.
+  if (/`/.test(scrubbed)) {
+    violations.push('code_fence_or_backtick');
+    scrubbed = scrubbed
+      .replace(/```[a-zA-Z0-9]*\n?/g, '') // ```lang opening + ``` closing fences
+      .replace(/`+/g, '');                // any remaining lone/inline backticks
+  }
+
+  // Rule 7: Strip meta-label prefix the LLM sometimes prepends ("Reply gửi chị X:",
+  // "Trả lời:", "Tin nhắn:", "Phản hồi:") — these address the operator, not the
+  // customer, and must never reach the chat (2026-06-11 "Reply gửi chị Trang:" leak).
+  const metaLabelRe = /^\s*(?:reply(?:\s+g[uưử]i[^\n:]*)?|trả\s*lời|tin\s*nhắn|phản\s*hồi|message|response)\s*:\s*/i;
+  if (metaLabelRe.test(scrubbed)) {
+    violations.push('meta_label_prefix');
+    scrubbed = scrubbed.replace(metaLabelRe, '');
+  }
+
+  // Rule 8: Strip agent self-narration / task-completion meta block (2026-06-29).
+  // Provider=claude agents inherit the project CLAUDE.md "Task Completion Protocol"
+  // and sometimes append a self-report to the customer after a *** / --- rule, e.g.:
+  //   "*** Em đã đọc xong bối cảnh, soạn tin nhắn phản hồi chị X... đồng thời log tiến
+  //    độ vào today.md và tạo báo cáo trong docs/tasksdone rồi ạ."
+  // This narrates the agent's OWN dev work and must never reach the customer.
+  // 8a: drop standalone markdown horizontal rules (***, ---, ___ on their own line).
+  if (/^[ \t]*([*_-])\1{2,}[ \t]*$/m.test(scrubbed)) {
+    violations.push('hr_separator');
+    scrubbed = scrubbed.replace(/^[ \t]*([*_-])\1{2,}[ \t]*$/gm, '');
+  }
+  // 8b: cut a trailing self-narration block from the first line carrying an internal
+  // dev-artifact signal to end. Anchors are tokens that NEVER appear in a real Vietnamese
+  // customer reply (file paths today.md/docs/tasksdone/MEMORY.md/memory//evolution-log/
+  // active-tasks/CLAUDE.md) or operator-facing self-report phrasings ("đã đọc xong bối
+  // cảnh", "soạn tin nhắn/lại … phản hồi/gửi", "log tiến độ", "tạo báo cáo trong/vào") →
+  // cut-to-end is safe (unlike the 2026-06-10 generic Insight bug, these anchors ARE the leak).
+  if (SELF_NARRATION_LEAK_RE.test(scrubbed)) {
+    violations.push('self_narration_leak');
+    scrubbed = scrubbed.replace(SELF_NARRATION_LEAK_RE, '');
+  }
+
+  // Rule 9: Strip agentic task-runner execution log leaked as a PREFIX (2026-07-01).
+  // Antigravity/agy (and any tool-running provider) can echo its own task trace BEFORE the
+  // real customer reply, e.g.:
+  //   "Task completed: python -c "import os; ... os.walk('.') ...".
+  //    Task logs:
+  //    .\backups\memory\sops\REF-PRODUCT-CATALOG_stale_...md
+  //    .\memory\sops\REF-PRODUCT-CATALOG.md
+  //
+  //    Dạ set Dạ Kim Tụ ..."   <-- the actual reply follows a blank line.
+  // Unlike Rule 8 (cut-to-END), this leak is a PREFIX with the real reply AFTER it, so we cut
+  // from the "Task completed:"/"Task logs:" header lazily to the FIRST blank line (or end) and
+  // KEEP everything after. Anchors are the runner's own labels, never present in customer prose.
+  const taskLogLeakRe = /(?:^|\n)[ \t]*(?:Task completed:|Task logs:)[\s\S]*?(?:\n[ \t]*\n|$)/gi;
+  if (taskLogLeakRe.test(scrubbed)) {
+    violations.push('task_log_leak');
+    scrubbed = scrubbed.replace(taskLogLeakRe, '\n');
+  }
+
+  // Rule 10: Strip English agent-action self-narration leaked as a PREFIX (2026-07-01).
+  // When agy backgrounds a long tool/CLI call it narrates its plan in ENGLISH before the real
+  // Vietnamese reply, e.g. "I will wait for the background search task to complete to check if
+  // there are any ... stored in the project's standard operations procedures (SOPs)." The bot
+  // replies 100% Vietnamese, so a leading English first-person action-narration line is always a
+  // leak. Anchor = English first-person opener (I will/I'm/Let me/…) + a task/search/SOP/project
+  // keyword, cut to the first blank line (or next Vietnamese "Dạ"/capitalised line), keep reply.
+  const enNarrationRe = /(?:^|\n)[ \t]*(?:I(?:['’]ll|['’]m|\s+will|\s+am|\s+need\s+to|\s+have\s+to|\s+should|\s+can)|Let\s+me|Please\s+(?:wait|hold|allow)|Give\s+me\s+a\s+moment|Hold\s+on)\b[^\n]*?(?:background|task|search|SOP|procedure|project|check|look\s*up|wait|complete|stored|retriev|verif|fetch)[^\n]*(?:\n[ \t]*\n|\n(?=D[aạ]\b)|$)/gi;
+  if (enNarrationRe.test(scrubbed)) {
+    violations.push('en_action_narration');
+    scrubbed = scrubbed.replace(enNarrationRe, '\n');
+  }
+
   // Cleanup: remove multiple consecutive newlines
   scrubbed = scrubbed.replace(/\n{3,}/g, '\n\n').trim();
 
@@ -1667,7 +2608,7 @@ function scrubBannedPhrases(text: string, agentSlug: string): string {
   return scrubbed;
 }
 
-function parseEscalationMarker(
+export function parseEscalationMarker(
   text: string,
 ): { cleanedText: string; escalation: EscalationIntent | null } {
   if (!text) return { cleanedText: text, escalation: null };
@@ -1788,7 +2729,9 @@ async function runViaNvidiaNim(
   systemPrompt: string,
   history: SessionMessage[],
   message: string,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new AgentAbortedError();
   const apiKey = process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -1990,20 +2933,52 @@ async function buildSystemPrompt(
   const projectsFilePath = pathResolve(projectRoot, 'memory', 'projects.md');
   tryLoad(projectsFilePath, 'DỰ ÁN ĐANG CHẠY');
 
-  // 3. Relevant SOPs
+  // 3. Relevant SOPs — walk memory/sops RECURSIVELY. Since the 2026-07 reorg the SOP files
+  // live in categorized subdirs (DOC-HTML/, Other_Docs/, SOP_social_media_and_ads/, …) so the
+  // old top-level-only readdirSync found NOTHING (365 SOPs sit in subdirs, only 5 at top level).
+  // Gate on memory/INDEX.md mentioning the slug (opt-in, avoids over-broad slugKey matches like
+  // "gem"), then inline .md files whose name carries the agent's slug-prefix.
   const sopsDir = pathResolve(projectRoot, 'memory', 'sops');
   if (existsSync(sopsDir)) {
     try {
-      const sopFiles = readFileSync(pathResolve(sopsDir, '..', 'INDEX.md'), 'utf-8');
-      // Only include SOPs if index mentions this agent's slug
-      if (sopFiles.toLowerCase().includes(config.slug)) {
-        for (const f of readdirSync(sopsDir)) {
-          if (f.endsWith('.md') && f.toLowerCase().includes(config.slug.split('-')[0])) {
-            tryLoad(pathResolve(sopsDir, f), `SOP: ${f}`);
+      const sopIndexPath = pathResolve(sopsDir, '..', 'INDEX.md');
+      const sopIndex = existsSync(sopIndexPath)
+        ? readFileSync(sopIndexPath, 'utf-8').toLowerCase()
+        : '';
+      if (sopIndex.includes(config.slug)) {
+        const slugKey = config.slug.split('-')[0].toLowerCase();
+        const walkSops = (dir: string): void => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const full = pathResolve(dir, entry.name);
+            if (entry.isDirectory()) walkSops(full);
+            else if (entry.name.endsWith('.md') && entry.name.toLowerCase().includes(slugKey)) {
+              tryLoad(full, `SOP: ${entry.name}`);
+            }
+          }
+        };
+        walkSops(sopsDir);
+      }
+    } catch { /* skip */ }
+  }
+
+  // 3b. Always-inline curated reference files (per-agent manifest agents/<slug>/sop/_INLINE.json).
+  // Ensures key SSOT refs (pricing catalog, crystal-consult, CS cases) are IN-PROMPT so the reply
+  // agent never filesystem-searches (os.walk) to locate them — a search that can surface a STALE
+  // backup copy and quote/leak outdated data. See CSKH_SUPPORT_SYSTEM_SSOT §11 + chatbot-doctor.
+  // Paths are PROJECT_ROOT-relative to the REAL files (NOT the agents/<slug>/sop/ symlinks —
+  // those MSYS-style symlinks are unreadable by Node's fs on Windows: realpathSync → ENOENT).
+  const inlineManifest = pathResolve(agentsDir, 'sop', '_INLINE.json');
+  if (existsSync(inlineManifest)) {
+    try {
+      const names = JSON.parse(readFileSync(inlineManifest, 'utf-8'));
+      if (Array.isArray(names)) {
+        for (const name of names) {
+          if (typeof name === 'string') {
+            tryLoad(pathResolve(projectRoot, name), `SSOT REF: ${name.split('/').pop()}`);
           }
         }
       }
-    } catch { /* skip */ }
+    } catch { /* skip malformed manifest */ }
   }
 
   // 4. System prompt from DB (additional instructions)

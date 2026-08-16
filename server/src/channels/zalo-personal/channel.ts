@@ -7,22 +7,44 @@ import { encryptCredentials, decryptCredentials } from './protocol/crypto.js';
 import { ZaloSession, ZaloCredentials } from './protocol/message.js';
 import { supabase } from './supabase.js';
 import { bus } from '../bus.js';
+import { deliverReplyOnce } from '../deliver-once.js';
+import { assertSent } from '../reply-contract.js';
 import type { OutboundMessage, MediaFile } from '../types.js';
+// SSOT resolve/download/isImage cho outbound media (dùng chung Zalo + CSKH). MEDIA_PROJECT_ROOT
+// giữ ở đây (buildOutboundMediaUrl + ALLOWED_MEDIA_ROOTS cần) — re-export từ media-util.
+import { MEDIA_PROJECT_ROOT, downloadMediaToTemp, isImageMedia } from '../media-util.js';
+import { markAlive } from '../../services/liveness-tracker.js';
 import https from 'https';
-import http from 'http';
-import { writeFileSync, mkdtempSync, rmSync, existsSync, statSync } from 'fs';
-import { join as pathJoin, basename as pathBasename, extname as pathExtname, isAbsolute as pathIsAbsolute, resolve as pathResolve } from 'path';
-import { tmpdir } from 'os';
-
-// Project root used to resolve relative media paths from agents/*/media-library.json.
-// Matches router.ts PROJECT_ROOT so relative paths like "memory/agents/shared/..."
-// resolve to the crypto-pattern-scanner tree where real assets live.
-const MEDIA_PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
+import { rmSync, existsSync, statSync } from 'fs';
+import { join as pathJoin, basename as pathBasename, isAbsolute as pathIsAbsolute, resolve as pathResolve, relative as pathRelative } from 'path';
 
 // Zalo hard limit on file/image uploads (enforced by tt-chatN-wpa.chat.zalo.me).
 // We check client-side so we can log a clear warning instead of the opaque
 // "File too large: N > 26214400" error bubbling up from the protocol layer.
 const ZALO_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
+
+// Roots cho phép serve ảnh outbound (giữ ĐỒNG BỘ với routes.ts ALLOWED_MEDIA_ROOTS).
+// media-library.json trỏ path hỗn hợp: project-relative + absolute content vault (D:).
+const ALLOWED_MEDIA_ROOTS = [
+  process.env.PROJECT_ROOT || MEDIA_PROJECT_ROOT,
+  process.env.CONTENT_LIBRARY_ROOT || 'D:/Claude Projects/App Content Jennie',
+].map((r) => pathResolve(r));
+
+/**
+ * Build a browser-servable URL cho ảnh outbound (media-library) để inbox hiển thị.
+ * Ảnh gửi khách = file LOCAL trên đĩa → browser không load path đĩa → trỏ qua
+ * endpoint `/api/channels/zalo-personal/media?path=<abs>`. Trả null nếu file NẰM
+ * NGOÀI mọi allowed root (vd temp upload /tmp) — endpoint chỉ serve trong whitelist.
+ */
+function buildOutboundMediaUrl(filePath: string): string | null {
+  const abs = pathIsAbsolute(filePath) ? filePath : pathResolve(MEDIA_PROJECT_ROOT, filePath);
+  const servable = ALLOWED_MEDIA_ROOTS.some((root) => {
+    const rel = pathRelative(root, abs);
+    return !!rel && !rel.startsWith('..') && !pathIsAbsolute(rel);
+  });
+  if (!servable) return null;
+  return `/api/channels/zalo-personal/media?path=${encodeURIComponent(abs.split('\\').join('/'))}`;
+}
 
 const MASTER_KEY = process.env.ZALO_ENCRYPTION_KEY || 'gemral-zalo-default-key-change-me';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8782931741:AAF6v6ju5N5qF2EWFIKZg_5HTNr9yOnsiQ0';
@@ -61,78 +83,6 @@ function sendTelegramAlert(text: string): void {
   req.end();
 }
 
-/**
- * Download a URL to a temp file and return the local path.
- * Provider-agnostic: used by the outbound handler to materialize media items
- * that only have a remote `url` (no local `path`) before calling sendImage/sendFile.
- *
- * Returns `null` on any failure (network, 4xx/5xx, etc.) so the caller can
- * fall back to URL-append-in-text without crashing.
- */
-async function downloadMediaToTemp(
-  url: string,
-  suggestedFilename?: string,
-): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const tmpDir = mkdtempSync(pathJoin(tmpdir(), 'paperclip-media-'));
-      const urlPath = (() => { try { return new URL(url).pathname; } catch { return url; } })();
-      const filename = suggestedFilename || pathBasename(urlPath) || `media${pathExtname(urlPath) || '.bin'}`;
-      const destPath = pathJoin(tmpDir, filename);
-
-      const client = url.startsWith('https:') ? https : http;
-      const req = client.get(url, (res) => {
-        // Follow single redirect
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          downloadMediaToTemp(res.headers.location, suggestedFilename).then(resolve);
-          res.resume();
-          return;
-        }
-        if (res.statusCode !== 200) {
-          console.warn(`[ZaloMedia] Download ${url} failed: HTTP ${res.statusCode}`);
-          res.resume();
-          resolve(null);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          try {
-            writeFileSync(destPath, Buffer.concat(chunks));
-            resolve(destPath);
-          } catch (err: any) {
-            console.warn(`[ZaloMedia] Write ${destPath} failed: ${err.message}`);
-            resolve(null);
-          }
-        });
-        res.on('error', (err) => {
-          console.warn(`[ZaloMedia] Stream ${url} error: ${err.message}`);
-          resolve(null);
-        });
-      });
-      req.on('error', (err) => {
-        console.warn(`[ZaloMedia] Request ${url} error: ${err.message}`);
-        resolve(null);
-      });
-      req.setTimeout(30_000, () => {
-        req.destroy(new Error('timeout'));
-      });
-    } catch (err: any) {
-      console.warn(`[ZaloMedia] downloadMediaToTemp threw: ${err.message}`);
-      resolve(null);
-    }
-  });
-}
-
-/**
- * Classify a media item as image vs file by mimeType.
- * Zalo sendImage uses a different endpoint than sendFile so we need to pick
- * the right one — only `image/*` mime types go through sendImage.
- */
-function isImageMedia(media: MediaFile): boolean {
-  return (media.mimeType || '').toLowerCase().startsWith('image/');
-}
-
 export class ZaloPersonalChannel {
   private session: ZaloSession | null = null;
   private listener: ZaloListener | null = null;
@@ -143,6 +93,9 @@ export class ZaloPersonalChannel {
   private _healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private _lastConnectedAt: Date | null = null;
   private _stopped = false; // true when stop() called explicitly — no reconnect
+  // Single stored reference to the bus 'outbound' listener so startListening()
+  // (which re-runs on every reconnect) doesn't stack duplicate listeners.
+  private _outboundHandler: ((msg: OutboundMessage) => Promise<void>) | null = null;
 
   /** Log prefix with account display name for easy tracking */
   private get tag(): string {
@@ -220,7 +173,7 @@ export class ZaloPersonalChannel {
       // Create auth with saved cookies
       const auth = new ZaloAuth();
       for (const c of credentials.cookie) {
-        auth['cm'].set(c.name, c.value, c.domain);
+        (auth as any).cm.set(c.name, c.value, c.domain);
       }
 
       // Call getLoginInfo to get fresh zpw_enk
@@ -353,6 +306,7 @@ export class ZaloPersonalChannel {
   private _startHealthCheck(): void {
     if (this._healthCheckInterval) return;
     this._healthCheckInterval = setInterval(() => {
+      markAlive('zalo-health-check');
       if (this._stopped) return;
       if (!this._isConnected && !this._reconnectTimer) {
         console.log(`${this.tag} Health check: not connected + no pending reconnect → scheduling reconnect`);
@@ -452,19 +406,45 @@ export class ZaloPersonalChannel {
     // Subscribe to bus outbound events for auto-reply dispatch.
     // Handles BOTH text content AND media attachments (images / files) that
     // the router extracted from [[SEND_MEDIA: id]] markers.
-    bus.on('outbound', async (outMsg: OutboundMessage) => {
+    //
+    // startListening() re-runs on every reconnect (_scheduleReconnect → startListening).
+    // Register the dispatcher exactly ONCE per instance — drop any prior reference
+    // first — so one outbound message is never sent N times. Incident 2026-06-08:
+    // a single follow-up was delivered 8× because 8 reconnects stacked 8 listeners.
+    if (this._outboundHandler) { bus.off('outbound', this._outboundHandler); }
+    this._outboundHandler = async (outMsg: OutboundMessage) => {
       if (outMsg.channel !== this.channelName) return;
-      const threadType = (outMsg.metadata?.threadType === 'group' ? 'group' : 'dm') as 'dm' | 'group';
+      // F5: consumer sets metadata.peerKind (NOT threadType); derive threadType so
+      // a group reply doesn't fall back to DM and get sent to the wrong endpoint.
+      const threadType = (outMsg.metadata?.threadType === 'group' || outMsg.metadata?.peerKind === 'group')
+        ? 'group' : 'dm';
       const agentSlug = outMsg.metadata?.agentSlug as string | undefined;
 
       try {
-        // Step 1: send the text reply first so the customer sees the message
-        // body before any attachments (matches natural human send order).
-        if (outMsg.content && outMsg.content.trim()) {
+        const hasText = !!(outMsg.content && outMsg.content.trim());
+        // Reply Gateway: a gated bot reply (carries dedupeKey) routes through
+        // deliverReplyOnce — ONE claim gates the whole reply (text + any media).
+        // deliverReplyOnce owns the channel_sent_messages row (skipDbLog on send).
+        if (outMsg.dedupeKey) {
+          const outcome = await deliverReplyOnce(
+            outMsg.dedupeKey,
+            {
+              channel_name: this.channelName, thread_id: outMsg.chatId, thread_type: threadType,
+              to_uid: outMsg.chatId, body: hasText ? outMsg.content : '[media]',
+              content_type: hasText ? 'text' : 'image', sent_by: agentSlug || 'agent',
+            },
+            async () => {
+              if (hasText) return assertSent(await this.send(outMsg.chatId, outMsg.content, threadType, agentSlug, /*skipDbLog*/ true));
+              return { platformMessageId: null }; // media-only: claim gates, media sent below
+            },
+          );
+          if (outcome !== 'sent') return; // failed OR duplicate → skip media too
+        } else if (hasText) {
+          // Manual/human path (no idempotency key): unchanged.
           await this.send(outMsg.chatId, outMsg.content, threadType, agentSlug);
         }
 
-        // Step 2: dispatch attachments, if any.
+        // Step 2: dispatch attachments, if any (media rows exempt from dedupe audit).
         const media = outMsg.media;
         if (!media || media.length === 0) return;
 
@@ -570,7 +550,8 @@ export class ZaloPersonalChannel {
       } catch (err: any) {
         console.error(`${this.tag} Bus outbound dispatch error:`, err);
       }
-    });
+    };
+    bus.on('outbound', this._outboundHandler);
 
     await this.listener.start();
   }
@@ -579,9 +560,14 @@ export class ZaloPersonalChannel {
     msg: any,
     threadType: 'dm' | 'group'
   ): Promise<void> {
-    // Skip self-messages (own UID or echoed messages with uid=0)
-    if (msg.uidFrom === this.session?.uid) return;
+    // uid=0 = echo nội bộ rỗng → bỏ.
     if (msg.uidFrom === '0' || msg.uidFrom === 0) return;
+    // Tin từ CHÍNH tài khoản (chị gõ tay trong app Zalo thật HOẶC echo tin Paperclip vừa gửi):
+    // KHÔNG bỏ — route sang handler dedup-theo-msgId rồi lưu outbound để đồng bộ vào khung chat.
+    if (msg.uidFrom === this.session?.uid) {
+      await this.handleSelfMessage(msg, threadType);
+      return;
+    }
 
     const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
     const threadId = threadType === 'dm' ? msg.uidFrom : msg.idTo;
@@ -598,6 +584,11 @@ export class ZaloPersonalChannel {
       message_id: msg.msgId,
       body,
       content_type: msg.msgType || 'text',
+      // Carry the group/direct classification explicitly. The column DEFAULTs to
+      // 'direct', so omitting it made the Realtime re-emit path (bus.subscribeRealtime,
+      // which reads peer_kind || 'direct') treat every group message as a DM →
+      // per-sender session fragmentation in the inbox. thread_type is the source of truth.
+      peer_kind: threadType === 'group' ? 'group' : 'direct',
       metadata: { raw: msg },
       dedupe_key: dedupeKey,
       ts: new Date(parseInt(msg.ts) > 9999999999 ? parseInt(msg.ts) : parseInt(msg.ts) * 1000).toISOString(),
@@ -655,12 +646,70 @@ export class ZaloPersonalChannel {
     }
   }
 
+  // Tin tự-gửi (chị reply trực tiếp trong app Zalo, KHÔNG qua Paperclip): listener Zalo
+  // multi-client vẫn nhận → lưu vào channel_sent_messages để đồng bộ vào khung chat Paperclip.
+  // Dedup theo platform_message_id (= msgId) để KHÔNG trùng tin Paperclip đã tự gửi & lưu.
+  private async handleSelfMessage(msg: any, threadType: 'dm' | 'group'): Promise<void> {
+    if (!msg.msgId) return;
+    const msgId = String(msg.msgId);
+    const threadId = msg.idTo; // self-message: người nhận = idTo (DM) / group = idTo
+    if (!threadId) return;
+    // Đã có row (Paperclip gửi & lưu rồi) → skip tránh double.
+    const { data: existing } = await supabase
+      .from('channel_sent_messages')
+      .select('id')
+      .eq('channel_name', this.channelName)
+      .eq('platform_message_id', msgId)
+      .maybeSingle();
+    if (existing) return;
+    const body = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    // Reply Gateway F6: a gateway bot reply claims its channel_sent_messages row
+    // with status='sending' and stamps platform_message_id only AFTER the Zalo
+    // send returns. If this self-echo races ahead of that UPDATE, the msgId lookup
+    // above misses and we'd insert a duplicate 'manual_zalo' row for our OWN reply.
+    // Fall back to matching a recent agent reply by (thread, body) and, if found,
+    // stamp its platform_message_id + skip the duplicate. SAFE: this whole method
+    // runs only for self-messages (uidFrom === session uid), so a real customer
+    // message with identical text ("ok"/"dạ") never reaches here.
+    const { data: recentAgent } = await supabase
+      .from('channel_sent_messages')
+      .select('id')
+      .eq('channel_name', this.channelName)
+      .eq('thread_id', threadId)
+      .eq('body', body)
+      .neq('sent_by', 'manual_zalo')
+      .gte('created_at', new Date(Date.now() - 60_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentAgent) {
+      await supabase.from('channel_sent_messages')
+        .update({ platform_message_id: msgId })
+        .eq('id', (recentAgent as { id: string }).id);
+      return;
+    }
+    const { error } = await supabase.from('channel_sent_messages').insert({
+      channel_name: this.channelName,
+      thread_id: threadId,
+      thread_type: threadType,
+      to_uid: threadId,
+      body,
+      content_type: msg.msgType || 'text',
+      status: 'sent',
+      platform_message_id: msgId,
+      sent_by: 'manual_zalo',
+    });
+    if (error) { console.error(`${this.tag} Self-message store error:`, error); return; }
+    console.log(`${this.tag} 📤 Self (manual Zalo) → stored outbound thread=${threadId}: ${body?.substring(0, 60)}`);
+  }
+
   async send(
     threadId: string,
     message: string,
     threadType: 'dm' | 'group' = 'dm',
-    agentSlug?: string
-  ): Promise<{ success: boolean; error?: string }> {
+    agentSlug?: string,
+    skipDbLog = false
+  ): Promise<{ success: boolean; error?: string; messageId?: string }> {
     if (!this.session) return { success: false, error: 'Not connected' };
 
     await sendTyping(this.session, threadId, threadType === 'group');
@@ -670,18 +719,22 @@ export class ZaloPersonalChannel {
       ? await sendGroupText(this.session, threadId, message)
       : await sendDMText(this.session, threadId, message);
 
-    await supabase.from('channel_sent_messages').insert({
-      channel_name: this.channelName,
-      thread_id: threadId,
-      thread_type: threadType,
-      to_uid: threadId,
-      body: message,
-      content_type: 'text',
-      status: result.success ? 'sent' : 'failed',
-      error_message: result.error,
-      platform_message_id: result.messageId,
-      sent_by: agentSlug || 'manual',
-    });
+    // skipDbLog=true khi caller (universal /send) đã ghi row channel_sent_messages rồi
+    // → tránh double-insert. Path agent gọi trực tiếp vẫn log bình thường.
+    if (!skipDbLog) {
+      await supabase.from('channel_sent_messages').insert({
+        channel_name: this.channelName,
+        thread_id: threadId,
+        thread_type: threadType,
+        to_uid: threadId,
+        body: message,
+        content_type: 'text',
+        status: result.success ? 'sent' : 'failed',
+        error_message: result.error,
+        platform_message_id: result.messageId,
+        sent_by: agentSlug || 'manual',
+      });
+    }
 
     return result;
   }
@@ -691,7 +744,10 @@ export class ZaloPersonalChannel {
     filePath: string,
     threadType: 'dm' | 'group' = 'dm',
     caption?: string,
-    agentSlug?: string
+    agentSlug?: string,
+    // Caller-provided public URL (e.g. Supabase Storage) — overrides buildOutboundMediaUrl().
+    // Needed when filePath is a temp upload outside ALLOWED_MEDIA_ROOTS (§P12, 2026-08-16).
+    providedMediaUrl?: string
   ): Promise<{ success: boolean; error?: string }> {
     if (!this.session) return { success: false, error: 'Not connected' };
 
@@ -699,6 +755,12 @@ export class ZaloPersonalChannel {
       ? await sendGroupImage(this.session, threadId, filePath, caption)
       : await sendDMImage(this.session, threadId, filePath, caption);
 
+    // Lưu URL servable vào `media` → inbox hiển thị ảnh THẬT (không placeholder).
+    // Ghi CẢ KHI THẤT BẠI (vd Zalo trả error_code 201 vượt 512K/chunk): admin cần
+    // thấy ẢNH ĐÃ CỐ GỬI, không chỉ text "[Hình ảnh]" trơ — file cục bộ tồn tại
+    // độc lập với việc Zalo có chấp nhận hay không (§P12, 2026-08-04).
+    // Priority: caller-provided URL (Supabase Storage) > local media-library URL.
+    const finalMediaUrl = providedMediaUrl || buildOutboundMediaUrl(filePath);
     await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,
       thread_id: threadId,
@@ -706,6 +768,7 @@ export class ZaloPersonalChannel {
       to_uid: threadId,
       body: caption || '[Hình ảnh]',
       content_type: 'image',
+      media: finalMediaUrl ? [finalMediaUrl] : null,
       status: result.success ? 'sent' : 'failed',
       error_message: result.error,
       platform_message_id: result.messageId,
@@ -754,6 +817,7 @@ export class ZaloPersonalChannel {
     this._isConnected = false;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     if (this._healthCheckInterval) { clearInterval(this._healthCheckInterval); this._healthCheckInterval = null; }
+    if (this._outboundHandler) { bus.off('outbound', this._outboundHandler); this._outboundHandler = null; }
     this.listener?.stop();
     await this.updateStatus('disconnected', 'Stopped by user');
   }

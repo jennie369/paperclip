@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useImageLightbox } from "@/components/ImageLightbox";
 import { channelsApi, type PendingMessage } from "@/api/channels";
 import { warRoomApi } from "@/api/warRoom";
 import { useToast } from "@/context/ToastContext";
@@ -173,6 +174,7 @@ interface ContextMenuState {
 export function ZaloPersonalChat() {
   const { channelName, threadId } = useParams<{ channelName: string; threadId?: string }>();
   const navigate = useNavigate();
+  const { openImage } = useImageLightbox();
   const qc = useQueryClient();
   const { pushToast } = useToast();
 
@@ -759,9 +761,11 @@ export function ZaloPersonalChat() {
                         src={imageData.thumb}
                         alt={imageData.title || "Hình ảnh"}
                         className="max-w-[200px] rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+                        data-lightbox=""
+                        data-lightbox-src={imageData.hd || imageData.href || imageData.thumb}
                         onClick={() => {
                           const fullUrl = imageData.hd || imageData.href || imageData.thumb;
-                          window.open(fullUrl, "_blank");
+                          openImage(fullUrl, imageData.title || "Hình ảnh");
                         }}
                       />
                     </div>

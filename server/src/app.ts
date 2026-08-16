@@ -8,6 +8,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { remoteApiKeyGuard } from "./middleware/remote-api-key-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
@@ -27,6 +28,7 @@ import { activityRoutes } from "./routes/activity.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { toolsRoutes } from "./routes/tools.js";
 import { llmRoutes } from "./routes/llms.js";
 import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
@@ -37,6 +39,8 @@ import channelRoutes from "./channels/routes.js";
 import agentConfigRoutes from "./channels/agent-config-routes.js";
 import qaRoutes from "./channels/qa-routes.js";
 import facebookWebhook from "./channels/facebook/webhook.js";
+import facebookWebRoutes, { resumeAllFacebookWebChannels } from "./channels/facebook-web/routes.js";
+import { cskhRouter, resumeCskhChannel } from "./channels/cskh/routes.js";
 import youtubeRoutes from "./channels/youtube/routes.js";
 import crmRoutes from "./channels/crm/crm-routes.js";
 import ticketRoutes from "./channels/crm/ticket-routes.js";
@@ -152,6 +156,10 @@ export async function createApp(
   // Mount API routes
   const api = Router();
   api.use(boardMutationGuard());
+  // Require PAPERCLIP_API_KEY for REMOTE (Cloudflare-tunnel) requests so the public
+  // gemops.gemcapitalholding.com hostname cannot reach the control plane unauthenticated.
+  // Local (loopback) requests and self-authenticating webhooks are exempt.
+  api.use(remoteApiKeyGuard(process.env.PAPERCLIP_REMOTE_API_KEY || ""));
   api.use(
     "/health",
     healthRoutes(db, {
@@ -179,6 +187,7 @@ export async function createApp(
   api.use(dashboardRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(instanceSettingsRoutes(db));
+  api.use("/tools", toolsRoutes());
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = createPluginWorkerManager();
   const pluginRegistry = pluginRegistryService(db);
@@ -251,6 +260,8 @@ export async function createApp(
     }),
   );
   api.use("/channels/facebook", facebookWebhook);
+  api.use("/channels/facebook-web", facebookWebRoutes);
+  api.use("/channels/cskh", cskhRouter);
   api.use("/channels/youtube", youtubeRoutes);
   api.use("/channels/zalo-personal", zaloPersonalRoutes);
   api.use("/channels/agent-configs", agentConfigRoutes);
@@ -330,11 +341,13 @@ export async function createApp(
     }
     child.stdin.end();
 
+    child.stderr?.setEncoding("utf8");
     child.stderr.on("data", (chunk: Buffer) => {
       const err = chunk.toString("utf-8");
       console.log(`[PTDV-Chat] stderr: ${err.slice(0, 200)}`);
     });
 
+    child.stdout?.setEncoding("utf8");
     child.stdout.on("data", (chunk: Buffer) => {
       for (const line of chunk.toString("utf-8").split("\n")) {
         if (!line.trim()) continue;
@@ -457,7 +470,15 @@ export async function createApp(
     }
   });
 
-  // Restore Zalo channels + start consumer on startup
+  // Restore Zalo + Facebook Web channels + start consumer on startup
+  resumeAllFacebookWebChannels().then(() => {
+    console.log("[FbWeb] Channel restore complete");
+  }).catch((err) => console.error("[FbWeb] Restore error:", err));
+
+  resumeCskhChannel().then(() => {
+    console.log("[cskh] resume complete");
+  }).catch((err) => console.error("[cskh] Resume error:", err));
+
   restoreChannels().then(async () => {
     console.log("[ZaloPersonal] Channel restore complete");
     // Start the inbound consumer (agent auto-reply pipeline)

@@ -11,7 +11,11 @@ const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
 const MIGRATIONS_JOURNAL_JSON = fileURLToPath(new URL("./migrations/meta/_journal.json", import.meta.url));
 
 function createUtilitySql(url: string) {
-  return postgres(url, { max: 1, onnotice: () => {} });
+  // connect_timeout (2026-08-16, plan pooler-stall resilience): bound bước CONNECT ở 8s
+  // thay vì treo tới statement_timeout 2min khi Supabase pooler stall lúc startup
+  // (migration inspect nằm trên startup path → hang = process sống-không-listen). CHỈ áp
+  // bước connect — KHÔNG giới hạn thời gian chạy DDL (apply migration có thể lâu hợp lệ).
+  return postgres(url, { max: 1, connect_timeout: 8, onnotice: () => {} });
 }
 
 function isSafeIdentifier(value: string): boolean {
@@ -46,7 +50,32 @@ export type MigrationState =
     };
 
 export function createDb(url: string) {
-  const sql = postgres(url, { max: 20 });
+  // Egress/connection fix 2026-05-27: idle_timeout releases idle pooled connections after 30s;
+  // application_name tags connections for observability in pg_stat_activity.
+  //
+  // ROOT-CAUSE FIX 2026-08-01 (sự cố cạn pooler 31/07 — report:
+  // crypto-pattern-scanner/memory/reports/2026-08-01-supabase-pooler-connection-exhaustion-incident.md):
+  // The runtime pool moves from the SESSION pooler (:5432, which reserves a dedicated Postgres
+  // backend per connection) to the TRANSACTION pooler (:6543, which shares backends per
+  // transaction) + prepare:false. Why: session pooler + max:20 meant ONE instance reserved ~1/3
+  // of a micro DB's backends; a crash-loop then piled overlapping pools → "too many clients" →
+  // Supavisor wedged (survived 2 project restarts). Transaction pooler + a smaller pool removes
+  // that failure mode. Verified safe at runtime: no LISTEN/NOTIFY, no advisory locks, only
+  // SET LOCAL (transaction-scoped); tested with postgres.js on :6543 (SELECT + sql.begin +
+  // prepare:false param query all pass). ONLY applies to the Supabase session pooler;
+  // embedded/local postgres keeps session behavior. Migrations (createUtilitySql, :5432) are
+  // UNCHANGED — the transaction pooler is unsuitable for the drizzle migrator/DDL, and
+  // PAPERCLIP_MIGRATION_AUTO_APPLY runs migrations on every startup.
+  const isSupabaseSessionPooler =
+    url.includes("pooler.supabase.com") && url.includes(":5432");
+  const runtimeUrl = isSupabaseSessionPooler ? url.replace(":5432", ":6543") : url;
+  const sql = postgres(runtimeUrl, {
+    max: isSupabaseSessionPooler ? 10 : 20,
+    idle_timeout: 30,
+    prepare: isSupabaseSessionPooler ? false : true,
+    connection: { application_name: "paperclip-server" },
+    onnotice: () => {},
+  });
   return drizzlePg(sql, { schema });
 }
 

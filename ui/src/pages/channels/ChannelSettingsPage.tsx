@@ -13,6 +13,8 @@ import {
   X,
   Loader2,
   RefreshCw,
+  Pause,
+  Play,
 } from "lucide-react";
 import {
   channelsApi,
@@ -27,9 +29,20 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getChannelColor } from "./components/channelConfig";
 
 type DmPolicy = "open" | "allowlist" | "pairing" | "disabled";
 type GroupPolicy = "open" | "allowlist" | "pairing" | "disabled";
+
+// Curated, high-contrast identity palette so each connected account is instantly
+// distinguishable in the inbox + chat header (esp. multiple accounts on the same
+// platform, e.g. two Zalo accounts). Ordered for visual separation.
+const CHANNEL_COLOR_PRESETS = [
+  "#6366F1", "#8B5CF6", "#A855F7", "#EC4899",
+  "#EF4444", "#F97316", "#F59E0B", "#EAB308",
+  "#10B981", "#14B8A6", "#06B6D4", "#3B82F6",
+  "#0EA5E9", "#64748B", "#0068FF", "#1877F2",
+];
 
 const POLICY_OPTIONS: { value: DmPolicy; label: string }[] = [
   { value: "open", label: "Mở (bất kỳ ai)" },
@@ -101,7 +114,12 @@ export function ChannelSettingsPage() {
         save_contacts_to_crm: saveContactsToCrm,
       } as any),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["channels", "settings", channelName] });
+      // Invalidate the WHOLE "channels" tree (prefix match) — not just this
+      // channel's settings. Otherwise the channel LIST (["channels","instances"])
+      // keeps showing the stale agent badge for minutes after unassigning the
+      // agent (reported 2026-06-10). config-channels feeds other surfaces too.
+      qc.invalidateQueries({ queryKey: ["channels"] });
+      qc.invalidateQueries({ queryKey: ["config-channels"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     },
@@ -386,6 +404,7 @@ function ChannelSettingsList() {
   const [showQR, setShowQR] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
 
   const renameMut = useMutation({
     mutationFn: async ({ name, displayName }: { name: string; displayName: string }) => {
@@ -402,6 +421,9 @@ function ChannelSettingsList() {
   const { data: instances = [], isLoading } = useQuery({
     queryKey: ["channels", "instances"],
     queryFn: channelsApi.listInstances,
+    // Always refetch when the list mounts so returning from a channel's detail
+    // page (where agent assignment can change) reflects the true state instantly.
+    refetchOnMount: "always",
   });
 
   const startMut = useMutation({
@@ -415,6 +437,34 @@ function ChannelSettingsList() {
   const deleteMut = useMutation({
     mutationFn: (name: string) => channelsApi.deleteChannel(name),
     onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
+  });
+  // Pause/resume the AI agent on a channel WITHOUT touching the listener
+  // (channel keeps receiving → messages still land in the inbox for a human).
+  // Backend consumer skips auto-reply when channel_instances.enabled=false
+  // (consumer.ts step 2). clearConfigCache on the server makes it take effect
+  // on the very next message — no restart needed.
+  const agentToggleMut = useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      channelsApi.updateChannelSettings(name, { enabled }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
+  });
+  // Agent options for the inline per-row picker (assign/unassign without leaving the list).
+  const { data: agentOptions = [] } = useQuery({
+    queryKey: ["agent-configs"],
+    queryFn: agentConfigsApi.fetchAll,
+    staleTime: 60_000,
+  });
+  // Change a channel's default agent inline + auto-save. "" → null (no agent).
+  const setChannelAgentMut = useMutation({
+    mutationFn: ({ name, agent_slug }: { name: string; agent_slug: string }) =>
+      channelsApi.updateChannelSettings(name, { agent_slug: agent_slug || null } as any),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["config-channels"] }); },
+  });
+  // Per-account identity color (inbox + chat header). null → platform default.
+  const setChannelColorMut = useMutation({
+    mutationFn: ({ name, color }: { name: string; color: string | null }) =>
+      channelsApi.updateChannelSettings(name, { color } as any),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ["channels"] }); qc.invalidateQueries({ queryKey: ["channel-instances"] }); },
   });
 
   return (
@@ -453,21 +503,82 @@ function ChannelSettingsList() {
         {instances.map((inst: any) => (
           <div
             key={inst.id}
-            className="flex items-center justify-between border rounded-lg p-4 hover:bg-muted/30 transition-colors"
+            className="relative flex items-center justify-between border rounded-lg p-4 hover:bg-muted/30 transition-colors"
           >
-            <div
-              className="flex items-center gap-3 flex-1 cursor-pointer"
-              onClick={() => navigate(`../channels/settings/${encodeURIComponent(inst.name)}`)}
+            {/* Identity color swatch — click to choose a per-account color. The
+                connection status lives as a small dot overlaid on the swatch. */}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setColorPickerFor(colorPickerFor === inst.name ? null : inst.name); }}
+              title="Đổi màu nhận diện cho tài khoản này"
+              className="relative w-7 h-7 rounded-lg shrink-0 mr-3 ring-1 ring-black/10 shadow-sm transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-ring"
+              style={{ backgroundColor: inst.color || getChannelColor(inst.display_name || inst.name) }}
             >
-              <div
-                className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                  inst.status === "connected"
-                    ? "bg-green-500"
-                    : inst.status === "error"
-                    ? "bg-red-500"
+              <span
+                title={
+                  inst.status === "connected" ? "Đã kết nối"
+                    : inst.status === "monitor_only" ? "Kênh app — theo dõi qua mirror (không cần đăng nhập)"
+                    : inst.status === "error" ? (inst.status_message || "Lỗi kết nối")
+                    : "Chưa kết nối"
+                }
+                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-background ${
+                  inst.status === "connected" ? "bg-green-500"
+                    : inst.status === "monitor_only" ? "bg-sky-500"
+                    : inst.status === "error" ? "bg-red-500"
                     : "bg-gray-400"
                 }`}
               />
+            </button>
+
+            {colorPickerFor === inst.name && (
+              <>
+                {/* click-away backdrop */}
+                <div className="fixed inset-0 z-10" onClick={() => setColorPickerFor(null)} />
+                <div className="absolute left-4 top-16 z-20 w-60 rounded-xl border bg-popover p-3 shadow-xl">
+                  <div className="text-xs font-medium mb-2 text-muted-foreground truncate">
+                    Màu nhận diện — {inst.display_name || inst.name}
+                  </div>
+                  <div className="grid grid-cols-8 gap-1.5">
+                    {CHANNEL_COLOR_PRESETS.map((c) => {
+                      const active = (inst.color || "").toLowerCase() === c.toLowerCase();
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => { setChannelColorMut.mutate({ name: inst.name, color: c }); setColorPickerFor(null); }}
+                          className={`w-5 h-5 rounded-md transition-transform hover:scale-110 ${active ? "ring-2 ring-foreground ring-offset-1" : "ring-1 ring-black/10"}`}
+                          style={{ backgroundColor: c }}
+                          title={c}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
+                    <label className="flex items-center gap-1.5 text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                      <input
+                        type="color"
+                        className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0"
+                        value={inst.color || getChannelColor(inst.display_name || inst.name)}
+                        onChange={(e) => setChannelColorMut.mutate({ name: inst.name, color: e.target.value })}
+                      />
+                      Tuỳ chỉnh
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => { setChannelColorMut.mutate({ name: inst.name, color: null }); setColorPickerFor(null); }}
+                      className="text-xs text-muted-foreground hover:text-foreground underline"
+                    >
+                      Màu mặc định
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div
+              className="flex items-center gap-3 flex-1 cursor-pointer min-w-0"
+              onClick={() => navigate(`../channels/settings/${encodeURIComponent(inst.name)}`)}
+            >
               <div className="min-w-0">
                 <div className="font-medium text-sm flex items-center gap-1.5">
                   {editingName === inst.name ? (
@@ -505,9 +616,46 @@ function ChannelSettingsList() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Badge variant="secondary" className="text-[10px]">
-                {inst.agent_slug || "không có agent"}
-              </Badge>
+              <select
+                value={inst.agent_slug || ""}
+                disabled={setChannelAgentMut.isPending && setChannelAgentMut.variables?.name === inst.name}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { e.stopPropagation(); setChannelAgentMut.mutate({ name: inst.name, agent_slug: e.target.value }); }}
+                title="Đổi agent cho kênh — tự lưu ngay, không cần vào trang cài đặt"
+                className={`text-[11px] rounded-md border px-2 py-1 max-w-[190px] cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 ${
+                  inst.agent_slug
+                    ? "border-border/60 bg-muted/40 hover:bg-muted text-foreground"
+                    : "border-dashed border-border/60 bg-transparent text-muted-foreground hover:bg-muted/40"
+                }`}
+              >
+                <option value="">— Không có agent —</option>
+                {agentOptions.map((a: any) => (
+                  <option key={a.slug} value={a.slug}>{a.display_name} ({a.slug})</option>
+                ))}
+              </select>
+              {inst.agent_slug && (
+                <Button
+                  size="sm"
+                  variant={inst.enabled === false ? "default" : "outline"}
+                  className={inst.enabled === false ? "" : "text-amber-600 border-amber-500/40 hover:bg-amber-500/10"}
+                  disabled={agentToggleMut.isPending}
+                  title={inst.enabled === false
+                    ? "Bật lại AI agent tự động trả lời kênh này"
+                    : "Dừng AI agent (tin khách vẫn vào hộp thư để bạn trả tay)"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    agentToggleMut.mutate({ name: inst.name, enabled: inst.enabled === false });
+                  }}
+                >
+                  {agentToggleMut.isPending && agentToggleMut.variables?.name === inst.name ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : inst.enabled === false ? (
+                    <><Play className="h-3 w-3 mr-1" /> Bật Agent</>
+                  ) : (
+                    <><Pause className="h-3 w-3 mr-1" /> Dừng Agent</>
+                  )}
+                </Button>
+              )}
               {inst.channel_type === "zalo_personal" && (
                 <>
                   {inst.status === "connected" ? (

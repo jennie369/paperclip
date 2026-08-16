@@ -39,6 +39,8 @@ import { IssueDetail } from "./pages/IssueDetail";
 import { ExecutionWorkspaceDetail } from "./pages/ExecutionWorkspaceDetail";
 import { Goals } from "./pages/Goals";
 import { GoalDetail } from "./pages/GoalDetail";
+import { Routines } from "./pages/Routines";
+import { RoutineDetail } from "./pages/RoutineDetail";
 import { Approvals } from "./pages/Approvals";
 import { ApprovalDetail } from "./pages/ApprovalDetail";
 import { Costs } from "./pages/Costs";
@@ -50,6 +52,7 @@ import { CompanySettings } from "./pages/CompanySettings";
 import { DesignGuide } from "./pages/DesignGuide";
 import { ZaloPersonalPage } from "./pages/channels/ZaloPersonalPage";
 import { ZaloPersonalChat } from "./pages/channels/ZaloPersonalChat";
+import { FacebookWebPage } from "./pages/channels/FacebookWebPage";
 import { ChannelsOverview } from "./pages/channels/ChannelsOverview";
 import { ConversationsPage } from "./pages/channels/ConversationsPage";
 import { ConversationChat } from "./pages/channels/ConversationChat";
@@ -79,6 +82,8 @@ import { OrderListPage } from "./pages/crm/OrderListPage";
 import { ImportPage } from "./pages/crm/ImportPage";
 import { EmailCampaignsPage } from "./pages/crm/EmailCampaignsPage";
 import { KnowledgeBasePage } from "./pages/crm/KnowledgeBasePage";
+import { CrmMessagingShowcase } from "./pages/CrmMessagingShowcase";
+import { CrmInbox } from "./pages/CrmInbox";
 import { TrainingRoomPage } from "./pages/training/TrainingRoomPage";
 import { ToolAuditLogPage } from "./pages/training/ToolAuditLogPage";
 import { TrainingHistoryPage } from "./pages/training/TrainingHistoryPage";
@@ -230,6 +235,9 @@ function boardRoutes() {
       <Route path="execution-workspaces/:workspaceId" element={<ExecutionWorkspaceDetail />} />
       <Route path="goals" element={<Goals />} />
       <Route path="goals/:goalId" element={<GoalDetail />} />
+      <Route path="routines" element={<Routines />} />
+      <Route path="routines/:routineId" element={<RoutineDetail />} />
+      <Route path="routines/:routineId/:section" element={<RoutineDetail />} />
       <Route path="approvals" element={<Navigate to="/approvals/pending" replace />} />
       <Route path="approvals/pending" element={<Approvals />} />
       <Route path="approvals/all" element={<Approvals />} />
@@ -256,6 +264,8 @@ function boardRoutes() {
       <Route path="crm/import" element={<ImportPage />} />
       <Route path="crm/campaigns" element={<EmailCampaignsPage />} />
       <Route path="crm/knowledge-base" element={<KnowledgeBasePage />} />
+      <Route path="crm-messaging" element={<CrmMessagingShowcase />} />
+      <Route path="crm-inbox" element={<CrmInbox />} />
       <Route path="training" element={<TrainingRoomPage />} />
       <Route path="training/history" element={<TrainingHistoryPage />} />
       <Route path="training/audit-log" element={<ToolAuditLogPage />} />
@@ -268,6 +278,7 @@ function boardRoutes() {
       <Route path="channels/zalo-personal" element={<ZaloPersonalPage />} />
       <Route path="channels/zalo-personal/:channelName" element={<Navigate to="../channels/inbox" replace />} />
       <Route path="channels/zalo-personal/:channelName/:threadId" element={<Navigate to="../../channels/inbox" replace />} />
+      <Route path="channels/facebook-web" element={<FacebookWebPage />} />
       <Route path="channels/conversations" element={<ConversationsPage />} />
       <Route path="channels/conversations/:sessionKey" element={<ConversationChat />} />
       <Route path="channels/settings" element={<ChannelSettingsPage />} />
@@ -466,6 +477,8 @@ export function App() {
           <Route path="companies" element={<UnprefixedBoardRedirect />} />
           <Route path="issues" element={<UnprefixedBoardRedirect />} />
           <Route path="issues/:issueId" element={<UnprefixedBoardRedirect />} />
+          <Route path="routines" element={<UnprefixedBoardRedirect />} />
+          <Route path="routines/:routineId" element={<UnprefixedBoardRedirect />} />
           <Route path="settings" element={<LegacySettingsRedirect />} />
           <Route path="settings/*" element={<LegacySettingsRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
@@ -483,6 +496,8 @@ export function App() {
           <Route path="war-room" element={<UnprefixedBoardRedirect />} />
           <Route path="crm" element={<UnprefixedBoardRedirect />} />
           <Route path="crm/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="crm-messaging" element={<UnprefixedBoardRedirect />} />
+          <Route path="crm-inbox" element={<UnprefixedBoardRedirect />} />
           <Route path="timetable" element={<UnprefixedBoardRedirect />} />
           <Route path="timetable/*" element={<UnprefixedBoardRedirect />} />
           <Route path="lich-hom-nay" element={<UnprefixedBoardRedirect />} />

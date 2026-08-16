@@ -18,6 +18,7 @@ import { PlannerBoard } from "@/components/ops/PlannerBoard";
 import AiGenPage from "../content-center/CCAIGen";
 import BatchJobsView from "./sop-engine/BatchGeneratorTab";
 import { GenerationJobsBlock } from "./components/GenerationJobsBlock";
+import MediaGallerySection from "../content-center/components/MediaGallerySection";
 
 // 2026-04-18 — TABS is now a mutable default; the live order lives in state so
 // the user can drag tabs to reorder. aigen moved in front of pipeline per
@@ -45,7 +46,7 @@ const DEFAULT_BLOCKS = [
 type BlockId = typeof DEFAULT_BLOCKS[number];
 
 // ─── AiGen tab section ordering ──────────────────────────────────────────────
-const DEFAULT_AIGEN_SECTIONS = ["batch-gen", "ai-gen", "gen-jobs"] as const;
+const DEFAULT_AIGEN_SECTIONS = ["batch-gen", "ai-gen", "media-gallery", "gen-jobs"] as const;
 type AigenSectionId = typeof DEFAULT_AIGEN_SECTIONS[number];
 
 /** Chuyển tab object array thành key array để dùng với useUIOrder */
@@ -345,11 +346,11 @@ export function ContentPipelinePage() {
             {/* Tab bar — 2026-04-19 fix: dùng <a href> để right-click mở new tab/window được.
                 Drag-reorder chuyển qua handle "⋮⋮" riêng để không intercept click selection text.
                 2026-05-07: dùng dataTransfer thay vì state để tránh stale closure trong onDrop. */}
-            <div className="flex border-b">
+            <div className="flex border-b overflow-x-auto">
               {tabs.map((tab) => (
                 <div
                   key={tab.key}
-                  className={`group flex items-center border-b-2 transition-colors ${
+                  className={`group flex items-center shrink-0 border-b-2 transition-colors ${
                     activeTab === tab.key ? "border-primary" : "border-transparent hover:border-border"
                   } ${dragKey === tab.key ? "opacity-50" : ""}`}
                   onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -465,6 +466,16 @@ export function ContentPipelinePage() {
                     </div>
                   );
 
+                  if (sectionId === "media-gallery") return (
+                    <div key="media-gallery" className={wrapCls} {...dropTargetProps}>
+                      {DragBar}
+                      {anyDragging && !isBeingDragged && (
+                        <div className="absolute inset-0 z-20" style={{ pointerEvents: 'all' }} />
+                      )}
+                      <MediaGallerySection />
+                    </div>
+                  );
+
                   if (sectionId === "gen-jobs") return (
                     <div key="gen-jobs" className={wrapCls} {...dropTargetProps}>
                       {DragBar}
@@ -493,9 +504,9 @@ export function ContentPipelinePage() {
   };
 
   return (
-    <div className="space-y-4 p-6">
+    <div className="space-y-4 p-4 sm:p-6">
       <div>
-        <h1 className="text-2xl font-bold">Content Pipeline</h1>
+        <h1 className="text-xl sm:text-2xl font-bold">Content Pipeline</h1>
         <p className="text-sm text-muted-foreground mt-0.5">{posted}/{target} bài/ngày · 3 tài khoản · 8 segment email</p>
         <p className="text-[10px] text-muted-foreground mt-0.5 opacity-60">💡 Kéo thả các section (hover để thấy handle ⠿) để đổi vị trí — thứ tự được lưu tự động.</p>
       </div>

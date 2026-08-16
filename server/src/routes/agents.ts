@@ -57,6 +57,8 @@ import {
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { runGeminiLogin } from "@paperclipai/adapter-gemini-local/server";
+import { DEFAULT_ANTIGRAVITY_MODEL } from "@paperclipai/adapter-antigravity-local";
 import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
 import {
   loadDefaultAgentInstructionsBundle,
@@ -68,6 +70,7 @@ export function agentRoutes(db: Db) {
     claude_local: "instructionsFilePath",
     codex_local: "instructionsFilePath",
     gemini_local: "instructionsFilePath",
+    antigravity_local: "instructionsFilePath",
     opencode_local: "instructionsFilePath",
     cursor: "instructionsFilePath",
     pi_local: "instructionsFilePath",
@@ -242,6 +245,31 @@ export function agentRoutes(db: Db) {
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
+  /**
+   * Who may force-wake another agent's heartbeat (`/wakeup`, `/heartbeat/invoke`).
+   * Boundary = chain of command ONLY (fork policy, plan CEO-SELF-HEAL 2026-08-16, Codex R1/R2):
+   *   - board actors: unchanged (company access already asserted)
+   *   - agent actor === target: unchanged (self-invoke)
+   *   - agent actor is an ancestor of target in `reportsTo` chain (manager → report): allowed
+   *   - NO shortcut on `role === "ceo"` (self-declared label), NO `canCreateAgents`/`agents:create`
+   *     (config-admin right ≠ right to consume another agent's runs). Peers should assign an issue
+   *     instead — assignment already wakes the assignee (issue-assignment-wakeup.ts).
+   */
+  async function assertCanInvokeAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "agent") return;
+    if (!req.actor.agentId) throw forbidden("Agent authentication required");
+    if (req.actor.agentId === targetAgent.id) return;
+
+    const actorAgent = await svc.getById(req.actor.agentId);
+    if (!actorAgent || actorAgent.companyId !== targetAgent.companyId) {
+      throw forbidden("Agent key cannot access another company");
+    }
+    const chain = await svc.getChainOfCommand(targetAgent.id);
+    if (chain.some((manager) => manager.id === actorAgent.id)) return;
+    throw forbidden("Agent can only invoke itself or its reports");
+  }
+
   async function assertCanReadAgent(req: Request, targetAgent: { companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") return;
@@ -399,6 +427,10 @@ export function agentRoutes(db: Db) {
     }
     if (adapterType === "gemini_local" && !asNonEmptyString(next.model)) {
       next.model = DEFAULT_GEMINI_LOCAL_MODEL;
+      return ensureGatewayDeviceKey(adapterType, next);
+    }
+    if (adapterType === "antigravity_local" && !asNonEmptyString(next.model)) {
+      next.model = DEFAULT_ANTIGRAVITY_MODEL;
       return ensureGatewayDeviceKey(adapterType, next);
     }
     // OpenCode requires explicit model selection — no default
@@ -1734,6 +1766,28 @@ export function agentRoutes(db: Db) {
     const patchData = { ...(req.body as Record<string, unknown>) };
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
+
+    // GEM-heartbeat-sched-fix: If the heartbeat schedule (cron/intervalSec) is changing,
+    // reset lastHeartbeatAt to now(). Without this, tickTimers uses the old baseline
+    // (e.g. lastHeartbeatAt = 3 hours ago) and computes nextCronTick(newCron, baseline)
+    // as a time that has already passed → immediate spurious wakeup on the very next tick.
+    const incomingRuntimeConfig = asRecord(patchData.runtimeConfig);
+    const incomingHeartbeat = asRecord(incomingRuntimeConfig?.heartbeat);
+    if (incomingHeartbeat) {
+      const existingHeartbeat = asRecord(
+        asRecord(existing.runtimeConfig)?.heartbeat,
+      ) ?? {};
+      const scheduleChanged =
+        (incomingHeartbeat.cronExpression !== undefined &&
+          incomingHeartbeat.cronExpression !== existingHeartbeat.cronExpression) ||
+        (incomingHeartbeat.intervalSec !== undefined &&
+          incomingHeartbeat.intervalSec !== existingHeartbeat.intervalSec);
+      if (scheduleChanged) {
+        // Reset the heartbeat baseline so the new schedule fires from "now", not "last run".
+        (patchData as Record<string, unknown>).lastHeartbeatAt = new Date();
+      }
+    }
+
     if (Object.prototype.hasOwnProperty.call(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {
@@ -1974,12 +2028,7 @@ export function agentRoutes(db: Db) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
-
-    if (req.actor.type === "agent" && req.actor.agentId !== id) {
-      res.status(403).json({ error: "Agent can only invoke itself" });
-      return;
-    }
+    await assertCanInvokeAgent(req, agent);
 
     const run = await heartbeat.wakeup(id, {
       source: req.body.source,
@@ -2024,12 +2073,7 @@ export function agentRoutes(db: Db) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
-
-    if (req.actor.type === "agent" && req.actor.agentId !== id) {
-      res.status(403).json({ error: "Agent can only invoke itself" });
-      return;
-    }
+    await assertCanInvokeAgent(req, agent);
 
     const run = await heartbeat.invoke(
       id,
@@ -2084,6 +2128,37 @@ export function agentRoutes(db: Db) {
     const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
     const result = await runClaudeLogin({
       runId: `claude-login-${randomUUID()}`,
+      agent: {
+        id: agent.id,
+        companyId: agent.companyId,
+        name: agent.name,
+        adapterType: agent.adapterType,
+        adapterConfig: agent.adapterConfig,
+      },
+      config: runtimeConfig,
+    });
+
+    res.json(result);
+  });
+
+  router.post("/agents/:id/gemini-login", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+    if (agent.adapterType !== "gemini_local") {
+      res.status(400).json({ error: "Login is only supported for gemini_local agents" });
+      return;
+    }
+
+    const config = asRecord(agent.adapterConfig) ?? {};
+    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
+    const result = await runGeminiLogin({
+      runId: `gemini-login-${randomUUID()}`,
       agent: {
         id: agent.id,
         companyId: agent.companyId,

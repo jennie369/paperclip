@@ -3,6 +3,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  Pin, PinOff, Mail, CheckCheck, Bell, BellOff, Tag, Bot, Download, Trash2,
+  Flame, CloudSun, Snowflake, Star, Ban, ChevronRight, ArrowLeft,
+  type LucideIcon,
+} from "lucide-react";
 import { channelsApi, type ChannelSession, type ConversationLabel } from "@/api/channels";
 
 interface Props {
@@ -12,12 +17,12 @@ interface Props {
   onAction: () => void;
 }
 
-const LABELS: { key: ConversationLabel; icon: string; text: string }[] = [
-  { key: "hot", icon: "🔥", text: "Nóng" },
-  { key: "warm", icon: "🌤", text: "Ấm" },
-  { key: "cold", icon: "❄️", text: "Lạnh" },
-  { key: "vip", icon: "⭐", text: "VIP" },
-  { key: "spam", icon: "🚫", text: "Spam" },
+const LABELS: { key: ConversationLabel; Icon: LucideIcon; text: string; color: string }[] = [
+  { key: "hot", Icon: Flame, text: "Nóng", color: "text-red-500" },
+  { key: "warm", Icon: CloudSun, text: "Ấm", color: "text-amber-500" },
+  { key: "cold", Icon: Snowflake, text: "Lạnh", color: "text-sky-500" },
+  { key: "vip", Icon: Star, text: "VIP", color: "text-yellow-500" },
+  { key: "spam", Icon: Ban, text: "Spam", color: "text-zinc-500" },
 ];
 
 export function ConversationActions({ conversation: conv, position, onClose, onAction }: Props) {
@@ -76,7 +81,7 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
             onClick={() => doAction(() => channelsApi.labelConversation(key, l.key))}
             className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2"
           >
-            <span>{l.icon}</span> {l.text}
+            <l.Icon className={`h-4 w-4 shrink-0 ${l.color}`} /> {l.text}
           </button>
         ))}
         {conv.label && (
@@ -88,8 +93,8 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
           </button>
         )}
         <div className="border-t my-1" />
-        <button onClick={() => setSubMenu(null)} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 text-muted-foreground">
-          ← Quay lại
+        <button onClick={() => setSubMenu(null)} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 text-muted-foreground flex items-center gap-2">
+          <ArrowLeft className="h-4 w-4 shrink-0" /> Quay lại
         </button>
       </div>
     );
@@ -110,8 +115,8 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
           </button>
         ))}
         <div className="border-t my-1" />
-        <button onClick={() => setSubMenu(null)} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 text-muted-foreground">
-          ← Quay lại
+        <button onClick={() => setSubMenu(null)} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 text-muted-foreground flex items-center gap-2">
+          <ArrowLeft className="h-4 w-4 shrink-0" /> Quay lại
         </button>
       </div>
     );
@@ -121,7 +126,10 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
     <div ref={ref} style={style} className="w-52 bg-popover border rounded-lg shadow-lg py-1 text-[13px]">
       {/* Pin */}
       <button onClick={() => doAction(() => channelsApi.pinConversation(key))} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2">
-        <span>📌</span> {conv.is_pinned ? "Bỏ ghim" : "Ghim hội thoại"}
+        {conv.is_pinned
+          ? <PinOff className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <Pin className="h-4 w-4 shrink-0 text-muted-foreground" />}
+        {conv.is_pinned ? "Bỏ ghim" : "Ghim hội thoại"}
       </button>
 
       <div className="border-t my-1" />
@@ -131,7 +139,9 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
         onClick={() => doAction(() => channelsApi.markRead(key, !(conv.unread_count && conv.unread_count > 0)))}
         className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2"
       >
-        <span>{(conv.unread_count || 0) > 0 ? "✅" : "✉️"}</span>
+        {(conv.unread_count || 0) > 0
+          ? <CheckCheck className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />}
         {(conv.unread_count || 0) > 0 ? "Đánh dấu đã đọc" : "Đánh dấu chưa đọc"}
       </button>
 
@@ -139,19 +149,24 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
 
       {/* Mute */}
       <button onClick={() => doAction(() => channelsApi.muteConversation(key))} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2">
-        <span>{conv.is_muted ? "🔔" : "🔇"}</span> {conv.is_muted ? "Bật thông báo" : "Tắt thông báo"}
+        {conv.is_muted
+          ? <Bell className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <BellOff className="h-4 w-4 shrink-0 text-muted-foreground" />}
+        {conv.is_muted ? "Bật thông báo" : "Tắt thông báo"}
       </button>
 
       <div className="border-t my-1" />
 
       {/* Label submenu */}
       <button onClick={() => setSubMenu("label")} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2">
-        <span>🏷</span> Phân loại →
+        <Tag className="h-4 w-4 shrink-0 text-muted-foreground" /> Phân loại
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 ml-auto text-muted-foreground" />
       </button>
 
       {/* Agent submenu */}
       <button onClick={() => setSubMenu("agent")} className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2">
-        <span>🤖</span> Đổi agent →
+        <Bot className="h-4 w-4 shrink-0 text-muted-foreground" /> Đổi agent
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 ml-auto text-muted-foreground" />
       </button>
 
       <div className="border-t my-1" />
@@ -169,7 +184,7 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
         }}
         className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2"
       >
-        <span>📥</span> Xuất hội thoại
+        <Download className="h-4 w-4 shrink-0 text-muted-foreground" /> Xuất hội thoại
       </button>
 
       <div className="border-t my-1" />
@@ -180,7 +195,7 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
           onClick={() => setConfirmDelete(true)}
           className="w-full px-3 py-1.5 text-left hover:bg-red-500/10 text-red-500 flex items-center gap-2"
         >
-          <span>🗑</span> Xóa hội thoại
+          <Trash2 className="h-4 w-4 shrink-0" /> Xóa hội thoại
         </button>
       ) : (
         <div className="px-3 py-1.5 space-y-1">

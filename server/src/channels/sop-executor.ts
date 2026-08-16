@@ -259,12 +259,14 @@ async function executeScriptStep(step: StepDef, ctx: ExecutionContext, base: Omi
       }
     }, timeout);
 
+    proc.stdout?.setEncoding("utf8");
     proc.stdout?.on('data', (chunk) => {
       const text = chunk.toString();
       stdout += text;
       sendSSE(ctx.sseRes, 'step:stdout', { step: step.order, text });
     });
 
+    proc.stderr?.setEncoding("utf8");
     proc.stderr?.on('data', (chunk) => {
       const text = chunk.toString();
       stderr += text;

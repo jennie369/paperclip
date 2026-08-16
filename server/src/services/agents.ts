@@ -438,6 +438,12 @@ export function agentService(db: Db) {
           status: "idle",
           pauseReason: null,
           pausedAt: null,
+          // GEM-heartbeat-sched-fix (resume): reset the scheduler baseline to "now"
+          // so tickTimers computes nextCronTick(cron, now) instead of using the stale
+          // last-run timestamp. Without this, an agent paused across a cron/interval
+          // boundary is treated as overdue and fires a spurious heartbeat the instant
+          // it is resumed, instead of waiting for the next scheduled time.
+          lastHeartbeatAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(agents.id, id))

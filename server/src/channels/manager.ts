@@ -111,6 +111,10 @@ class ChannelManager {
     if (!channel) {
       // Facebook channels have their own outbound handler in webhook.ts — skip silently
       if (msg.channel.startsWith('fb-')) return;
+      // Facebook Web (Reverse Protocol) channels self-handle via FacebookWebChannel.installBusOutboundHandler
+      if (msg.channel.startsWith('fbweb-')) return;
+      // CSKH internal channel self-handles outbound via CskhChannel.installBusOutboundHandler
+      if (msg.channel.startsWith('cskh')) return;
       console.warn(`[Manager] Channel not found for dispatch: ${msg.channel}`);
       await this.logSentMessage(msg, 'failed', 'Channel not found');
       return;
@@ -398,7 +402,10 @@ function wrapLegacyChannel(
         ? `${msg.content}\n\n${urlAppends.join('\n')}`
         : msg.content;
 
-      const result = await legacy.send(msg.chatId, finalContent, threadType);
+      // Truyền agentSlug (Track A, plan CSKH-BOT-PAUSE-UX): thiếu → reply BOT rơi về fallback
+      // sent_by='manual' → block "nhân viên đã trả lời" tự nuốt chính reply bot (vòng 1 ROLL-F12/COR-F8,
+      // verify-on-source: đây là caller DUY NHẤT drop slug; các nhánh image/file trên ĐÃ truyền).
+      const result = await legacy.send(msg.chatId, finalContent, threadType, agentSlug);
       if (!result.success) {
         throw new Error(result.error || 'Send failed');
       }

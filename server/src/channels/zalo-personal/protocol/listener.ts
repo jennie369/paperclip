@@ -7,8 +7,9 @@
 import { EventEmitter } from 'events';
 import * as https from 'https';
 import * as crypto from 'crypto';
-import { ZaloSession, WS_CMD, ZALO_API } from './message';
-import { decryptEnvelope } from './crypto';
+import { ZaloSession, WS_CMD, ZALO_API } from './message.js';
+import { decryptEnvelope } from './crypto.js';
+import { markAlive } from '../../../services/liveness-tracker.js';
 
 const DEFAULT_WS_URLS = [
   'wss://ws1-msg.chat.zalo.me',
@@ -414,6 +415,7 @@ export class ZaloListener extends EventEmitter {
 
   private startPing(): void {
     this.pingInterval = setInterval(() => {
+      markAlive('zalo-listener-ping');
       if (!this.socket || this.socket.destroyed) return;
 
       const jsonPayload = JSON.stringify({ eventId: Date.now() });

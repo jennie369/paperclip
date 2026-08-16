@@ -4,14 +4,17 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://pgfkbcnzqozzkohwbgbk.supabase.co';
-const SUPABASE_KEY = process.env.GEMRAL_SUPABASE_SERVICE_KEY
-  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZmtiY256cW96emtvaHdiZ2JrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjE3NzUzNiwiZXhwIjoyMDc3NzUzNTM2fQ.pI9VjPhcl0sds1mcPsa5nnRv6ODDHbI29Q1ViMLoEQg';
 
 let _client: SupabaseClient | null = null;
 
 export function getSupabase(): SupabaseClient {
   if (!_client) {
-    _client = createClient(SUPABASE_URL, SUPABASE_KEY);
+    // Đọc key LAZY (lúc request đầu — sau khi dotenv đã nạp) + KHÔNG fallback hardcode.
+    const key = process.env.GEMRAL_SUPABASE_SERVICE_KEY;
+    if (!key) {
+      throw new Error('[supabase] GEMRAL_SUPABASE_SERVICE_KEY chưa set — bắt buộc (service_role, không còn fallback hardcode).');
+    }
+    _client = createClient(SUPABASE_URL, key);
   }
   return _client;
 }

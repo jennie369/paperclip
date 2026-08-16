@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { MemoryService } from './memory-service.js';
+import { matchGemralUser, enrichWithGemralData } from './gemral-bridge.js';
 
 const memoryService = new MemoryService();
 
@@ -147,7 +148,7 @@ export async function handleVerifyCustomerIdentity(
     const { data } = await ctx.supabase
       .from('shopify_orders')
       .select('id, order_number, email, phone, customer_email, shipping_address, user_id')
-      .or(`email.eq.${email},customer_email.eq.${email}`)
+      .or(`email.ilike.${likeEscape(email)},customer_email.ilike.${likeEscape(email)}`)
       .order('created_at', { ascending: false })
       .limit(5);
     candidates = data || [];
@@ -161,6 +162,7 @@ export async function handleVerifyCustomerIdentity(
     candidates = data || [];
   }
 
+  // Score Shopify-order candidates (possession proof via order#/email/phone/address).
   let best: { score: number; row: any } | null = null;
   for (const row of candidates) {
     let score = 0;
@@ -174,67 +176,199 @@ export async function handleVerifyCustomerIdentity(
     if (!best || score > best.score) best = { score, row };
   }
 
-  if (!best || best.score < 2) {
+  // ALSO verify against the IDENTITY HUB (profiles). A Gemral account holder is a
+  // valid identity even with zero Shopify orders — the previous gate ignored
+  // profiles entirely, so account-holders who never bought could NEVER verify.
+  // Counts email + phone on the SAME profile (both factors must resolve to one
+  // entity → no cross-identity mixing). Email is unique + lowercase in profiles;
+  // phone matched in both 0xxx / +84xxx forms.
+  let bestProfile: { score: number; id: string } | null = null;
+  if (email || phone) {
+    const orFilters: string[] = [];
+    if (email) orFilters.push(`email.ilike.${likeEscape(email)}`);
+    if (phone) {
+      const altPhone = phone.startsWith('0') ? '+84' + phone.slice(1) : phone;
+      orFilters.push(`phone.eq.${phone}`);
+      if (altPhone !== phone) orFilters.push(`phone.eq.${altPhone}`);
+    }
+    const { data: profs } = await ctx.supabase
+      .from('profiles')
+      .select('id, email, phone')
+      .or(orFilters.join(','))
+      .limit(5);
+    for (const p of profs || []) {
+      let score = 0;
+      if (email && normalizeEmail(p.email) === email) score++;
+      if (phone && normalizePhone(p.phone) === phone) score++;
+      if (!bestProfile || score > bestProfile.score) bestProfile = { score, id: p.id };
+    }
+  }
+
+  const orderScore = best?.score ?? 0;
+  const profileScore = bestProfile?.score ?? 0;
+  const topScore = Math.max(orderScore, profileScore);
+
+  if (topScore < 2) {
     return {
       ok: false,
-      summary: 'Không khớp đủ 2/3 thông tin. Vui lòng kiểm tra lại số điện thoại, email và mã đơn hàng dùng lúc đặt hàng.',
+      summary: 'Không khớp đủ 2 thông tin. Vui lòng kiểm tra lại SĐT, email, mã đơn hàng — hoặc dùng email + SĐT đã đăng ký tài khoản Gemral.',
       error: 'no_match',
     };
   }
 
-  // Resolve crm_customers row by email/phone for scoping
-  let customerId: string | null = best.row.user_id || null;
+  // Prefer the profile identity when it scored at least as high → link the hub directly.
+  const matchedProfileId = bestProfile && profileScore >= orderScore ? bestProfile.id : null;
+
+  // ── Canonical row = the chat's crm_customer (resolved from sender_id in
+  // consumer.ts and stored on channel_sessions.customer_id). Previously this
+  // handler only set a 30-min gate flag keyed off the Shopify order id/user_id
+  // and NEVER persisted the proven email/phone or linked the Gemral account →
+  // gemral_user_id stayed null forever and the agent could not see the
+  // customer's real profile/courses/orders. Fix: write identity back here.
+  let chatCustomerId: string | null = null;
+  if (ctx.sessionKey) {
+    const { data: sess } = await ctx.supabase
+      .from('channel_sessions')
+      .select('customer_id')
+      .eq('session_key', ctx.sessionKey)
+      .maybeSingle();
+    chatCustomerId = (sess as any)?.customer_id || null;
+  }
+
+  // Fallback ordering when there is no chat customer (e.g. save_contacts off):
+  // crm_customers matched by email/phone → Shopify order user_id → order id.
+  let customerId: string | null = chatCustomerId;
   if (!customerId && (email || phone)) {
     const filters: string[] = [];
     if (email) filters.push(`email.eq.${email}`);
     if (phone) filters.push(`phone.eq.${phone}`);
     const { data: c } = await ctx.supabase
       .from('crm_customers')
-      .select('id, display_name, email, phone')
+      .select('id')
       .or(filters.join(','))
       .limit(1);
     if (c && c.length > 0) customerId = c[0].id;
   }
-  if (!customerId) customerId = best.row.id;
+  if (!customerId) customerId = best?.row?.user_id || best?.row?.id || matchedProfileId || null;
 
-  // Persist into channel_sessions so MCP handlers see verification across CLI re-spawns
+  // Persist proven identity + link Gemral account onto the chat customer row.
+  if (chatCustomerId) {
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (email) patch.email = email;       // email first — enrichWithGemralData reads it for Shopify match
+    if (phone) patch.phone = phone;
+    if (email || phone) {
+      await ctx.supabase.from('crm_customers').update(patch).eq('id', chatCustomerId);
+    }
+    try {
+      // Profile matched directly during verify → use it; else resolve by email/phone.
+      const gemralId = matchedProfileId || await matchGemralUser(phone, email);
+      if (gemralId) await enrichWithGemralData(chatCustomerId, gemralId);
+    } catch (err: any) {
+      console.warn(`[verify] Gemral link failed (non-blocking): ${err.message}`);
+    }
+  }
+
+  // Persist verification into channel_sessions — ATOMIC jsonb-merge (RPC) do not clobber
+  // purchase_stage / bot_paused / followup_count. Read-merge-write JS cũ dùng snapshot existingMeta
+  // cũ → có thể xoá bot_paused nếu owner pause xen giữa (plan 2026-08-10). verified_* là key phẳng.
   if (ctx.sessionKey) {
-    await ctx.supabase
-      .from('channel_sessions')
-      .update({
-        metadata: {
-          verified_customer_id: customerId,
-          verified_at: new Date().toISOString(),
-          verified_via: { phone: !!phone, email: !!email, order_number: !!orderNumber },
-        } as any,
-      })
-      .eq('session_key', ctx.sessionKey);
+    await ctx.supabase.rpc('channel_session_merge_meta', {
+      p_session_key: ctx.sessionKey,
+      p_patch: {
+        verified_customer_id: customerId,
+        verified_at: new Date().toISOString(),
+        verified_via: { phone: !!phone, email: !!email, order_number: !!orderNumber, via_profile: !!matchedProfileId },
+      },
+    });
   }
 
   ctx.verifiedCustomerId = customerId;
 
   return {
     ok: true,
-    summary: `Đã xác minh danh tính khách (match ${best.score}/3 fields). Có thể tra cứu trong 30 phút.`,
-    data: { customer_id: customerId, match_score: best.score, order_number: best.row.order_number },
+    summary: `Đã xác minh danh tính khách (khớp ${topScore} thông tin${matchedProfileId ? ' qua tài khoản Gemral' : ''}). Có thể tra cứu trong 30 phút.`,
+    data: { customer_id: customerId, match_score: topScore, order_number: best?.row?.order_number ?? null, via_profile: !!matchedProfileId },
   };
 }
 
 /**
+ * Resolve the verified customer's email — used to list their orders and to
+ * scope single-order lookups to the owner. Tries crm_customers.email then the
+ * linked profiles.email (190 orders carry email, only 3 carry user_id, so
+ * email is the real join key).
+ */
+async function resolveVerifiedEmail(ctx: ToolHandlerContext): Promise<string | null> {
+  if (!ctx.verifiedCustomerId) return null;
+  const { data: cust } = await ctx.supabase
+    .from('crm_customers')
+    .select('email, gemral_user_id')
+    .eq('id', ctx.verifiedCustomerId)
+    .maybeSingle();
+  let email = normalizeEmail((cust as any)?.email);
+  if (!email && (cust as any)?.gemral_user_id) {
+    const { data: prof } = await ctx.supabase
+      .from('profiles')
+      .select('email')
+      .eq('id', (cust as any).gemral_user_id)
+      .maybeSingle();
+    email = normalizeEmail((prof as any)?.email);
+  }
+  return email;
+}
+
+function formatOrderLine(o: any): string {
+  return [
+    `#${o.order_number}: ${o.financial_status || 'pending'} / ${o.fulfillment_status || 'chưa giao'}`,
+    `${o.total_price || 0} ${o.currency || 'VND'}`,
+    o.tracking_number ? `tracking ${o.tracking_number}${o.carrier ? ' (' + o.carrier + ')' : ''}` : '',
+  ].filter(Boolean).join(' — ');
+}
+
+/**
  * lookup_order_shopify — query shopify_orders. Identity gate enforced upstream.
+ *
+ * Mode A (order_number given): return that order, scoped to the verified owner.
+ * Mode B (no order_number): list the verified customer's own orders by email —
+ *   most chat customers do not remember their order number, so before this the
+ *   agent simply could not answer "đơn của tôi đâu rồi?".
  */
 export async function handleLookupOrderShopify(
   args: Record<string, unknown>,
   ctx: ToolHandlerContext,
 ): Promise<SharedToolResult> {
   const orderNumber = (args.order_number as string | undefined)?.replace(/^#/, '').trim() || null;
+
+  // ── Mode B: list the verified customer's own orders by email ──
   if (!orderNumber) {
-    return { ok: false, summary: 'Thiếu order_number.', error: 'missing_order_number' };
+    const email = await resolveVerifiedEmail(ctx);
+    if (!email) {
+      return {
+        ok: false,
+        summary: 'Cần mã đơn hàng, hoặc xác minh email (verify_customer_identity) để xem tất cả đơn của khách.',
+        error: 'missing_order_number',
+      };
+    }
+    const { data, error } = await ctx.supabase
+      .from('shopify_orders')
+      .select('order_number, financial_status, fulfillment_status, tracking_number, carrier, total_price, currency, created_at')
+      .or(`email.ilike.${likeEscape(email)},customer_email.ilike.${likeEscape(email)}`)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    if (error) return { ok: false, summary: `Lỗi DB: ${error.message}`, error: error.message };
+    if (!data || data.length === 0) {
+      return { ok: true, summary: 'Không tìm thấy đơn hàng nào theo email đã xác minh.', data: { count: 0 } };
+    }
+    return {
+      ok: true,
+      summary: `${data.length} đơn của khách:\n${data.map(formatOrderLine).join('\n')}`,
+      data,
+    };
   }
 
+  // ── Mode A: specific order number ──
   const { data, error } = await ctx.supabase
     .from('shopify_orders')
-    .select('order_number, financial_status, fulfillment_status, tracking_number, tracking_url, carrier, fulfilled_at, paid_at, total_price, currency, shipping_address, line_items, email, phone')
+    .select('order_number, financial_status, fulfillment_status, tracking_number, tracking_url, carrier, fulfilled_at, paid_at, total_price, currency, shipping_address, line_items, email, customer_email, phone')
     .eq('order_number', orderNumber)
     .limit(1);
 
@@ -244,6 +378,20 @@ export async function handleLookupOrderShopify(
   }
 
   const order = data[0];
+
+  // Ownership scope: a verified customer may only read their own order. If we
+  // can resolve their email AND the order carries a different email, deny — this
+  // stops a verified customer probing other people's order numbers (plan risk #1).
+  const verifiedEmail = await resolveVerifiedEmail(ctx);
+  const orderEmail = normalizeEmail(order.email) || normalizeEmail(order.customer_email);
+  if (verifiedEmail && orderEmail && verifiedEmail !== orderEmail) {
+    return {
+      ok: false,
+      summary: `Đơn #${orderNumber} không thuộc tài khoản đã xác minh. Vui lòng kiểm tra lại mã đơn.`,
+      error: 'order_not_owned',
+    };
+  }
+
   const items = Array.isArray(order.line_items)
     ? order.line_items.map((it: any) => `${it.title || it.name || 'sp'} x${it.quantity || 1}`).join(', ')
     : '';
@@ -353,4 +501,14 @@ export function normalizePhone(p: string | undefined | null): string | null {
 export function normalizeEmail(e: string | undefined | null): string | null {
   if (!e) return null;
   return e.trim().toLowerCase() || null;
+}
+
+/**
+ * Escape LIKE/ILIKE metacharacters (`\ % _`) so an email is matched literally.
+ * Needed because shopify_orders.email is NOT guaranteed lowercase (verified:
+ * mixed-case rows exist) so we match with case-insensitive ILIKE, but ILIKE
+ * treats `%`/`_` as wildcards — an email like `a_b@x.com` must not over-match.
+ */
+export function likeEscape(s: string): string {
+  return s.replace(/([\\%_])/g, '\\$1');
 }

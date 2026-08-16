@@ -51,7 +51,8 @@ import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { trainingRouter, setupTrainingWebSocket } from "./training/training-routes.js";
-import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
+import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService, scheduledIssueWakeupService } from "./services/index.js";
+import { markAlive } from "./services/liveness-tracker.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -139,6 +140,46 @@ export async function startServer(): Promise<StartedServer> {
     autoApply?: boolean;
   };
   
+  // Startup crash-loop resilience (2026-08-16, plan pooler-stall). Đo thực tế: startup fail
+  // NHANH (5-8s) rồi PM2 tự lên lại; retry biến 1 blip-restart thành 1 in-app retry cho stall
+  // NGẮN. CHỈ retry lỗi TRANSIENT (pooler stall) — KHÔNG retry lỗi logic (stale schema =
+  // từ chối cố ý). connect_timeout ở createUtilitySql lo bound bước connect; PM2
+  // exp_backoff_restart_delay+max_restarts lo stall dài. KHÔNG per-attempt-deadline/dispose
+  // (Codex F5/F6) vì đo chứng minh multi-minute-hang không xảy ra (Buoc 5.5 scope-cut).
+  function isTransientDbError(err: unknown): boolean {
+    const e = err as { code?: string; message?: string } | undefined;
+    const code = e?.code ?? "";
+    if (code === "57014") return true; // canceling statement due to statement timeout
+    if (code.startsWith("08")) return true; // connection exception class (08xxx)
+    const msg = (e?.message ?? "").toLowerCase();
+    return (
+      msg.includes("econnreset") ||
+      msg.includes("etimedout") ||
+      msg.includes("connect_timeout") ||
+      msg.includes("connection terminated") ||
+      msg.includes("timeout")
+    );
+  }
+
+  async function retryTransient<T>(
+    fn: () => Promise<T>,
+    label: string,
+    backoffMs: number[] = [3000, 8000],
+  ): Promise<T> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (attempt >= backoffMs.length || !isTransientDbError(err)) throw err;
+        const delay = backoffMs[attempt];
+        attempt += 1;
+        logger.warn({ err, label, attempt, delay }, "transient DB error at startup; retrying");
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   async function ensureMigrations(
     connectionString: string,
     label: string,
@@ -276,8 +317,12 @@ export async function startServer(): Promise<StartedServer> {
     | { mode: "external-postgres"; connectionString: string }
     | { mode: "embedded-postgres"; dataDir: string; port: number };
   if (config.databaseUrl) {
-    migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
-  
+    const externalDbUrl = config.databaseUrl;
+    migrationSummary = await retryTransient(
+      () => ensureMigrations(externalDbUrl, "PostgreSQL"),
+      "ensureMigrations(external)",
+    );
+
     db = createDb(config.databaseUrl);
     logger.info("Using external PostgreSQL via DATABASE_URL/config");
     activeDatabaseConnectionString = config.databaseUrl;
@@ -591,6 +636,7 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
+    const scheduledIssueWakeups = scheduledIssueWakeupService(db as any, { heartbeat });
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -610,6 +656,13 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "heartbeat timer tick failed");
+        })
+        .finally(() => {
+          // Mark alive on settle (success OR failure), not on invocation — a
+          // hung promise that never settles is exactly the failure mode this
+          // is meant to catch (incident 2026-08-09: HTTP+DB stayed healthy
+          // while this tick silently stopped completing for ~6.5h).
+          markAlive("heartbeat-scheduler-tick");
         });
 
       void routines
@@ -621,6 +674,17 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "routine scheduler tick failed");
+        });
+
+      void scheduledIssueWakeups
+        .tickScheduledIssueWakeups(new Date())
+        .then((result) => {
+          if (result.due > 0) {
+            logger.info({ ...result }, "scheduled issue wake tick fired");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "scheduled issue wake tick failed");
         });
   
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure

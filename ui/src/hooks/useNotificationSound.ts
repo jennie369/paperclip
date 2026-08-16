@@ -35,12 +35,28 @@ export function useNotificationSound() {
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "channel_pending_messages" },
-        (payload) => {
+        async (payload) => {
           const msg = payload.new as any;
           // Only play for inbound customer messages, not agent messages
-          if (msg.status !== "handled" && !document.hasFocus()) {
-            playSound();
+          if (msg.status === "handled" || document.hasFocus()) return;
+          // Bỏ qua hội thoại đã TẮT THÔNG BÁO (mute). Hook realtime này là nguồn noti
+          // độc lập với UnifiedInbox nên phải tự kiểm mute.
+          // Lookup theo chat_id (= thread_id, Zalo id duy nhất): pending.session_key NULL
+          // và channel_sessions.channel_name có thể NULL → chat_id là khoá tin cậy nhất.
+          if (msg.thread_id) {
+            try {
+              const { data: muted } = await sb
+                .from("channel_sessions")
+                .select("is_muted")
+                .eq("chat_id", msg.thread_id)
+                .eq("is_muted", true)
+                .limit(1);
+              if (muted && muted.length > 0) return; // muted → không phát sound + không notification
+            } catch {
+              // lookup lỗi → vẫn phát (an toàn: không nuốt noti vì lỗi mạng)
+            }
           }
+          playSound();
         }
       )
       .subscribe();

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from "react";
-import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
+import { useParams, useNavigate, Link, Navigate, useBeforeUnload, useLocation, useSearchParams } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type AgentKey, type ClaudeLoginResult, type AvailableSkill } from "../api/agents";
 import { budgetsApi } from "../api/budgets";
@@ -10,6 +10,7 @@ import { ApiError, api } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
+import { projectsApi } from "../api/projects";
 import { usePanel } from "../context/PanelContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useCompany } from "../context/CompanyContext";
@@ -28,6 +29,8 @@ import { EntityRow } from "../components/EntityRow";
 import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
+import { IssuesList } from "../components/IssuesList";
+import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
@@ -189,13 +192,14 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "configuration" | "skills" | "runs" | "budget" | "relations" | "activity-log";
+type AgentDetailView = "dashboard" | "configuration" | "skills" | "runs" | "issues" | "budget" | "relations" | "activity-log";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "configure" || value === "configuration") return "configuration";
   if (value === "skills") return value;
   if (value === "budget") return value;
   if (value === "runs") return value;
+  if (value === "issues") return value;
   if (value === "relations") return value;
   if (value === "activity-log") return value;
   return "dashboard";
@@ -389,8 +393,22 @@ function WorkspaceOperationsSection({ operations }: { operations: WorkspaceOpera
                 <div className="text-sm font-medium">{workspaceOperationPhaseLabel(operation.phase)}</div>
                 <WorkspaceOperationStatusBadge status={operation.status} />
                 <div className="text-[11px] text-muted-foreground">
-                  {relativeTime(operation.startedAt)}
-                  {operation.finishedAt && ` to ${relativeTime(operation.finishedAt)}`}
+                  {new Date(operation.startedAt).toLocaleString("vi-VN", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit"
+                  })}
+                  {operation.finishedAt && ` to ${new Date(operation.finishedAt).toLocaleString("vi-VN", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit"
+                  })}`}
                 </div>
               </div>
               {operation.command && (
@@ -466,6 +484,8 @@ export function AgentDetail() {
     runId?: string;
   }>();
 
+  const location = useLocation();
+
   // Scroll to top on mount + sau khi data render xong (loading → content shift).
   // Layout có <main id="main-content" overflow-auto> → main IS scroll container
   // ở desktop (window không scroll). Mobile dùng window scroll. Phải đụng cả 2.
@@ -485,7 +505,7 @@ export function AgentDetail() {
       window.scrollTo(0, 0);
     });
     return () => cancelAnimationFrame(raf);
-  }, [agentId]);
+  }, [agentId, location.pathname]);
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { closePanel } = usePanel();
   const { openNewIssue } = useDialog();
@@ -623,13 +643,15 @@ export function AgentDetail() {
           ? "skills"
           : activeView === "runs"
             ? "runs"
-            : activeView === "budget"
-              ? "budget"
-              : activeView === "relations"
-                ? "relations"
-                : activeView === "activity-log"
-                  ? "activity-log"
-                  : "dashboard";
+            : activeView === "issues"
+              ? "issues"
+              : activeView === "budget"
+                ? "budget"
+                : activeView === "relations"
+                  ? "relations"
+                  : activeView === "activity-log"
+                    ? "activity-log"
+                    : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
       navigate(`/${companyPrefix}/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
       return;
@@ -748,6 +770,8 @@ export function AgentDetail() {
         crumbs.push({ label: "Skills" });
       } else if (activeView === "runs") {
         crumbs.push({ label: "Runs" });
+      } else if (activeView === "issues") {
+        crumbs.push({ label: "Issues" });
       } else if (activeView === "budget") {
         crumbs.push({ label: "Budget" });
       } else {
@@ -907,6 +931,7 @@ export function AgentDetail() {
               { value: "configuration", label: "Configuration" },
               { value: "skills", label: "Skills" },
               { value: "runs", label: "Runs" },
+              { value: "issues", label: "Issues" },
               { value: "activity-log", label: "Nhật ký" },
               { value: "budget", label: "Budget" },
               { value: "relations", label: "Quan hệ" },
@@ -1017,6 +1042,15 @@ export function AgentDetail() {
           selectedRunId={urlRunId ?? null}
           adapterType={agent.adapterType}
           allIssues={allIssues ?? []}
+          heartbeatThreadIssue={heartbeatThreadIssue}
+        />
+      )}
+
+      {activeView === "issues" && resolvedCompanyId && (
+        <AgentIssuesTab
+          agentId={agent.id}
+          companyId={resolvedCompanyId}
+          allAgents={allAgents ?? []}
         />
       )}
 
@@ -1065,10 +1099,11 @@ function LatestRunCard({
 }: {
   runs: HeartbeatRun[];
   agentId: string;
-  issues?: { id: string; identifier?: string | null }[];
-  heartbeatThreadIssue?: { id: string; identifier?: string | null } | null;
+  issues?: { id: string; identifier?: string | null; title?: string; status?: string }[];
+  heartbeatThreadIssue?: { id: string; identifier?: string | null; title?: string; status?: string } | null;
 }) {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
+  const navigate = useNavigate();
   if (runs.length === 0) return null;
 
   const sorted = [...runs].sort(
@@ -1092,8 +1127,8 @@ function LatestRunCard({
   const runIssueId = runContext?.issueId as string | undefined;
   const isHeartbeatThread = runContext?.heartbeatThread === true;
 
-  let targetIssue: { id: string; identifier?: string | null } | null = null;
-  if (isHeartbeatThread && heartbeatThreadIssue) {
+  let targetIssue: { id: string; identifier?: string | null; title?: string; status?: string } | null = null;
+  if ((isHeartbeatThread || (runIssueId && heartbeatThreadIssue && (runIssueId === heartbeatThreadIssue.id || runIssueId === heartbeatThreadIssue.identifier))) && heartbeatThreadIssue) {
     // Run thuộc heartbeat thread → link tới heartbeat thread issue
     targetIssue = heartbeatThreadIssue;
   } else if (runIssueId && issues) {
@@ -1107,26 +1142,18 @@ function LatestRunCard({
     ? `/${companyPrefix}/issues/${targetIssue.identifier ?? targetIssue.id}`
     : null;
   const targetIssueLabel = targetIssue?.identifier ?? (targetIssue?.id ? targetIssue.id.slice(0, 8) : null);
+  const isHiddenIssue = isHeartbeatThread || targetIssue?.status === "hidden";
 
   return (
     <div className="space-y-3">
       <div className="flex w-full items-center justify-between">
         <div className="flex items-center gap-4">
-          {issuePath && targetIssueLabel ? (
-            <Link
-              to={issuePath}
-              className="shrink-0 text-sm font-semibold text-foreground hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors no-underline flex items-center gap-1"
-            >
-              {targetIssueLabel} <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-          ) : (
-            <Link
-              to={runDetailPath}
-              className="shrink-0 text-sm font-semibold text-foreground hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors no-underline flex items-center gap-1"
-            >
-              Run details <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-          )}
+          <Link
+            to={runDetailPath}
+            className="shrink-0 text-sm font-semibold text-foreground hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors no-underline flex items-center gap-1"
+          >
+            Run details <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
           <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             {isLive && (
               <span className="relative flex h-2 w-2">
@@ -1140,18 +1167,49 @@ function LatestRunCard({
       </div>
 
       <Link
-        to={runDetailPath}
+        to={issuePath ?? runDetailPath}
         className={cn(
           "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
           isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
         )}
       >
         <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+            {new Date(run.createdAt).toLocaleString("vi-VN", {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
           <StatusIcon className={cn("h-3.5 w-3.5", statusInfo.color, run.status === "running" && "animate-spin")} />
           <StatusBadge status={run.status} />
           <span className="font-mono text-xs text-muted-foreground">{run.id.slice(0, 8)}</span>
+          {targetIssueLabel && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (issuePath) navigate(issuePath);
+              }}
+              className="flex items-center min-w-0 text-[10px] bg-accent/50 border border-border/50 px-1.5 py-0.5 rounded transition-colors hover:bg-accent/80 hover:border-primary/40 cursor-pointer"
+              title={targetIssue ? `Mở issue ${targetIssue.identifier ?? targetIssue.id} — ${targetIssue.title}` : `Mở issue ${targetIssueLabel}`}
+            >
+              <span className="shrink-0 font-medium text-foreground">
+                {targetIssueLabel}
+              </span>
+              {targetIssue?.title && (
+                <>
+                  <span className="shrink-0 mx-1 text-muted-foreground">-</span>
+                  <span className="truncate text-muted-foreground">{targetIssue.title}</span>
+                </>
+              )}
+            </button>
+          )}
           <span className={cn(
-            "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+            "ml-auto inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0",
             run.invocationSource === "timer" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
               : run.invocationSource === "assignment" ? "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
               : run.invocationSource === "on_demand" ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
@@ -1159,7 +1217,6 @@ function LatestRunCard({
           )}>
             {sourceLabels[run.invocationSource] ?? run.invocationSource}
           </span>
-          <span className="ml-auto text-xs text-muted-foreground">{relativeTime(run.createdAt)}</span>
         </div>
 
         {summary && (
@@ -1245,9 +1302,12 @@ function AgentOverview({
                     ? "User"
                     : "—";
               const createdLabel = issue.createdAt
-                ? new Date(issue.createdAt).toLocaleDateString("vi-VN", {
+                ? new Date(issue.createdAt).toLocaleString("vi-VN", {
                     day: "2-digit",
                     month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
                   })
                 : "—";
               return (
@@ -1264,7 +1324,7 @@ function AgentOverview({
                       >
                         {creatorLabel}
                       </span>
-                      <span className="text-[11px] text-muted-foreground tabular-nums min-w-[40px]">
+                      <span className="text-[11px] text-muted-foreground tabular-nums min-w-[110px]">
                         {createdLabel}
                       </span>
                       <StatusBadge status={issue.status} />
@@ -1821,20 +1881,38 @@ function CopyableFileRow({ name, path, size, missing }: { name: string; path?: s
 
 /* ---- Runs Tab ---- */
 
-function RunListItem({ run, isSelected, agentId, allIssues }: { run: HeartbeatRun; isSelected: boolean; agentId: string; allIssues?: { id: string; identifier?: string | null; title?: string }[] }) {
+function RunListItem({ run, isSelected, agentId, allIssues, heartbeatThreadIssue }: { run: HeartbeatRun; isSelected: boolean; agentId: string; allIssues?: { id: string; identifier?: string | null; title?: string; status?: string }[]; heartbeatThreadIssue?: { id: string; identifier?: string | null; title?: string; status?: string } | null; }) {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const navigate = useNavigate();
   const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
-  const summary = run.resultJson
-    ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
-    : run.error ?? "";
+  const rj = run.resultJson as Record<string, unknown> | null | undefined;
+  const summary = (
+    (rj && typeof rj.summary === "string" && rj.summary.trim()) ||
+    (rj && typeof rj.result === "string" && rj.result.trim()) ||
+    (rj && typeof rj.message === "string" && rj.message.trim()) ||
+    (run.stdoutExcerpt && run.stdoutExcerpt.trim()) ||
+    run.error ||
+    ""
+  );
 
   const context = asRecord(run.contextSnapshot);
-  const issueId = context?.issueId as string | undefined;
-  const linkedIssue = issueId ? allIssues?.find(i => i.id === issueId) : null;
-  const issueIdentifier = linkedIssue?.identifier ?? issueId;
+  const runIssueId = context?.issueId as string | undefined;
+  const isHeartbeatThread = context?.heartbeatThread === true;
+
+  let targetIssueId = runIssueId;
+  let linkedIssue: { id: string; identifier?: string | null; title?: string; status?: string } | null = null;
+
+  if (isHeartbeatThread || (runIssueId && heartbeatThreadIssue && (runIssueId === heartbeatThreadIssue.id || runIssueId === heartbeatThreadIssue.identifier))) {
+    linkedIssue = heartbeatThreadIssue || null;
+    targetIssueId = heartbeatThreadIssue?.id ?? runIssueId;
+  } else if (runIssueId) {
+    linkedIssue = allIssues?.find((i) => i.id === runIssueId || i.identifier === runIssueId) ?? null;
+  }
+  
+  const issueIdentifier = linkedIssue?.identifier ?? targetIssueId;
+  const isHiddenIssue = isHeartbeatThread || linkedIssue?.status === "hidden";
 
   return (
     <Link
@@ -1844,39 +1922,12 @@ function RunListItem({ run, isSelected, agentId, allIssues }: { run: HeartbeatRu
         isSelected ? "bg-accent/80 ring-1 ring-border border-l-2 border-l-primary" : "hover:bg-accent/20",
       )}
     >
-      <div className="flex items-center gap-2 overflow-hidden">
+      {/* Row 1: status icon + run ID + source badge + date — không overflow */}
+      <div className="flex items-center gap-2">
         <StatusIcon className={cn("h-3.5 w-3.5 shrink-0", statusInfo.color, run.status === "running" && "animate-spin")} />
         <span className="font-mono text-xs text-muted-foreground shrink-0">
           {run.id.slice(0, 8)}
         </span>
-        {issueId && (
-          // Badge GEM-XXX: dùng <button> + stopPropagation để bypass parent Link.
-          // Trước đây click badge → parent <Link> capture → navigate /runs/{run.id}
-          // → user phải click thêm 1 lần ở Issues Touched panel mới đến issue,
-          // và touched issues có thể KHÁC wake-context issue (incident 28/04:
-          // wake context GEM-348, run touched GEM-308 → click GEM-348 badge land
-          // ở GEM-308). Nested <a> trong <a> là invalid HTML — phải dùng button.
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (issueIdentifier) navigate(`/${companyPrefix}/issues/${issueIdentifier}`);
-            }}
-            className="flex items-center min-w-0 text-[10px] bg-accent/50 border border-border/50 px-1.5 py-0.5 rounded hover:bg-accent/80 hover:border-primary/40 transition-colors cursor-pointer"
-            title={linkedIssue ? `Mở issue ${linkedIssue.identifier ?? issueId} — ${linkedIssue.title}` : `Mở issue ${issueId}`}
-          >
-            <span className="shrink-0 font-medium text-foreground">
-              {linkedIssue?.identifier ?? issueId.slice(0, 8)}
-            </span>
-            {linkedIssue?.title && (
-              <>
-                <span className="shrink-0 mx-1 text-muted-foreground">-</span>
-                <span className="truncate text-muted-foreground">{linkedIssue.title}</span>
-              </>
-            )}
-          </button>
-        )}
         <span className={cn(
           "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0 ml-auto",
           run.invocationSource === "timer" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
@@ -1887,9 +1938,43 @@ function RunListItem({ run, isSelected, agentId, allIssues }: { run: HeartbeatRu
           {sourceLabels[run.invocationSource] ?? run.invocationSource}
         </span>
         <span className="text-[11px] text-muted-foreground shrink-0">
-          {relativeTime(run.createdAt)}
+          {new Date(run.createdAt).toLocaleString("vi-VN", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
         </span>
       </div>
+      {/* Row 2: GEM-issue badge — dòng riêng, không bị che bởi source/date */}
+      {targetIssueId && (
+        <div className="pl-5 flex items-center">
+          {/* Badge GEM-XXX: dùng <button> + stopPropagation để bypass parent Link.
+              Nested <a> trong <a> là invalid HTML — phải dùng button. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (issueIdentifier) navigate(`/${companyPrefix}/issues/${issueIdentifier}`);
+            }}
+            className="flex items-center max-w-full text-[10px] bg-accent/50 border border-border/50 px-1.5 py-0.5 rounded transition-colors hover:bg-accent/80 hover:border-primary/40 cursor-pointer"
+            title={linkedIssue ? `Mở issue ${linkedIssue.identifier ?? targetIssueId} — ${linkedIssue.title}` : `Mở issue ${targetIssueId}`}
+          >
+            <span className="shrink-0 font-medium text-foreground">
+              {linkedIssue?.identifier ?? targetIssueId.slice(0, 8)}
+            </span>
+            {linkedIssue?.title && (
+              <>
+                <span className="shrink-0 mx-1 text-muted-foreground">-</span>
+                <span className="truncate text-muted-foreground max-w-[140px]">{linkedIssue.title}</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
       {summary && (
         <span className="text-xs text-muted-foreground truncate pl-5.5">
           {summary.slice(0, 60)}
@@ -1913,6 +1998,7 @@ function RunsTab({
   selectedRunId,
   adapterType,
   allIssues,
+  heartbeatThreadIssue,
 }: {
   runs: HeartbeatRun[];
   companyId: string;
@@ -1921,6 +2007,7 @@ function RunsTab({
   selectedRunId: string | null;
   adapterType: string;
   allIssues: any[];
+  heartbeatThreadIssue?: { id: string; identifier?: string | null; title?: string } | null;
 }) {
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const { isMobile } = useSidebar();
@@ -1957,7 +2044,7 @@ function RunsTab({
     return (
       <div className="border border-border rounded-lg overflow-x-hidden">
         {sorted.map((run) => (
-          <RunListItem key={run.id} run={run} isSelected={false} agentId={agentRouteId} allIssues={allIssues} />
+          <RunListItem key={run.id} run={run} isSelected={false} agentId={agentRouteId} allIssues={allIssues} heartbeatThreadIssue={heartbeatThreadIssue} />
         ))}
       </div>
     );
@@ -1973,7 +2060,7 @@ function RunsTab({
       )}>
         <div className="sticky top-4 overflow-y-auto" style={{ maxHeight: "calc(100vh - 2rem)" }}>
         {sorted.map((run) => (
-          <RunListItem key={run.id} run={run} isSelected={run.id === effectiveRunId} agentId={agentRouteId} allIssues={allIssues} />
+          <RunListItem key={run.id} run={run} isSelected={run.id === effectiveRunId} agentId={agentRouteId} allIssues={allIssues} heartbeatThreadIssue={heartbeatThreadIssue} />
         ))}
         </div>
       </div>
@@ -2111,6 +2198,14 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     },
   });
 
+  const runGeminiLogin = useMutation({
+    mutationFn: () => agentsApi.loginWithGemini(run.agentId, run.companyId),
+    onSuccess: () => {
+      // Just show a local toast or alert, or it will be self-evident.
+      alert("Please check your browser. Gemini authentication page has been opened.");
+    },
+  });
+
   const isRunning = run.status === "running" && !!run.startedAt && !run.finishedAt;
   const [elapsedSec, setElapsedSec] = useState<number>(() => {
     if (!run.startedAt) return 0;
@@ -2203,8 +2298,22 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
                   {endTime}
                 </div>
                 <div className="text-[11px] text-muted-foreground">
-                  {relativeTime(run.startedAt!)}
-                  {run.finishedAt && <> &rarr; {relativeTime(run.finishedAt)}</>}
+                  {new Date(run.startedAt!).toLocaleString("vi-VN", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit"
+                  })}
+                  {run.finishedAt && <> &rarr; {new Date(run.finishedAt).toLocaleString("vi-VN", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit"
+                  })}</>}
                 </div>
                 {displayDurationSec !== null && (
                   <div className="text-xs text-muted-foreground">
@@ -2263,6 +2372,31 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
                       </pre>
                     )}
                   </>
+                )}
+              </div>
+            )}
+            {run.errorCode === "gemini_quota_exhausted" && adapterType === "gemini_local" && (
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => runGeminiLogin.mutate()}
+                  disabled={runGeminiLogin.isPending}
+                >
+                  {runGeminiLogin.isPending ? "Opening browser..." : "Login to Gemini"}
+                </Button>
+                {runGeminiLogin.isError && (
+                  <p className="text-xs text-destructive">
+                    {runGeminiLogin.error instanceof Error
+                      ? runGeminiLogin.error.message
+                      : "Failed to trigger Gemini login"}
+                  </p>
+                )}
+                {runGeminiLogin.isSuccess && (
+                  <p className="text-xs text-green-600 dark:text-green-400">
+                    Authentication page opened in your browser. Please switch to your browser to complete login, then retry.
+                  </p>
                 )}
               </div>
             )}
@@ -2361,19 +2495,34 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
         <div className="space-y-2">
           <span className="text-xs font-medium text-muted-foreground">Issues Touched ({touchedIssues.length})</span>
           <div className="border border-border rounded-lg divide-y divide-border">
-            {touchedIssues.map((issue) => (
-              <Link
-                key={issue.issueId}
-                to={`/issues/${issue.identifier ?? issue.issueId}`}
-                className="flex items-center justify-between w-full px-3 py-2 text-xs hover:bg-accent/20 transition-colors text-left no-underline text-inherit"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <StatusBadge status={issue.status} />
-                  <span className="truncate">{issue.title}</span>
+            {touchedIssues.map((issue) => {
+              const isHidden = issue.status === "hidden";
+              return isHidden ? (
+                <div
+                  key={issue.issueId}
+                  className="flex items-center justify-between w-full px-3 py-2 text-xs opacity-70 cursor-not-allowed text-left no-underline text-inherit"
+                  title="This issue is hidden"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <StatusBadge status={issue.status} />
+                    <span className="truncate">{issue.title}</span>
+                  </div>
+                  <span className="font-mono text-muted-foreground shrink-0 ml-2">{issue.identifier ?? issue.issueId.slice(0, 8)}</span>
                 </div>
-                <span className="font-mono text-muted-foreground shrink-0 ml-2">{issue.identifier ?? issue.issueId.slice(0, 8)}</span>
-              </Link>
-            ))}
+              ) : (
+                <Link
+                  key={issue.issueId}
+                  to={`/${companyPrefix}/issues/${issue.identifier ?? issue.issueId}`}
+                  className="flex items-center justify-between w-full px-3 py-2 text-xs hover:bg-accent/20 transition-colors text-left no-underline text-inherit"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <StatusBadge status={issue.status} />
+                    <span className="truncate">{issue.title}</span>
+                  </div>
+                  <span className="font-mono text-muted-foreground shrink-0 ml-2">{issue.identifier ?? issue.issueId.slice(0, 8)}</span>
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}
@@ -3174,6 +3323,84 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---- Agent Issues Tab ---- */
+
+function AgentIssuesTab({ agentId, companyId, allAgents }: { agentId: string; companyId: string; allAgents: Agent[] }) {
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+
+  const { data: projects } = useQuery({
+    queryKey: queryKeys.projects.list(companyId),
+    queryFn: () => projectsApi.list(companyId),
+    enabled: !!companyId,
+  });
+
+  const { data: liveRuns } = useQuery({
+    queryKey: queryKeys.liveRuns(companyId),
+    queryFn: () => heartbeatsApi.liveRunsForCompany(companyId),
+    enabled: !!companyId,
+    refetchInterval: 5000,
+  });
+
+  const liveIssueIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of liveRuns ?? []) {
+      if (run.issueId) ids.add(run.issueId);
+    }
+    return ids;
+  }, [liveRuns]);
+
+  const issueLinkState = useMemo(
+    () =>
+      createIssueDetailLocationState(
+        "Agent Issues",
+        `${location.pathname}${location.search}${location.hash}`,
+        "issues",
+      ),
+    [location.pathname, location.search, location.hash],
+  );
+
+  const { data: issues, isLoading, error } = useQuery({
+    queryKey: [...queryKeys.issues.list(companyId), "participant-agent", agentId],
+    queryFn: () => issuesApi.list(companyId, { participantAgentId: agentId, includeHidden: true }),
+    enabled: !!companyId && !!agentId,
+  });
+
+  const updateIssue = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      issuesApi.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <IssuesList
+        issues={issues ?? []}
+        isLoading={isLoading}
+        error={error as Error | null}
+        agents={allAgents}
+        projects={projects}
+        liveIssueIds={liveIssueIds}
+        viewStateKey={`paperclip:agent-${agentId}-issues`}
+        issueLinkState={issueLinkState}
+        initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
+        initialSearch={searchParams.get("q") ?? ""}
+        onSearchChange={(q) => {
+          const url = new URL(window.location.href);
+          if (q) url.searchParams.set("q", q);
+          else url.searchParams.delete("q");
+          window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+        }}
+        onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
+        searchFilters={{ participantAgentId: agentId }}
+      />
     </div>
   );
 }
