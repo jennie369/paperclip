@@ -744,7 +744,10 @@ export class ZaloPersonalChannel {
     filePath: string,
     threadType: 'dm' | 'group' = 'dm',
     caption?: string,
-    agentSlug?: string
+    agentSlug?: string,
+    // Caller-provided public URL (e.g. Supabase Storage) — overrides buildOutboundMediaUrl().
+    // Needed when filePath is a temp upload outside ALLOWED_MEDIA_ROOTS (§P12, 2026-08-16).
+    providedMediaUrl?: string
   ): Promise<{ success: boolean; error?: string }> {
     if (!this.session) return { success: false, error: 'Not connected' };
 
@@ -756,7 +759,8 @@ export class ZaloPersonalChannel {
     // Ghi CẢ KHI THẤT BẠI (vd Zalo trả error_code 201 vượt 512K/chunk): admin cần
     // thấy ẢNH ĐÃ CỐ GỬI, không chỉ text "[Hình ảnh]" trơ — file cục bộ tồn tại
     // độc lập với việc Zalo có chấp nhận hay không (§P12, 2026-08-04).
-    const mediaUrl = buildOutboundMediaUrl(filePath);
+    // Priority: caller-provided URL (Supabase Storage) > local media-library URL.
+    const finalMediaUrl = providedMediaUrl || buildOutboundMediaUrl(filePath);
     await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,
       thread_id: threadId,
@@ -764,7 +768,7 @@ export class ZaloPersonalChannel {
       to_uid: threadId,
       body: caption || '[Hình ảnh]',
       content_type: 'image',
-      media: mediaUrl ? [mediaUrl] : null,
+      media: finalMediaUrl ? [finalMediaUrl] : null,
       status: result.success ? 'sent' : 'failed',
       error_message: result.error,
       platform_message_id: result.messageId,

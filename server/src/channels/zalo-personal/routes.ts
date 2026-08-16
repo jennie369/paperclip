@@ -323,11 +323,36 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   }
 
   try {
+    // Upload to Supabase Storage để inbox có URL hiển thị ảnh THẬT (§P12 fix 2026-08-16).
+    // Temp file multer nằm ngoài ALLOWED_MEDIA_ROOTS → buildOutboundMediaUrl() trả null → media=null.
+    // Upload lên gemops-attachments (public bucket) trước khi gửi Zalo → URL persistent.
+    let storageUrl: string | undefined;
+    try {
+      const fileBuffer = fs.readFileSync(file.path);
+      const ext = path.extname(file.originalname || file.filename) || '.jpg';
+      const storagePath = `zalo/${channel_name}/${Date.now()}${ext}`;
+      const { data: storageData, error: storageErr } = await (supabase.storage as any)
+        .from('gemops-attachments')
+        .upload(storagePath, fileBuffer, { contentType: file.mimetype, upsert: false });
+      if (!storageErr && storageData) {
+        const { data: { publicUrl } } = (supabase.storage as any)
+          .from('gemops-attachments')
+          .getPublicUrl(storagePath);
+        storageUrl = publicUrl as string;
+      } else if (storageErr) {
+        console.warn('[upload] Storage upload failed (P12 media will be null):', storageErr.message);
+      }
+    } catch (storageEx: any) {
+      console.warn('[upload] Storage exception (P12 media will be null):', storageEx.message);
+    }
+
     const result = await channel.sendImage(
       thread_id,
       file.path,
       (thread_type as 'dm' | 'group') || 'dm',
       caption,
+      undefined, // agentSlug — manual upload
+      storageUrl, // providedMediaUrl — Supabase public URL (or undefined if upload failed)
     );
 
     // Clean up temp file
@@ -358,7 +383,7 @@ router.get('/:name/messages', async (req, res) => {
   // Fetch outbound (sent) messages
   let outQuery = supabase
     .from('channel_sent_messages')
-    .select('id, channel_name, thread_id, thread_type, to_uid, body, content_type, status, sent_by, created_at')
+    .select('id, channel_name, thread_id, thread_type, to_uid, body, content_type, media, status, sent_by, created_at')
     .eq('channel_name', name)
     .in('status', ['sent', 'failed'])
     .order('created_at', { ascending: false })
