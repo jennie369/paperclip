@@ -11,7 +11,11 @@ const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
 const MIGRATIONS_JOURNAL_JSON = fileURLToPath(new URL("./migrations/meta/_journal.json", import.meta.url));
 
 function createUtilitySql(url: string) {
-  return postgres(url, { max: 1, onnotice: () => {} });
+  // connect_timeout (2026-08-16, plan pooler-stall resilience): bound bước CONNECT ở 8s
+  // thay vì treo tới statement_timeout 2min khi Supabase pooler stall lúc startup
+  // (migration inspect nằm trên startup path → hang = process sống-không-listen). CHỈ áp
+  // bước connect — KHÔNG giới hạn thời gian chạy DDL (apply migration có thể lâu hợp lệ).
+  return postgres(url, { max: 1, connect_timeout: 8, onnotice: () => {} });
 }
 
 function isSafeIdentifier(value: string): boolean {
