@@ -525,7 +525,17 @@ export async function startServer(): Promise<StartedServer> {
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
     | undefined;
   if (config.deploymentMode === "local_trusted") {
-    await ensureLocalTrustedBoardPrincipal(db as any);
+    // F5 (plan 2026-08-18 pooler-stall): startup bootstrap DB (insert board principal/company)
+    // là await DUY NHẤT trên startup path có thể ném 57014 khi Supabase pooler stall TỪNG LÚC —
+    // ném = startServer().catch() → "Paperclip server failed to start" → PM2 restart, rồi lỗi
+    // 57014 cũ rò tiếp sang tiến trình mới → restart ĐÚP (đo pm2.log 18:08/20:08/21:02 17/08:
+    // cặp exit cách 6-7s). Bọc retryTransient (đã dùng cho ensureMigrations, BUG-082) → chỉ retry
+    // lỗi transient (57014/08xxx/timeout), KHÔNG retry lỗi logic → startup vượt qua pooler-stall
+    // thoáng qua thay vì chết + restart-storm.
+    await retryTransient(
+      () => ensureLocalTrustedBoardPrincipal(db as any),
+      "ensureLocalTrustedBoardPrincipal",
+    );
   }
   if (config.deploymentMode === "authenticated") {
     const {
@@ -646,55 +656,86 @@ export async function startServer(): Promise<StartedServer> {
       .catch((err) => {
         logger.error({ err }, "startup heartbeat recovery failed");
       });
-    setInterval(() => {
-      void heartbeat
-        .tickTimers(new Date())
-        .then((result) => {
-          if (result.enqueued > 0) {
-            logger.info({ ...result }, "heartbeat timer tick enqueued runs");
-          }
-        })
+
+    // F1 (plan 2026-08-18 pooler-stall): SINGLE-FLIGHT per tick job. Trước fix, mỗi 30s
+    // setInterval ném 4 job DB (tickTimers / tickScheduledTriggers / tickScheduledIssueWakeups /
+    // reap+resume) BẤT KỂ lần trước xong chưa. Khi Supabase Micro swap-thrash làm 1 job treo,
+    // các lần tick sau chồng thêm query → runtime pool (max:10) cạn → pool wedge → /api/health 503
+    // → restart. Guard này bỏ qua job nếu lần trước CHƯA settle (kèm cảnh báo tuổi) → tối đa 1
+    // in-flight/job → pool luôn còn slot cho health/API. Cùng pattern `backupInFlight` dưới.
+    // markAlive CHỈ gọi khi tick THẬT SỰ settle (không gọi lúc skip) — job treo mãi = không
+    // markAlive = liveness-tracker bắt đúng (incident 2026-08-09). Với F2 (boundedPoll 15s) một
+    // job treo sẽ settle trong ~15s → markAlive lại → không báo degraded oan.
+    const tickInFlight: Record<string, number | null> = {
+      timers: null,
+      routines: null,
+      wakeups: null,
+      recovery: null,
+    };
+    const runTickJob = (
+      key: string,
+      label: string,
+      fn: () => Promise<void>,
+      onSettle?: () => void,
+    ): void => {
+      const startedTickAt = Date.now();
+      const inFlightSince = tickInFlight[key];
+      if (inFlightSince !== null) {
+        logger.warn(
+          { job: key, inFlightMs: startedTickAt - inFlightSince },
+          `${label} tick skipped — previous run still in-flight (pile-up guard F1)`,
+        );
+        return;
+      }
+      tickInFlight[key] = startedTickAt;
+      void fn()
         .catch((err) => {
-          logger.error({ err }, "heartbeat timer tick failed");
+          logger.error({ err }, `${label} tick failed`);
         })
         .finally(() => {
-          // Mark alive on settle (success OR failure), not on invocation — a
-          // hung promise that never settles is exactly the failure mode this
-          // is meant to catch (incident 2026-08-09: HTTP+DB stayed healthy
-          // while this tick silently stopped completing for ~6.5h).
-          markAlive("heartbeat-scheduler-tick");
+          tickInFlight[key] = null;
+          onSettle?.();
         });
+    };
 
-      void routines
-        .tickScheduledTriggers(new Date())
-        .then((result) => {
+    setInterval(() => {
+      runTickJob(
+        "timers",
+        "heartbeat timer",
+        () =>
+          heartbeat.tickTimers(new Date()).then((result) => {
+            if (result.enqueued > 0) {
+              logger.info({ ...result }, "heartbeat timer tick enqueued runs");
+            }
+          }),
+        // Mark alive on settle (success OR failure), not on invocation — a hung promise
+        // that never settles is exactly the failure mode this catches (incident 2026-08-09).
+        () => markAlive("heartbeat-scheduler-tick"),
+      );
+
+      runTickJob("routines", "routine scheduler", () =>
+        routines.tickScheduledTriggers(new Date()).then((result) => {
           if (result.triggered > 0) {
             logger.info({ ...result }, "routine scheduler tick enqueued runs");
           }
-        })
-        .catch((err) => {
-          logger.error({ err }, "routine scheduler tick failed");
-        });
+        }),
+      );
 
-      void scheduledIssueWakeups
-        .tickScheduledIssueWakeups(new Date())
-        .then((result) => {
+      runTickJob("wakeups", "scheduled issue wake", () =>
+        scheduledIssueWakeups.tickScheduledIssueWakeups(new Date()).then((result) => {
           if (result.due > 0) {
             logger.info({ ...result }, "scheduled issue wake tick fired");
           }
-        })
-        .catch((err) => {
-          logger.error({ err }, "scheduled issue wake tick failed");
-        });
-  
+        }),
+      );
+
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
-      void heartbeat
-        .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
-        .then(() => heartbeat.resumeQueuedRuns())
-        .catch((err) => {
-          logger.error({ err }, "periodic heartbeat recovery failed");
-        });
+      runTickJob("recovery", "periodic heartbeat recovery", () =>
+        heartbeat
+          .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
+          .then(() => heartbeat.resumeQueuedRuns()),
+      );
     }, config.heartbeatSchedulerIntervalMs);
   }
   
