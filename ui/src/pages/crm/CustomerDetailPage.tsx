@@ -105,9 +105,9 @@ export function CustomerDetailPage() {
   const gd = c.gemral_data as any;
 
   return (
-    <div className="flex h-full">
+    <div className="flex flex-col lg:flex-row h-full">
       {/* LEFT PANEL — Profile */}
-      <div className="w-80 shrink-0 border-r p-5 space-y-4 overflow-y-auto">
+      <div className="w-full lg:w-80 shrink-0 border-b lg:border-b-0 lg:border-r p-5 space-y-4 overflow-y-auto">
         <Button variant="ghost" size="sm" onClick={goBack}>
           <ArrowLeft className="mr-1.5 h-4 w-4" /> Quay lại
         </Button>
