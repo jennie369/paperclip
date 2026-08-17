@@ -427,25 +427,35 @@ export async function createApp(
     }
   });
 
-  // On startup: one-shot scan of ~/.claude/ to reconcile Registry Marketplace
-  // with disk. NO cron — only startup + manual trigger via UI button.
-  // Safe to run concurrently with seedKnownSchedulers below.
-  import("./services/registry-disk-sync.js").then(async ({ scanRegistryDisk }) => {
-    try {
-      const result = await scanRegistryDisk();
-      const total = Object.values(result.upserted).reduce((a, b) => a + b, 0);
-      console.log(
-        `[Startup] Registry disk scan: ${total} items synced (${result.upserted.skills} skills, ` +
-        `${result.upserted.mcp} MCP, ${result.upserted.commands} commands, ${result.upserted.hooks} hooks, ` +
-        `${result.upserted.plugins} plugins) in ${result.duration_ms}ms`,
-      );
-      if (result.stale_marked > 0) {
-        console.log(`[Startup] Registry disk scan: ${result.stale_marked} stale rows marked disabled`);
+  // On startup: one-shot scan of ~/.claude/ to reconcile Registry Marketplace with disk.
+  // F4 (plan 2026-08-18 pooler-stall): MẶC ĐỊNH KHÔNG chạy lúc startup. Trước fix, scan này bắn
+  // ~4.600 REST upsert (memory_files 2.128, script_registry 1.029, skills_registry 539, slash_commands
+  // 424...) trong 3-4 phút MỖI lần server khởi động (đo edge_logs E5) — trùng đúng lúc restart-storm
+  // của pooler-stall → dội thêm tải lên DB Micro đang swap → khuếch đại sự cố. Registry Marketplace
+  // vẫn refresh được qua NÚT UI (registry-marketplace-routes.ts scanRegistryDisk) hoặc set env
+  // PAPERCLIP_REGISTRY_SYNC_ON_START=true khi thực sự cần sync lúc boot.
+  if (process.env.PAPERCLIP_REGISTRY_SYNC_ON_START === "true") {
+    import("./services/registry-disk-sync.js").then(async ({ scanRegistryDisk }) => {
+      try {
+        const result = await scanRegistryDisk();
+        const total = Object.values(result.upserted).reduce((a, b) => a + b, 0);
+        console.log(
+          `[Startup] Registry disk scan: ${total} items synced (${result.upserted.skills} skills, ` +
+          `${result.upserted.mcp} MCP, ${result.upserted.commands} commands, ${result.upserted.hooks} hooks, ` +
+          `${result.upserted.plugins} plugins) in ${result.duration_ms}ms`,
+        );
+        if (result.stale_marked > 0) {
+          console.log(`[Startup] Registry disk scan: ${result.stale_marked} stale rows marked disabled`);
+        }
+      } catch (err: any) {
+        console.warn("[Startup] Registry disk scan failed:", err?.message);
       }
-    } catch (err: any) {
-      console.warn("[Startup] Registry disk scan failed:", err?.message);
-    }
-  });
+    });
+  } else {
+    console.log(
+      "[Startup] Registry disk scan skipped (F4: manual-only). Bấm nút Sync trong Registry Marketplace UI, hoặc set PAPERCLIP_REGISTRY_SYNC_ON_START=true.",
+    );
+  }
 
   // On startup: seed the Cron Registry with all known scheduled work
   // (pg_cron jobs on Supabase + Node setInterval timers in this server
