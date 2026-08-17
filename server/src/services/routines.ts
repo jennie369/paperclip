@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { boundedPoll } from "./bounded-poll.js";
 import {
   agents,
   companySecrets,
@@ -1172,23 +1173,27 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
     },
 
     tickScheduledTriggers: async (now: Date = new Date()) => {
-      const due = await db
-        .select({
-          trigger: routineTriggers,
-          routine: routines,
-        })
-        .from(routineTriggers)
-        .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
-        .where(
-          and(
-            eq(routineTriggers.kind, "schedule"),
-            eq(routineTriggers.enabled, true),
-            eq(routines.status, "active"),
-            isNotNull(routineTriggers.nextRunAt),
-            lte(routineTriggers.nextRunAt, now),
-          ),
-        )
-        .orderBy(asc(routineTriggers.nextRunAt), asc(routineTriggers.createdAt));
+      // F2: query quét-due bounded 15s (SET LOCAL) — chính câu treo PARSE 2 phút khi pooler stall
+      // (E3, plan pooler-stall). Vòng xử lý per-item bên dưới dùng db thường (thao tác ngắn).
+      const due = await boundedPoll(db, (tx) =>
+        tx
+          .select({
+            trigger: routineTriggers,
+            routine: routines,
+          })
+          .from(routineTriggers)
+          .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
+          .where(
+            and(
+              eq(routineTriggers.kind, "schedule"),
+              eq(routineTriggers.enabled, true),
+              eq(routines.status, "active"),
+              isNotNull(routineTriggers.nextRunAt),
+              lte(routineTriggers.nextRunAt, now),
+            ),
+          )
+          .orderBy(asc(routineTriggers.nextRunAt), asc(routineTriggers.createdAt)),
+      );
 
       let triggered = 0;
       for (const row of due) {

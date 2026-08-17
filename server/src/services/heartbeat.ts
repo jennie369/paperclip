@@ -19,6 +19,7 @@ import {
 } from "@paperclipai/db";
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { boundedPoll } from "./bounded-poll.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
@@ -1973,14 +1974,17 @@ export function heartbeatService(db: Db) {
     const now = new Date();
 
     // Find all runs stuck in "running" state (queued runs are legitimately waiting; resumeQueuedRuns handles them)
-    const activeRuns = await db
-      .select({
-        run: heartbeatRuns,
-        adapterType: agents.adapterType,
-      })
-      .from(heartbeatRuns)
-      .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
-      .where(eq(heartbeatRuns.status, "running"));
+    // F2: quét bounded 15s (SET LOCAL). Vòng reap per-run bên dưới dùng db thường.
+    const activeRuns = await boundedPoll(db, (tx) =>
+      tx
+        .select({
+          run: heartbeatRuns,
+          adapterType: agents.adapterType,
+        })
+        .from(heartbeatRuns)
+        .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
+        .where(eq(heartbeatRuns.status, "running")),
+    );
 
     const reaped: string[] = [];
 
@@ -2099,10 +2103,13 @@ export function heartbeatService(db: Db) {
   }
 
   async function resumeQueuedRuns() {
-    const queuedRuns = await db
-      .select({ agentId: heartbeatRuns.agentId })
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.status, "queued"));
+    // F2: quét queued bounded 15s (SET LOCAL). Vòng claim/spawn per-agent bên dưới dùng db thường.
+    const queuedRuns = await boundedPoll(db, (tx) =>
+      tx
+        .select({ agentId: heartbeatRuns.agentId })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.status, "queued")),
+    );
 
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
     for (let i = 0; i < agentIds.length; i++) {
@@ -4281,7 +4288,8 @@ export function heartbeatService(db: Db) {
     resumeQueuedRuns,
 
     tickTimers: async (now = new Date()) => {
-      const allAgents = await db.select().from(agents);
+      // F2: quét danh sách agent bounded 15s (SET LOCAL). Pass 2 (fire/enqueue per-agent) dùng db thường.
+      const allAgents = await boundedPoll(db, (tx) => tx.select().from(agents));
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;

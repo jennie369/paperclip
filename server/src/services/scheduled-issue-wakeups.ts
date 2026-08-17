@@ -2,6 +2,7 @@ import { and, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { issues } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
+import { boundedPoll } from "./bounded-poll.js";
 import { heartbeatService } from "./heartbeat.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
@@ -24,19 +25,24 @@ export function scheduledIssueWakeupService(db: Db, deps: { heartbeat?: IssueAss
   const heartbeat = deps.heartbeat ?? heartbeatService(db);
 
   async function tickScheduledIssueWakeups(now: Date) {
-    const due = await db
-      .update(issues)
-      .set({ scheduledWakeAt: null, status: "todo", updatedAt: now })
-      .where(
-        and(
-          eq(issues.status, "backlog"),
-          isNotNull(issues.scheduledWakeAt),
-          lte(issues.scheduledWakeAt, now),
-          isNull(issues.hiddenAt),
-          isNotNull(issues.assigneeAgentId),
-        ),
-      )
-      .returning();
+    // F2: claim atomic UPDATE...RETURNING bounded 15s (SET LOCAL) — đây là write, KHÔNG phải
+    // SELECT; nếu để ngoài bound thì dưới cùng lớp pooler stall nó vẫn giữ 1 slot runtime pool
+    // tới statement_timeout global 2 phút (Codex R2). Vòng wake per-issue bên dưới dùng db thường.
+    const due = await boundedPoll(db, (tx) =>
+      tx
+        .update(issues)
+        .set({ scheduledWakeAt: null, status: "todo", updatedAt: now })
+        .where(
+          and(
+            eq(issues.status, "backlog"),
+            isNotNull(issues.scheduledWakeAt),
+            lte(issues.scheduledWakeAt, now),
+            isNull(issues.hiddenAt),
+            isNotNull(issues.assigneeAgentId),
+          ),
+        )
+        .returning(),
+    );
 
     let woken = 0;
     for (const issue of due) {

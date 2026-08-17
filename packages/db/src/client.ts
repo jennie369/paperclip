@@ -72,6 +72,13 @@ export function createDb(url: string) {
   const sql = postgres(runtimeUrl, {
     max: isSupabaseSessionPooler ? 10 : 20,
     idle_timeout: 30,
+    // F2 (plan 2026-08-18 pooler-stall): bound CONNECT ở 10s (mặc định postgres.js = 30s) → khi
+    // Supabase pooler stall lúc bắt tay, kết nối mới chết sớm thay vì giữ slot 30s. max_lifetime
+    // 900s tái tạo kết nối mỗi 15 phút → không giữ backend Supavisor "lạnh"/bị swap-out quá lâu
+    // (backend churn ngắn giúp catcache ấm hơn). Query đang chạy được bound riêng bằng boundedPoll
+    // (SET LOCAL statement_timeout) ở tầng scheduler — xem index.ts/routines.ts/heartbeat.ts.
+    connect_timeout: 10,
+    max_lifetime: 900,
     prepare: isSupabaseSessionPooler ? false : true,
     connection: { application_name: "paperclip-server" },
     onnotice: () => {},
