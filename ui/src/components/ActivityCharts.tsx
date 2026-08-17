@@ -1,4 +1,7 @@
-import type { HeartbeatRun } from "@paperclipai/shared";
+// F3 (plan 2026-08-18 pooler-stall): nhận HeartbeatRunSummary (superset HeartbeatRun vẫn gán
+// được) — 2 chart chỉ đọc status/timestamp, KHÔNG đọc usageJson/resultJson/contextSnapshot →
+// dùng được với list nhẹ (Dashboard) lẫn full (caller khác).
+import type { HeartbeatRunSummary } from "@paperclipai/shared";
 
 /* ---- Utilities ---- */
 
@@ -58,7 +61,7 @@ export function ChartCard({ title, subtitle, children }: { title: string; subtit
 
 /* ---- Chart Components ---- */
 
-export function RunActivityChart({ runs }: { runs: HeartbeatRun[] }) {
+export function RunActivityChart({ runs }: { runs: HeartbeatRunSummary[] }) {
   const days = getLast14Days();
 
   const grouped = new Map<string, { succeeded: number; failed: number; other: number }>();
@@ -224,7 +227,7 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
   );
 }
 
-export function SuccessRateChart({ runs }: { runs: HeartbeatRun[] }) {
+export function SuccessRateChart({ runs }: { runs: HeartbeatRunSummary[] }) {
   const days = getLast14Days();
   const grouped = new Map<string, { succeeded: number; total: number }>();
   for (const day of days) grouped.set(day, { succeeded: 0, total: 0 });

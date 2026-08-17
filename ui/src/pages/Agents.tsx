@@ -160,7 +160,8 @@ export function Agents() {
 
   const { data: runs } = useQuery({
     queryKey: queryKeys.heartbeats(selectedCompanyId!),
-    queryFn: () => heartbeatsApi.list(selectedCompanyId!),
+    // F3 (pooler-stall): chỉ đọc status (live-run count) → dùng listSummary (bỏ JSON blob), giảm egress poll 15s.
+    queryFn: () => heartbeatsApi.listSummary(selectedCompanyId!),
     enabled: !!selectedCompanyId,
     refetchInterval: 15_000,
   });

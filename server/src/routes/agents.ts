@@ -2178,7 +2178,13 @@ export function agentRoutes(db: Db) {
     const agentId = req.query.agentId as string | undefined;
     const limitParam = req.query.limit as string | undefined;
     const limit = limitParam ? Math.max(1, Math.min(1000, parseInt(limitParam, 10) || 200)) : undefined;
-    const runs = await heartbeat.list(companyId, agentId, limit);
+    // F3 (plan 2026-08-18 pooler-stall): ?fields=summary → projection nhẹ (bỏ JSON blob) cho
+    // poller chỉ-hiển-thị; mặc định (không param) trả full shape → giữ nguyên caller cũ (Inbox
+    // retry/AgentDetail đọc contextSnapshot).
+    const summaryOnly = (req.query.fields as string | undefined) === "summary";
+    const runs = summaryOnly
+      ? await heartbeat.listSummary(companyId, agentId, limit)
+      : await heartbeat.list(companyId, agentId, limit);
     res.json(runs);
   });
 

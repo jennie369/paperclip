@@ -261,6 +261,43 @@ const heartbeatRunListColumns = {
   updatedAt: heartbeatRuns.updatedAt,
 } as const;
 
+// F3 (plan 2026-08-18 pooler-stall): projection NHẸ cho list/badge poller — BỎ 3 blob JSON lớn
+// (usageJson, resultJson, contextSnapshot) là nguồn egress chính (E8: mean 0.9-9s, ~37GB egress
+// Supavisor→client) + giữ query lâu → giữ slot runtime pool. Dùng cho các caller CHỈ hiển thị
+// status/timestamp/error (useInboxBadge, Dashboard, Agents). Caller cần contextSnapshot cho
+// retry/detail (Inbox, AgentDetail) VẪN dùng `list` full — KHÔNG đổi (an toàn retry path).
+const heartbeatRunSummaryColumns = {
+  id: heartbeatRuns.id,
+  companyId: heartbeatRuns.companyId,
+  agentId: heartbeatRuns.agentId,
+  invocationSource: heartbeatRuns.invocationSource,
+  triggerDetail: heartbeatRuns.triggerDetail,
+  status: heartbeatRuns.status,
+  startedAt: heartbeatRuns.startedAt,
+  finishedAt: heartbeatRuns.finishedAt,
+  error: heartbeatRuns.error,
+  wakeupRequestId: heartbeatRuns.wakeupRequestId,
+  exitCode: heartbeatRuns.exitCode,
+  signal: heartbeatRuns.signal,
+  sessionIdBefore: heartbeatRuns.sessionIdBefore,
+  sessionIdAfter: heartbeatRuns.sessionIdAfter,
+  logStore: heartbeatRuns.logStore,
+  logRef: heartbeatRuns.logRef,
+  logBytes: heartbeatRuns.logBytes,
+  logSha256: heartbeatRuns.logSha256,
+  logCompressed: heartbeatRuns.logCompressed,
+  stdoutExcerpt: heartbeatRuns.stdoutExcerpt,
+  stderrExcerpt: heartbeatRuns.stderrExcerpt,
+  errorCode: heartbeatRuns.errorCode,
+  externalRunId: heartbeatRuns.externalRunId,
+  processPid: heartbeatRuns.processPid,
+  processStartedAt: heartbeatRuns.processStartedAt,
+  retryOfRunId: heartbeatRuns.retryOfRunId,
+  processLossRetryCount: heartbeatRuns.processLossRetryCount,
+  createdAt: heartbeatRuns.createdAt,
+  updatedAt: heartbeatRuns.updatedAt,
+} as const;
+
 function appendExcerpt(prev: string, chunk: string) {
   const combined = prev + chunk;
   if (combined.length <= MAX_EXCERPT_BYTES) return combined;
@@ -4165,6 +4202,20 @@ export function heartbeatService(db: Db) {
         ...row,
         resultJson: summarizeHeartbeatRunResultJson(row.resultJson),
       }));
+    },
+
+    // F3: bản NHẸ cho poller chỉ-hiển-thị (không JSON blob). Giữ chữ ký/limit như `list`.
+    listSummary: async (companyId: string, agentId?: string, limit?: number) => {
+      const query = db
+        .select(heartbeatRunSummaryColumns)
+        .from(heartbeatRuns)
+        .where(
+          agentId
+            ? and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId))
+            : eq(heartbeatRuns.companyId, companyId),
+        )
+        .orderBy(desc(heartbeatRuns.createdAt));
+      return query.limit(limit ?? 500);
     },
 
     getRun,

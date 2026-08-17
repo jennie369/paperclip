@@ -246,6 +246,7 @@ export type {
   FinanceByBiller,
   FinanceByKind,
   HeartbeatRun,
+  HeartbeatRunSummary,
   HeartbeatRunEvent,
   AgentRuntimeState,
   AgentTaskSession,

@@ -42,6 +42,14 @@ export interface HeartbeatRun {
   updatedAt: Date;
 }
 
+// F3 (plan 2026-08-18 pooler-stall): bản NHẸ trả về từ GET heartbeat-runs?fields=summary — bỏ
+// 3 blob JSON lớn (usageJson/resultJson/contextSnapshot) cho poller chỉ-hiển-thị. HeartbeatRun
+// (full) gán được cho param nhận HeartbeatRunSummary (superset), nên caller full vẫn tương thích.
+export type HeartbeatRunSummary = Omit<
+  HeartbeatRun,
+  "usageJson" | "resultJson" | "contextSnapshot"
+>;
+
 export interface HeartbeatRunEvent {
   id: number;
   companyId: string;

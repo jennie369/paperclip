@@ -1,5 +1,6 @@
 import type {
   HeartbeatRun,
+  HeartbeatRunSummary,
   HeartbeatRunEvent,
   InstanceSchedulerHeartbeatAgent,
   WorkspaceOperation,
@@ -33,6 +34,18 @@ export const heartbeatsApi = {
     if (limit) searchParams.set("limit", String(limit));
     const qs = searchParams.toString();
     return api.get<HeartbeatRun[]>(`/companies/${companyId}/heartbeat-runs${qs ? `?${qs}` : ""}`);
+  },
+  // F3 (plan 2026-08-18 pooler-stall): bản NHẸ (bỏ usageJson/resultJson/contextSnapshot) cho
+  // poller chỉ-hiển-thị (useInboxBadge/Dashboard/Agents) — giảm egress + query time. Caller cần
+  // contextSnapshot cho retry/detail (Inbox/AgentDetail) vẫn dùng `list`.
+  listSummary: (companyId: string, agentId?: string, limit?: number) => {
+    const searchParams = new URLSearchParams();
+    searchParams.set("fields", "summary");
+    if (agentId) searchParams.set("agentId", agentId);
+    if (limit) searchParams.set("limit", String(limit));
+    return api.get<HeartbeatRunSummary[]>(
+      `/companies/${companyId}/heartbeat-runs?${searchParams.toString()}`,
+    );
   },
   get: (runId: string) => api.get<HeartbeatRun>(`/heartbeat-runs/${runId}`),
   events: (runId: string, afterSeq = 0, limit = 200) =>

@@ -223,7 +223,8 @@ export function Dashboard() {
 
   const { data: runs } = useQuery({
     queryKey: queryKeys.heartbeats(selectedCompanyId!),
-    queryFn: () => heartbeatsApi.list(selectedCompanyId!),
+    // F3 (pooler-stall): chỉ vẽ RunActivityChart (status/timestamp) → dùng listSummary (bỏ JSON blob).
+    queryFn: () => heartbeatsApi.listSummary(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
 

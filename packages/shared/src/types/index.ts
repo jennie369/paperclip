@@ -130,6 +130,7 @@ export type { CostEvent, CostSummary, CostByAgent, CostByProviderModel, CostByBi
 export type { FinanceEvent, FinanceSummary, FinanceByBiller, FinanceByKind } from "./finance.js";
 export type {
   HeartbeatRun,
+  HeartbeatRunSummary,
   HeartbeatRunEvent,
   AgentRuntimeState,
   AgentTaskSession,
