@@ -994,7 +994,9 @@ router.get('/:slug/chat-history', async (req, res) => {
   history = history.map((m: any) => {
     if (m.role !== 'user') return m;
     const c = (m.content || '').trim();
-    if (!c.startsWith('[')) return m; // real message, no prefix
+    // Only injected-context messages start with `[HỒ SƠ`; a real customer message that
+    // merely starts with `[` (e.g. `[Hình ảnh]`) must NOT be stripped/dropped.
+    if (!c.startsWith('[HỒ SƠ') && !TIN_NHAN_MOI_RE.test(c)) return m;
     const match = c.match(TIN_NHAN_MOI_RE);
     if (match && match.index !== undefined) {
       const real = c.slice(match.index + match[0].length).trim();

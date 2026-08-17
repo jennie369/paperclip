@@ -31,14 +31,30 @@ export class CustomerResolver {
     // 1b. Fallback: identity đã được merge vào record khác → external_id nằm trong channels[]
     //     của survivor (merge_crm_customers dời identity + null primary_external_id source).
     //     Bắt buộc để KHÔNG re-split sau khi dedup-merge cross-channel.
+    //     ⚠️ supabase-js `.contains(col, [{...}])` với ARRAY-of-OBJECT trên cột jsonb sinh
+    //     `cs.{[object Object]}` → PostgREST "invalid input syntax for type json" → data=null.
+    //     Nếu chỉ đọc `data` (không đọc `error`) thì fallback này CÂM (tạo khách split mới mỗi
+    //     tin). PHẢI truyền JSON STRING để ra `cs.[{"external_id":...}]` + đọc error.
+    //     (Sự cố Hồ Thị Mỹ Huệ 17/08: fallback chưa bao giờ chạy đúng từ khi ship 01/07.)
     if (!existing) {
-      const { data: byChannel } = await supabase
+      const { data: byChannel, error: byChannelErr } = await supabase
         .from('crm_customers')
-        .select('id')
-        .contains('channels', [{ external_id: senderId }])
+        .select('id, total_orders, metadata')
+        .contains('channels', JSON.stringify([{ external_id: senderId }]))
         .neq('status', 'churned')
-        .limit(1);
-      existing = byChannel?.[0] || null;
+        .order('total_orders', { ascending: false })
+        .limit(5);
+      if (byChannelErr) {
+        console.warn(`[CustomerResolver] fallback channels lookup error: ${byChannelErr.message}`);
+      }
+      // Ưu tiên record CHƯA bị merge (không có metadata.merged_into) + nhiều đơn nhất (survivor giàu).
+      const candidates = (byChannel || []) as Array<{ id: string; metadata?: Record<string, unknown> | null }>;
+      const active = candidates.filter((c) => !(c.metadata && (c.metadata as any).merged_into));
+      const chosen = active[0] || candidates[0];
+      if (chosen && candidates.length > 1) {
+        console.warn(`[CustomerResolver] split-detected: ${candidates.length} records share external_id=${senderId}, chose ${chosen.id}`);
+      }
+      existing = chosen ? { id: chosen.id } : null;
     }
 
     if (existing) {

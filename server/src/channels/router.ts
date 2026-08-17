@@ -32,6 +32,8 @@ import {
   loadPurchaseStage,
   type PurchaseStage,
 } from './crm/purchase-stage-handler.js';
+import { renderHistoryForPrompt, stripInjectedContext } from './session-history-util.js';
+import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -329,37 +331,65 @@ export async function runAgentWithConfig(
   // executor or channel consumer) or the single-tenant default GEMRAL.
   const companyId = (config as any)._companyId || DEFAULT_COMPANY_ID;
   const systemPrompt = await buildSystemPrompt(config, customerContext, companyId);
-  const chatHistory = history || [];
+  // Time-aware, payment-safe history for EVERY provider: strip injected CRM context,
+  // stamp each turn with [DD/MM HH:mm] (HCM), mark pre-boundary turns [CŨ] + downgrade old
+  // bill/link-card images, and insert a "PHIÊN TRƯỚC KẾT THÚC" note. Prevents the agent
+  // reading an old-session bill as the current order's payment. (plan CSKH-SALES-CLOSER-BRAIN)
+  const chatHistory = renderHistoryForPrompt(history || []);
 
   // PROVIDER-AGNOSTIC identity header: prepend WHO this message is from so the
   // model never confuses customers in a shared context — applies to every
   // provider below (CLI claude/gemini AND API nvidia/openrouter + future).
   const messageForAgent = buildIdentityHeader(customerContext) + message;
 
-  try {
-    let reply: string;
-
+  // Single dispatch closure so the pre-send payment gate can regenerate once without
+  // duplicating the provider switch.
+  const dispatch = async (msg: string): Promise<string> => {
     switch (config.provider) {
       case 'claude':
-        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
-        break;
+        return runViaClaude(config, systemPrompt, chatHistory, msg, sessionKey, signal);
       case 'gemini':
-        reply = await runViaGemini(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
-        break;
+        return runViaGemini(config, systemPrompt, chatHistory, msg, sessionKey, signal);
       case 'antigravity':
-        reply = await runViaAntigravity(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
-        break;
+        return runViaAntigravity(config, systemPrompt, chatHistory, msg, sessionKey, signal);
       case 'nvidia_nim':
-        reply = await runViaNvidiaNim(config, systemPrompt, chatHistory, messageForAgent, signal);
-        break;
+        return runViaNvidiaNim(config, systemPrompt, chatHistory, msg, signal);
       case 'openrouter':
-        reply = await runViaOpenRouter(config, systemPrompt, chatHistory, messageForAgent, signal);
-        break;
+        return runViaOpenRouter(config, systemPrompt, chatHistory, msg, signal);
       default:
         console.warn(`[Router] Unknown provider: ${config.provider}, falling back to Claude`);
-        reply = await runViaClaude(config, systemPrompt, chatHistory, messageForAgent, sessionKey, signal);
+        return runViaClaude(config, systemPrompt, chatHistory, msg, sessionKey, signal);
     }
+  };
+
+  try {
+    let reply: string = await dispatch(messageForAgent);
     if (signal?.aborted) throw new AgentAbortedError();  // aborted during generation → skip postProcess/side-effects
+
+    // ── Pre-send payment-policy gate (A9, sales-closer prepay) ──
+    // Catch COD/Momo offers or payment-method questions BEFORE the reply reaches the
+    // customer (P-COD is monitoring only — too late once sent). Regenerate once with a
+    // correction; if it still violates, refuse + escalate (bot_paused + ticket + CS ping).
+    if (PREPAY_POLICY_AGENTS.has(config.slug) && detectPaymentPolicyViolation(reply)) {
+      const bad = detectPaymentPolicyViolation(reply);
+      console.warn(`[Router/prepay] violation slug=${config.slug}: "${(bad || '').slice(0, 70)}" → regenerate once`);
+      const fixNote =
+        '\n\n[HỆ THỐNG] Bản trả lời trước VI PHẠM QUY TẮC TIỀN (nhắc COD/Momo hoặc hỏi khách chọn hình thức thanh toán). '
+        + 'Viết LẠI: TUYỆT ĐỐI không nhắc COD/Momo, không hỏi hình thức; nếu đã đủ tên + SĐT + địa chỉ thì gửi thông tin chuyển khoản ngay. Chỉ trả lời khách, không giải thích.';
+      const reply2 = await dispatch(messageForAgent + fixNote);
+      if (signal?.aborted) throw new AgentAbortedError();
+      if (detectPaymentPolicyViolation(reply2)) {
+        console.warn(`[Router/prepay] refuse slug=${config.slug} after regenerate → escalate`);
+        (config as any)._escalation = {
+          reason: 'payment_policy_violation',
+          priority: 'high',
+          summary: 'Agent nhắc COD / hỏi hình thức thanh toán 2 lần liên tiếp — cần người xử lý đơn.',
+        };
+        reply = 'Dạ chị đợi em kiểm tra lại đơn một chút rồi báo lại chị ngay nha 💛';
+      } else {
+        reply = reply2;
+      }
+    }
 
     // ── HOISTED customer-facing contract (Reply Gateway P1) ──
     // Single chokepoint: scrub banned phrases + parse [[SEND_MEDIA]]/[[ESCALATE]]
@@ -1781,6 +1811,9 @@ function renderMediaLibraryForPrompt(lib: MediaLibrary): string {
     '',
     '✅ ĐƯỢC PHÉP — Cú pháp duy nhất:',
     '   [[SEND_MEDIA: id]]   ← chỉ dùng id có trong danh sách bên dưới',
+    '   Khi gửi ảnh SẢN PHẨM: 1 marker là đủ — hệ thống tự đính kèm NHIỀU ảnh KHÁC NHAU',
+    '   của sản phẩm đó (ít nhất 2 ảnh) để khách có nhiều góc lựa chọn. KHÔNG lặp lại',
+    '   cùng 1 id nhiều lần.',
     '',
     '🚫 TUYỆT ĐỐI KHÔNG ĐƯỢC:',
     '   - KHÔNG bịa các marker khác như [[CALL: ...]], [[FUNCTION: ...]],',
@@ -1842,6 +1875,10 @@ const GENERIC_MEDIA_TAGS = new Set([
 // Multi-ảnh/sản phẩm (2026-07-16): cap số ảnh gửi cho 1 item/lần (upload bucket tuần tự
 // ở CSKH, tránh spam N tin + latency). Áp cho CẢ marker lẫn fallback auto-match.
 const MEDIA_MAX_PER_MARKER = 6;
+// Per-product image cap when the agent sends product photos: send MULTIPLE different images
+// (≥2, up to this cap) so the customer has choices — but not so many it spams Zalo (each
+// image is a separate message). OD-1 = 3. (plan CSKH-SALES-CLOSER-BRAIN)
+const MEDIA_PRODUCT_IMAGES_MAX = 3;
 
 // Suy mimeType từ đuôi path (all_images là list PATH, mỗi ảnh có thể khác loại) → fallback item.mimeType.
 function mimeFromExt(p: string): string | undefined {
@@ -1863,9 +1900,13 @@ function mimeFromExt(p: string): string | undefined {
 // → 1 MediaFile GIỮ url-only backward-compat (Codex: fallback all_images||[path] rớt url).
 function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile[] {
   if (item.all_images && item.all_images.length) {
-    const capped = item.all_images.slice(0, MEDIA_MAX_PER_MARKER);
-    if (item.all_images.length > MEDIA_MAX_PER_MARKER) {
-      console.log(`[Router/media] capped ${item.all_images.length}→${MEDIA_MAX_PER_MARKER} images for id=${item.id}`);
+    const capped = item.all_images.slice(0, MEDIA_PRODUCT_IMAGES_MAX);
+    if (item.all_images.length > MEDIA_PRODUCT_IMAGES_MAX) {
+      console.log(`[Router/media] capped ${item.all_images.length}→${MEDIA_PRODUCT_IMAGES_MAX} images for id=${item.id}`);
+    } else if (item.all_images.length < 2) {
+      // Library says <2 images for a product — send what we have (1 is better than 0) but log
+      // so the pre-ship media audit (STALE_MULTI) / P-MEDIA2 can flag the under-indexed product.
+      console.log(`[Router/media] UNDER_MIN id=${item.id} has only ${item.all_images.length} image(s)`);
     }
     return capped.map((p) => ({
       path: p,
@@ -3104,6 +3145,17 @@ async function saveHistory(
   const agentSessionId = (config as any)._agent_session_id as string | null | undefined;
   const metadata = agentSessionId ? { agent_session_id: agentSessionId } : undefined;
 
+  // Store the RAW customer text, NOT the enriched `[HỒ SƠ…][TÓM TẮT AI]…[TIN NHẮN MỚI]`
+  // block that was injected for this turn. Storing the enriched form made history bloat +
+  // self-reinforce (stale CRM snapshots re-fed every turn, summarizer re-summarizing its
+  // own summary → phantom "đang chờ hoàn tất đơn"). Stripping at the single writer covers
+  // every caller (consumer, /test, training) without threading a new param. (plan
+  // CSKH-SALES-CLOSER-BRAIN, ADR-6). Idempotent for already-raw messages.
+  const rawUserMessage = stripInjectedContext(userMessage);
+  if (rawUserMessage.startsWith('[HỒ SƠ')) {
+    console.error(`[saveHistory] injected-context leaked into stored user message for ${sessionKey}`);
+  }
+
   // Fetch current session — may be null for training/test sessions which have
   // no live channel row. We UPSERT below so the first turn creates the row.
   const { data: session } = await supabase
@@ -3117,7 +3169,7 @@ async function saveHistory(
   history.push(
     {
       role: 'user',
-      content: userMessage,
+      content: rawUserMessage,
       timestamp: now,
       ...(senderName ? { senderName } : {}),
       ...(metadata ? { metadata } : {}),

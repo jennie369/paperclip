@@ -3,6 +3,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { supabase } from '../zalo-personal/supabase.js';
+import { stripInjectedContext } from '../session-history-util.js';
 
 // Track idle timers per session
 const idleTimers = new Map<string, NodeJS.Timeout>();
@@ -46,6 +47,15 @@ export class AISummarizer {
     if (!customerId) return;
 
     try {
+      // Skip customers that have been merged away — writing a summary onto a churned
+      // shell record is dead work (and could resurrect stale text). (plan CSKH-SALES-CLOSER-BRAIN)
+      const { data: cust0 } = await supabase
+        .from('crm_customers')
+        .select('metadata')
+        .eq('id', customerId)
+        .single();
+      if (cust0 && (cust0.metadata as any)?.merged_into) return;
+
       // Load session history
       const { data: session } = await supabase
         .from('channel_sessions')
@@ -61,12 +71,19 @@ export class AISummarizer {
 
       if (history.length < 3) return; // Too short to summarize
 
+      // Strip the injected CRM context so we summarize the REAL conversation, not the agent's
+      // own prior summary re-fed as context. Keep the LAST 3000 chars (most recent turns) —
+      // slicing the START re-summarized the oldest stale snapshot every idle. (plan)
       const messagesText = history
-        .map(m => `${m.role === 'assistant' ? 'Agent' : (m.senderName || 'Khách')}: ${m.content}`)
+        .map(m => `${m.role === 'assistant' ? 'Agent' : (m.senderName || 'Khách')}: ${stripInjectedContext(m.content || '')}`)
         .join('\n')
-        .slice(0, 3000); // Limit context
+        .slice(-3000);
 
       const prompt = `Tóm tắt hội thoại CSKH sau thành 2-3 câu tiếng Việt có dấu.
+Quy tắc quan trọng:
+- Nếu có đơn ĐÃ THANH TOÁN XONG → ghi rõ "đơn <sản phẩm> <giá> đã thanh toán xong".
+- Nếu đơn CHƯA hoàn tất → ghi "đang trao đổi/chờ ... (tính đến hôm nay)", KHÔNG khẳng định khách đã chuyển tiền trừ khi hội thoại nói rõ nhân viên đã xác nhận.
+- KHÔNG bịa trạng thái thanh toán; chỉ tóm tắt điều thực sự xảy ra trong hội thoại.
 Trả về ĐÚNG JSON (không markdown, không backtick):
 {"summary":"...","tags":["tag1","tag2"],"sentiment":"positive|neutral|negative"}
 

@@ -822,7 +822,7 @@ async function processResolved(
   let customerContext = '';
   if (customerId) {
     try {
-      customerContext = await contextBuilder.build(customerId, sessionKey);
+      customerContext = await contextBuilder.build(customerId, sessionKey, history);
     } catch (err: any) {
       console.warn(`${logPrefix} CRM context build failed (non-blocking): ${err.message}`);
     }

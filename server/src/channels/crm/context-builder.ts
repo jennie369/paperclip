@@ -2,6 +2,8 @@
 
 import { supabase } from '../zalo-personal/supabase.js';
 import { MemoryService } from './memory-service.js';
+import { computePaymentSignals, type PaymentSignals } from '../session-history-util.js';
+import type { SessionMessage } from '../types.js';
 
 const memoryService = new MemoryService();
 
@@ -15,7 +17,7 @@ export class ContextBuilder {
    * + escalation history from channel_sessions.metadata so the agent knows
    * exactly where in the funnel this customer is across the entire session.
    */
-  async build(customerId: string, sessionKey?: string): Promise<string> {
+  async build(customerId: string, sessionKey?: string, history?: SessionMessage[]): Promise<string> {
     // 1. Customer profile
     const { data: c } = await supabase
       .from('crm_customers')
@@ -73,8 +75,25 @@ export class ContextBuilder {
       ctx += `\n• Tags: ${c.ai_tags.join(', ')}`;
     }
 
+    // ── Structured order ledger + money rules (plan CSKH-SALES-CLOSER-BRAIN, RC2/A8) ──
+    // Placed BEFORE [TÓM TẮT AI] so the STRUCTURED truth (which orders are paid & closed)
+    // outranks the free-text summary. Identity-gated to prevent injecting another
+    // customer's orders (Codex F1). Non-blocking.
+    try {
+      const ledger = await this.buildOrderLedger(c);
+      ctx += ledger;
+      const signals = computePaymentSignals(history || []);
+      ctx += this.buildPaymentRules(signals);
+    } catch (err) {
+      // Fail-closed toward "0 đã trả": if the ledger can't be built, still print the rules.
+      ctx += this.buildPaymentRules({ imagesAfterStk: 0, customerClaimsPaid: false });
+    }
+
     if (c.ai_summary) {
-      ctx += `\n\n[TÓM TẮT AI]\n${c.ai_summary}`;
+      const dateLabel = c.ai_summary_updated_at
+        ? ` — lịch sử tới ${this.fmtDate(c.ai_summary_updated_at)}, KHÔNG phải trạng thái đơn hiện tại`
+        : '';
+      ctx += `\n\n[TÓM TẮT AI${dateLabel}]\n${c.ai_summary}`;
     }
 
     // Sprint D10: purchase journey stage + bot_paused state from session metadata
@@ -173,5 +192,111 @@ export class ContextBuilder {
 - Dùng tool "search_knowledge" để tìm thông tin chính xác về sản phẩm/khóa học`;
 
     return ctx;
+  }
+
+  /** DD/MM/YYYY in Asia/Ho_Chi_Minh. */
+  private fmtDate(d: string): string {
+    const t = new Date(d);
+    if (isNaN(t.getTime())) return '?';
+    const h = new Date(t.getTime() + 7 * 3600_000);
+    const p = (x: number) => String(x).padStart(2, '0');
+    return `${p(h.getUTCDate())}/${p(h.getUTCMonth() + 1)}/${h.getUTCFullYear()}`;
+  }
+
+  /** Candidate phone forms so `0938…` ⇄ `+84938…` ⇄ `84938…` all match shopify_orders.phone. */
+  private normalizePhones(phone?: string | null): string[] {
+    if (!phone) return [];
+    const digits = phone.replace(/\D/g, '');
+    if (!digits) return [];
+    const local = digits.startsWith('84') ? '0' + digits.slice(2) : digits.startsWith('0') ? digits : '0' + digits;
+    const intl84 = '84' + local.replace(/^0/, '');
+    return [...new Set([phone.trim(), digits, local, intl84, '+' + intl84])].filter(Boolean);
+  }
+
+  /**
+   * Build [SỔ ĐƠN HÀNG] from shopify_orders with an identity provenance gate:
+   * shopify_customer_id > email > phone. If the phone/email maps to another active CRM
+   * record, or the matched orders span multiple customer emails, skip injection entirely
+   * (do NOT leak another customer's orders — Codex F1). Returns the block text.
+   */
+  private async buildOrderLedger(c: any): Promise<string> {
+    const HEAD = '\n\n[SỔ ĐƠN HÀNG — nguồn hệ thống, đây là SỰ THẬT]';
+    const SKIP = `${HEAD}\n• Bỏ qua — định danh (SĐT/email) trùng nhiều hồ sơ khách, nhân viên kiểm tra tay.`;
+    const email = String(c.email || c.shopify_customer_email || '').trim().toLowerCase();
+    const phones = this.normalizePhones(c.phone);
+    const shopifyCustId = c.shopify_customer_id;
+
+    // Conflict: same identity on >1 active CRM record → ambiguous, do not inject.
+    if (email) {
+      const { data } = await supabase.from('crm_customers').select('id')
+        .eq('email', email).neq('id', c.id).neq('status', 'churned').limit(1);
+      if (data && data.length) return SKIP;
+    }
+    if (phones.length) {
+      const { data } = await supabase.from('crm_customers').select('id')
+        .in('phone', phones).neq('id', c.id).neq('status', 'churned').limit(1);
+      if (data && data.length) return SKIP;
+    }
+
+    const cols = 'order_number, financial_status, fulfillment_status, total_price, created_at, line_items, email, customer_email';
+    let rows: any[] = [];
+    if (shopifyCustId) {
+      const { data } = await supabase.from('shopify_orders').select(cols)
+        .eq('shopify_customer_id', shopifyCustId).order('created_at', { ascending: false }).limit(5);
+      rows = data || [];
+    } else if (email) {
+      const [a, b] = await Promise.all([
+        supabase.from('shopify_orders').select(cols).eq('email', email).order('created_at', { ascending: false }).limit(5),
+        supabase.from('shopify_orders').select(cols).eq('customer_email', email).order('created_at', { ascending: false }).limit(5),
+      ]);
+      const merged = new Map<string, any>();
+      for (const r of [...(a.data || []), ...(b.data || [])]) merged.set(String(r.order_number), r);
+      rows = [...merged.values()];
+    } else if (phones.length) {
+      const { data } = await supabase.from('shopify_orders').select(cols)
+        .in('phone', phones).order('created_at', { ascending: false }).limit(5);
+      rows = data || [];
+    }
+
+    // All matched orders must belong to the SAME customer email; mixed = suspicious → skip.
+    const emailSet = new Set(rows.map((r) => String(r.customer_email || r.email || '').toLowerCase()).filter(Boolean));
+    if (emailSet.size > 1) return SKIP;
+
+    if (rows.length === 0) {
+      return `${HEAD}\n• Chưa có đơn nào trong hệ thống.`;
+    }
+
+    rows.sort((x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime());
+    const fmtVND = (n: any) => new Intl.NumberFormat('vi-VN').format(Number(n) || 0) + 'đ';
+    const payLabel = (s: string) =>
+      s === 'paid' ? 'ĐÃ THANH TOÁN' : s === 'pending' ? 'CHƯA THANH TOÁN' : s === 'refunded' ? 'ĐÃ HOÀN' : (s || 'không rõ');
+    const itemTitles = (li: any): string => {
+      try {
+        const arr = Array.isArray(li) ? li : JSON.parse(li || '[]');
+        return arr.map((x: any) => x?.title).filter(Boolean).join(', ');
+      } catch { return ''; }
+    };
+
+    let block = HEAD;
+    for (const r of rows.slice(0, 5)) {
+      const ship = r.fulfillment_status || 'chưa cập nhật';
+      block += `\n• #${r.order_number} — ${this.fmtDate(r.created_at)} — ${itemTitles(r.line_items) || 'sản phẩm'} — ${fmtVND(r.total_price)} — ${payLabel(r.financial_status)} — giao: ${ship}`;
+    }
+    return block;
+  }
+
+  /** [QUY TẮC TIỀN] — prepay-only, no COD, no bill inference (A8). */
+  private buildPaymentRules(signals: PaymentSignals): string {
+    let b = '\n\n[QUY TẮC TIỀN — BẮT BUỘC]';
+    b += '\n- Mỗi dòng trong [SỔ ĐƠN HÀNG] là 1 đơn RIÊNG, ĐÃ KHÉP. Tiền của đơn cũ KHÔNG BAO GIỜ trừ vào đơn mới.';
+    b += '\n- Đã trả cho đơn ĐANG CHỐT hôm nay: 0đ. CHỈ nhân viên xác nhận đã nhận tiền — em KHÔNG tự kết luận "đã chuyển / đã nhận được tiền", KHÔNG suy từ lịch sử/ảnh.';
+    b += '\n- Mọi đơn thanh toán TRƯỚC 100% qua chuyển khoản (Vietcombank). KHÔNG COD, KHÔNG hỏi "chuyển khoản hay COD/Momo". Đủ tên + SĐT + địa chỉ → gửi thông tin chuyển khoản NGAY. Khách hỏi vì sao/COD → giải thích ngắn theo SOP.';
+    if (signals.imagesAfterStk > 0) {
+      b += `\n- Trong phiên này khách đã gửi ${signals.imagesAfterStk} ảnh sau khi em gửi số tài khoản — CHƯA PHÂN LOẠI (có thể là bill, có thể ảnh khác). Cảm ơn + "em chuyển bộ phận kiểm tra rồi báo lại chị ngay", KHÔNG nói "đã nhận được tiền".`;
+    }
+    if (signals.customerClaimsPaid) {
+      b += `\n- Khách có BÁO đã chuyển khoản trong phiên này — mới là lời khách, CHƯA xác minh. Trả lời như trên, KHÔNG trừ tiền, chờ nhân viên xác nhận.`;
+    }
+    return b;
   }
 }
