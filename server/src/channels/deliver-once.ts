@@ -40,6 +40,21 @@ export interface DeliverResult {
 }
 
 /**
+ * Guard: if content_type='image' but media is null/empty, downgrade to 'text'.
+ * Prevents broken inbox rows where the UI tries to render an image with no URL.
+ * Applied at the write-site so the constraint holds regardless of caller.
+ */
+function sanitizeContentType(row: SentLogRow): SentLogRow {
+  if (row.content_type === 'image' && (!row.media || row.media.length === 0)) {
+    console.warn(
+      `[Gateway] content_type='image' with no media on ${row.channel_name}/${row.thread_id} — downgrading to 'text' to avoid broken inbox row`,
+    );
+    return { ...row, content_type: 'text' };
+  }
+  return row;
+}
+
+/**
  * Claim a dedupe_key, then run `deliverFn` exactly once.
  *
  * - INSERT {..., dedupe_key, status:'sending'}.
@@ -76,9 +91,10 @@ export async function deliverReplyOnce(
     return 'sent';
   }
 
+  const safeRow = sanitizeContentType(logRow);
   const { data, error } = await supabase
     .from('channel_sent_messages')
-    .insert({ ...logRow, dedupe_key: dedupeKey, status: 'sending' })
+    .insert({ ...safeRow, dedupe_key: dedupeKey, status: 'sending' })
     .select('id')
     .single();
 

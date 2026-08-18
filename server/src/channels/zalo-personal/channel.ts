@@ -515,7 +515,6 @@ export class ZaloPersonalChannel {
           }
 
           // Pick sendImage vs sendFile based on mime type
-          const sendFn = isImageMedia(item) ? this.sendImage.bind(this) : this.sendFile.bind(this);
           const kind = isImageMedia(item) ? 'image' : 'file';
 
           try {
@@ -529,7 +528,21 @@ export class ZaloPersonalChannel {
             // (Amethyst) - cụm crystal tím hộ thân, gửi khi khách hỏi xem
             // ảnh đá thạch anh tím / amethyst / crystal tím" as a separate
             // text bubble after the photo. Pass undefined → empty desc.
-            const result = await sendFn(outMsg.chatId, localPath, threadType, undefined, agentSlug);
+            //
+            // §P12 bus-dispatch path: when agent downloads from item.url to
+            // a temp dir, cleanupTemp=true and localPath is outside
+            // ALLOWED_MEDIA_ROOTS → buildOutboundMediaUrl returns null →
+            // media=null in DB (inbox can't display image). Fix: pass item.url
+            // as providedMediaUrl so sendImage stores the source URL instead.
+            // For media-library paths (cleanupTemp=false), providedMediaUrl is
+            // undefined and buildOutboundMediaUrl handles it normally.
+            let result: Awaited<ReturnType<typeof this.sendImage>>;
+            if (isImageMedia(item)) {
+              const providedMediaUrl = (cleanupTemp && item.url) ? item.url : undefined;
+              result = await this.sendImage(outMsg.chatId, localPath, threadType, undefined, agentSlug, providedMediaUrl);
+            } else {
+              result = await this.sendFile(outMsg.chatId, localPath, threadType, undefined, agentSlug);
+            }
             if (result.success) {
               console.log(`${this.tag} ✅ Sent ${kind}: ${pathBasename(localPath)}`);
             } else {
@@ -761,14 +774,17 @@ export class ZaloPersonalChannel {
     // độc lập với việc Zalo có chấp nhận hay không (§P12, 2026-08-04).
     // Priority: caller-provided URL (Supabase Storage) > local media-library URL.
     const finalMediaUrl = providedMediaUrl || buildOutboundMediaUrl(filePath);
+    // Guard: nếu không resolve được URL thì downgrade content_type → 'text' tránh tạo
+    // broken inbox row (content_type='image' + media=null → UI không render được).
+    const hasUrl = !!finalMediaUrl;
     await supabase.from('channel_sent_messages').insert({
       channel_name: this.channelName,
       thread_id: threadId,
       thread_type: threadType,
       to_uid: threadId,
       body: caption || '[Hình ảnh]',
-      content_type: 'image',
-      media: finalMediaUrl ? [finalMediaUrl] : null,
+      content_type: hasUrl ? 'image' : 'text',
+      media: hasUrl ? [finalMediaUrl] : null,
       status: result.success ? 'sent' : 'failed',
       error_message: result.error,
       platform_message_id: result.messageId,
