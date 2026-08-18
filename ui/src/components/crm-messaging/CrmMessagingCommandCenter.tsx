@@ -492,7 +492,7 @@ export function CrmMessagingCommandCenter({
         <div className="aura" style={{ background: "rgb(var(--gem-primary-rgb))", width: 400, height: 400, top: -100, left: -100, opacity: "var(--gem-aura-strength)" }} />
         <div className="aura" style={{ background: "rgb(var(--gem-cyan-rgb))", width: 300, height: 300, bottom: -50, right: "20%", opacity: "calc(var(--gem-aura-strength) * 0.7)" }} />
 
-        <div className="flex h-full relative z-10 min-h-0">
+        <div className="flex flex-col md:flex-row h-full relative z-10 min-h-0">
           <CommandSidebar
             workspace={workspace}
             allCount={allCount}
