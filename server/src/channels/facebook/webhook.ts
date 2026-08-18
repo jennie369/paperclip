@@ -238,7 +238,7 @@ async function handleEchoEvent(channelName: string, event: any): Promise<void> {
     thread_type: 'dm',
     to_uid: threadId,
     body: body || '[Tin nhân viên]',
-    content_type: attachments.length > 0 && !text ? 'image' : 'text',
+    content_type: media.length > 0 && !text ? 'image' : 'text',
     media: media.length > 0 ? media : null,
     status: 'sent',
     sent_by: 'manual_fb',

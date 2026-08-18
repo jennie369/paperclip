@@ -85,13 +85,15 @@ export async function deliverReplyOnce(
   // đánh dấu được CẢ HAI kho. `null` = đường không-claim (gửi tay), chưa có bản song sinh.
   deliverFn: (sentRowId: string | null) => Promise<DeliverResult>,
 ): Promise<DeliverOutcome> {
+  // Always sanitize: downgrade content_type='image' with no media to 'text' on every
+  // path (deduped and ungated alike) so the guard holds regardless of caller.
+  const safeRow = sanitizeContentType(logRow);
+
   // No key → not a gated bot reply; deliver once without a DB claim.
   if (!dedupeKey) {
     await deliverFn(null);
     return 'sent';
   }
-
-  const safeRow = sanitizeContentType(logRow);
   const { data, error } = await supabase
     .from('channel_sent_messages')
     .insert({ ...safeRow, dedupe_key: dedupeKey, status: 'sending' })
