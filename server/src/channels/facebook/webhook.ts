@@ -206,19 +206,22 @@ async function handleEchoEvent(channelName: string, event: any): Promise<void> {
   const since = new Date(Date.now() - 5 * 60_000).toISOString();
   const { data: recent } = await supabase
     .from('channel_sent_messages')
-    .select('id, platform_message_id')
+    .select('id, platform_message_id, status')
     .eq('thread_id', threadId)
     .eq('body', body)
     .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(1);
   if (recent && recent.length > 0) {
-    // Tin của hệ thống mình → chỉ stamp mid nếu chưa có (để echo sau tra trúng), KHÔNG insert bản thứ 2.
-    const row = recent[0] as { id: string; platform_message_id: string | null };
-    if (!row.platform_message_id) {
-      const { error } = await supabase.from('channel_sent_messages')
-        .update({ platform_message_id: mid }).eq('id', row.id);
-      if (error && !isDupErr(error)) console.warn('[FB echo] stamp mid failed:', error.message);
+    // Tin của hệ thống mình → stamp mid nếu chưa có + RECONCILE status (Codex code-F1): row của
+    // claim-before-send có thể còn kẹt 'sending' nếu update sau Graph-OK lỗi → echo về lật nốt 'sent'.
+    const row = recent[0] as { id: string; platform_message_id: string | null; status: string | null };
+    const patch: Record<string, unknown> = {};
+    if (!row.platform_message_id) patch.platform_message_id = mid;
+    if (row.status === 'sending') patch.status = 'sent';
+    if (Object.keys(patch).length > 0) {
+      const { error } = await supabase.from('channel_sent_messages').update(patch).eq('id', row.id);
+      if (error && !isDupErr(error)) console.warn('[FB echo] reconcile row failed:', error.message);
     }
     return;
   }
@@ -346,7 +349,11 @@ export async function cleanupClaimedRow(
   rowId: string,
   graphMsg: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const { error: delErr } = await db.from('channel_sent_messages').delete().eq('id', rowId);
+  let { error: delErr } = await db.from('channel_sent_messages').delete().eq('id', rowId);
+  if (delErr) {
+    // Retry 1 lần: lỗi delete thường transient → xoá sạch được thì KHÔNG để lại 'failed' bubble (Codex code-F2).
+    ({ error: delErr } = await db.from('channel_sent_messages').delete().eq('id', rowId));
+  }
   if (!delErr) return { status: 400, body: { error: graphMsg } };
 
   const { error: updErr } = await db.from('channel_sent_messages')
@@ -438,16 +445,19 @@ router.post('/send', async (req: Request, res: Response) => {
     }
 
     // Graph OK → lật 'sending' → 'sent' + stamp mid (echo body-match tra trúng row này, KHÔNG double).
-    await supabase.from('channel_sent_messages')
+    // (Codex code-F1) Nếu update LỖI: tin ĐÃ tới khách (Graph trả message_id) ⇒ KHÔNG bảo gửi lại;
+    // row có thể kẹt 'sending' cho tới khi echo về reconcile (lớp b) → log to + cờ persist_degraded.
+    const { error: stampErr } = await supabase.from('channel_sent_messages')
       .update({ status: 'sent', platform_message_id: result.message_id || null })
       .eq('id', rowId);
+    if (stampErr) console.error('[FB send] stamp-sent FAILED after Graph OK — row', rowId, 'kẹt sending tới khi echo reconcile:', stampErr.message);
 
     // [test-only, Codex R4] Delay SAU claim+Graph+stamp, TRƯỚC res → tái tạo TẤT ĐỊNH ca
     // "đã gửi + đã ghi sổ, proxy không nhận được phản hồi". Mặc định không set env ⇒ 0 tác dụng.
     const testDelay = Number(process.env.FB_SEND_TEST_DELAY_MS) || 0;
     if (testDelay > 0) await new Promise((r) => setTimeout(r, testDelay));
 
-    res.json({ success: true, message_id: result.message_id });
+    res.json({ success: true, message_id: result.message_id, ...(stampErr ? { persist_degraded: true } : {}) });
   } catch (err: any) {
     // Lỗi mạng khi gọi Graph (gần như luôn = request KHÔNG hoàn tất = chưa gửi) → dọn row như Graph-error.
     const { status, body } = await cleanupClaimedRow(supabase, rowId, err.message);
