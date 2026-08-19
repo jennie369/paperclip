@@ -201,8 +201,19 @@ async function handleEchoEvent(channelName: string, event: any): Promise<void> {
   const appId: string | null = event.message?.app_id != null ? String(event.message.app_id) : null;
   const body = text || (attachments.length ? '[đính kèm]' : '');
 
-  // Lớp (b) — LƯỚI CHÍNH: đối chiếu tin hệ-thống-mình vừa gửi theo (thread_id, body, 5') trên MỌI
-  // channel (bot Send API đã stamp mid, bot facebook-web, auto-reply Business Suite). Không phụ thuộc app_id.
+  // Lớp (b0) — KHỚP CHÍNH XÁC theo mid (Codex code-R2): tin hệ-mình mà handler đã stamp
+  // platform_message_id = mid này → row định danh TUYỆT ĐỐI, không cần đoán theo body ⇒ chống
+  // cross-stamp khi 2 tin trùng nội dung cùng thread. Đã resolve rồi (mid có = handler chạy xong)
+  // → chỉ cần bỏ qua, KHÔNG ghi manual_fb.
+  const { data: byMid } = await supabase
+    .from('channel_sent_messages')
+    .select('id')
+    .eq('platform_message_id', mid)
+    .limit(1);
+  if (byMid && byMid.length > 0) return;
+
+  // Lớp (b) — LƯỚI body-match: cho row CHƯA stamp mid (facebook-web/Business Suite, hoặc claim row
+  // mà update sau Graph-OK lỗi). Đối chiếu (thread_id, body, 5'). Row đã stamp mid đã do (b0) bắt ở trên.
   const since = new Date(Date.now() - 5 * 60_000).toISOString();
   const { data: recent } = await supabase
     .from('channel_sent_messages')
