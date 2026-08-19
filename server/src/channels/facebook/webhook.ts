@@ -333,14 +333,60 @@ async function resolveSenderName(senderId: string, pageId: string): Promise<stri
 }
 
 /**
- * POST /api/channels/facebook/send — send a message to a Facebook user
- * Body: { page_id, recipient_id, message, message_type? }
+ * Dọn row đã CLAIM khi Graph từ chối/không gửi được (plan 2026-08-19 §5.2, Codex R5/R6).
+ * Hàm THUẦN (nhận client qua tham số) để unit-test 3 nhánh không cần chạm mạng:
+ *  - delete OK               → 400 {error} (sạch, không tin ma)
+ *  - delete lỗi, update OK   → 400 {error + '…còn hiện trong lịch sử…', cleanup_degraded:true}
+ *  - delete lỗi, update lỗi  → 400 {error + '…dọn sổ thất bại…', cleanup_failed:true}
+ * MỌI nhánh để-lại-row đều gắn cờ + câu nói rõ để người trực biết bubble đó là tin CHƯA tới khách
+ * (transcript/UI không lọc status — ngoài phạm vi fix này; xử lý tại đây bằng thông điệp).
+ */
+export async function cleanupClaimedRow(
+  db: Pick<typeof supabase, 'from'>,
+  rowId: string,
+  graphMsg: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { error: delErr } = await db.from('channel_sent_messages').delete().eq('id', rowId);
+  if (!delErr) return { status: 400, body: { error: graphMsg } };
+
+  const { error: updErr } = await db.from('channel_sent_messages')
+    .update({ status: 'failed' }).eq('id', rowId);
+  if (!updErr) {
+    return { status: 400, body: {
+      error: `${graphMsg} (⚠️ tin CHƯA tới khách nhưng vẫn còn hiện trong lịch sử — bỏ qua bubble đó)`,
+      cleanup_degraded: true,
+    } };
+  }
+
+  console.error('[FB send] cleanup FAILED for row', rowId, '·', delErr.message, '·', updErr.message);
+  return { status: 400, body: {
+    error: `${graphMsg} (⚠️ dọn sổ thất bại — bubble này trong lịch sử là tin CHƯA tới khách)`,
+    cleanup_failed: true,
+  } };
+}
+
+/**
+ * POST /api/channels/facebook/send — send a message to a Facebook user.
+ * Body: bot Send API cũ `{ page_id, recipient_id, message, message_type? }`
+ *   HOẶC body universal (proxy từ /api/channels/send, gửi tay từ inbox):
+ *   `{ channel_name, thread_id, message, thread_type?, sent_by? }` (plan 2026-08-19 §5.2).
+ * CLAIM-BEFORE-SEND: ghi row 'sending' TRƯỚC khi gọi Graph (fail-closed nếu ghi lỗi) → chống
+ * echo ghi nhầm 'manual_fb' + chống gửi lại khi response rớt.
  */
 router.post('/send', async (req: Request, res: Response) => {
-  const { page_id, recipient_id, message, message_type } = req.body;
+  const { message, message_type, channel_name, thread_id, thread_type, sent_by } = req.body;
+  const page_id = req.body.page_id || (channel_name ? CHANNEL_PAGE[channel_name] : undefined);
+  const recipient_id = req.body.recipient_id || thread_id;
+
+  // Comment thread fail-closed: session comment có thread_id = post_id (KHÔNG phải comment_id)
+  // ⇒ không thể reply đúng comment từ đường này. Báo rõ thay vì gửi DM nhầm người.
+  if (thread_type === 'comment') {
+    res.status(400).json({ error: 'Chưa hỗ trợ trả lời bình luận tay từ inbox (thread_id là post_id, không phải comment_id).' });
+    return;
+  }
 
   if (!page_id || !recipient_id || !message) {
-    res.status(400).json({ error: 'Missing page_id, recipient_id, or message' });
+    res.status(400).json({ error: 'Missing page_id/channel_name, recipient_id/thread_id, or message' });
     return;
   }
 
@@ -349,6 +395,28 @@ router.post('/send', async (req: Request, res: Response) => {
     res.status(400).json({ error: `No token configured for page ${page_id}` });
     return;
   }
+
+  const bodyText = typeof message === 'string' ? message : JSON.stringify(message);
+
+  // CLAIM-BEFORE-SEND (fail-closed, plan §5.2 + Codex R1-F2): ghi row 'sending' TRƯỚC Graph.
+  //  - Echo message_echoes có thể về TRƯỚC → lớp (b) body-match tra trúng row này ⇒ KHÔNG ghi 'manual_fb'.
+  //  - Response tới proxy rớt sau Graph OK → transcript ĐÃ có bản này ⇒ người trực không gõ lại.
+  //  - Insert lỗi ⇒ KHÔNG gọi Graph (thà 500 còn hơn khách nhận tin mà hệ không có sổ).
+  const { data: row, error: claimErr } = await supabase.from('channel_sent_messages').insert({
+    channel_name: PAGE_CHANNEL[page_id] || `fb-${page_id}`,
+    thread_id: recipient_id,
+    thread_type: 'dm',
+    to_uid: recipient_id,
+    body: bodyText,
+    content_type: 'text',
+    status: 'sending',
+    sent_by: sent_by || 'api',
+  }).select('id').single();
+  if (claimErr || !row?.id) {
+    res.status(500).json({ error: `Không ghi sổ được tin (chưa gửi): ${claimErr?.message || 'no id'}` });
+    return;
+  }
+  const rowId = row.id as string;
 
   try {
     const fbRes = await fetch(`${GRAPH_API}/${page_id}/messages?access_token=${token}`, {
@@ -364,28 +432,26 @@ router.post('/send', async (req: Request, res: Response) => {
     const result = await fbRes.json();
     if (result.error) {
       console.error(`[FB] Send error:`, result.error);
-      res.status(400).json({ error: result.error.message });
+      const { status, body } = await cleanupClaimedRow(supabase, rowId, result.error.message);
+      res.status(status).json(body);
       return;
     }
 
-    // Log to channel_sent_messages for audit trail (non-blocking).
-    // B5 (Track B): STAMP platform_message_id = mid Send API trả về → khi echo của tin BOT này
-    // về, lớp (b) body-match / unique index tra trúng, KHÔNG ghi nhầm thành 'manual_fb' (vòng 1 RACE-F15).
-    void supabase.from('channel_sent_messages').insert({
-      channel_name: PAGE_CHANNEL[page_id] || `fb-${page_id}`,
-      thread_id: recipient_id,
-      thread_type: 'dm',
-      to_uid: recipient_id,
-      body: typeof message === 'string' ? message : JSON.stringify(message),
-      content_type: 'text',
-      status: 'sent',
-      sent_by: 'api',
-      platform_message_id: result.message_id || null,
-    }).then(() => {}, () => {});
+    // Graph OK → lật 'sending' → 'sent' + stamp mid (echo body-match tra trúng row này, KHÔNG double).
+    await supabase.from('channel_sent_messages')
+      .update({ status: 'sent', platform_message_id: result.message_id || null })
+      .eq('id', rowId);
+
+    // [test-only, Codex R4] Delay SAU claim+Graph+stamp, TRƯỚC res → tái tạo TẤT ĐỊNH ca
+    // "đã gửi + đã ghi sổ, proxy không nhận được phản hồi". Mặc định không set env ⇒ 0 tác dụng.
+    const testDelay = Number(process.env.FB_SEND_TEST_DELAY_MS) || 0;
+    if (testDelay > 0) await new Promise((r) => setTimeout(r, testDelay));
 
     res.json({ success: true, message_id: result.message_id });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    // Lỗi mạng khi gọi Graph (gần như luôn = request KHÔNG hoàn tất = chưa gửi) → dọn row như Graph-error.
+    const { status, body } = await cleanupClaimedRow(supabase, rowId, err.message);
+    res.status(status).json(body);
   }
 });
 

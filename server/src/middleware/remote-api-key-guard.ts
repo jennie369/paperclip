@@ -27,7 +27,11 @@ import type { Request, RequestHandler } from "express";
 // Paths (relative to the /api mount) that must stay reachable without the API key.
 const EXEMPT_PREFIXES = [
   "/health",
-  "/channels/facebook", // FB webhook (verify token + X-Hub-Signature)
+  // [19/08] Thu hẹp từ "/channels/facebook" (prefix bọc cả /send, /comment-reply, /pages) xuống ĐÚNG
+  // 2 đường Meta gọi vào không thể mang API key: webhook (Meta POST/GET) + oauth (redirect trình duyệt).
+  // /send bây giờ yêu cầu API key khi remote (proxy nội bộ qua loopback vẫn pass). Codex R1-F1.
+  "/channels/facebook/webhook",
+  "/channels/facebook/oauth",
   "/channels/facebook-web",
   "/channels/zalo-personal", // Zalo webhook
   "/channels/youtube",

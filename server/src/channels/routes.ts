@@ -709,6 +709,40 @@ router.post('/send', async (req, res) => {
     return res.status(404).json({ error: `Kênh "${channel_name}" không tồn tại` });
   }
 
+  // [19/08] facebook (Graph API, fb-*): PROXY ĐỒNG BỘ sang sub-handler — KHÔNG insert row ở đây
+  // (sub-handler CLAIM-BEFORE-SEND tự ghi + stamp mid + dọn khi lỗi), KHÔNG optimistic (Graph ~300ms;
+  // lỗi token/24h-window/PSID phải lộ ra UI thay vì thành "tin ma"). Zalo/CSKH bên dưới GIỮ NGUYÊN.
+  // Cổng = cổng server ĐANG nghe thật (index.ts publish PAPERCLIP_LISTEN_PORT sau listen — đúng cả khi
+  // PORT bận nhảy cổng); KHÔNG chép `PORT || 3101` của dòng forward cũ (3101 là cổng cũ). Codex R3.
+  if (inst.channel_type === 'facebook') {
+    const fbPort = process.env.PAPERCLIP_LISTEN_PORT || process.env.PORT || 3100;
+    const fbUrl = `http://localhost:${fbPort}/api/channels/facebook/send`;
+    // Timeout (Codex R2): proxy treo/rớt SAU khi sub-handler đã claim row + Graph có thể đã nhận →
+    // KHÔNG trả lỗi chung chung (UI khôi phục text → người trực gõ lại → khách nhận 2 tin).
+    const timeoutMs = Number(process.env.FB_MANUAL_SEND_TIMEOUT_MS) || 15_000;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch(fbUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel_name, thread_id, message, thread_type, sent_by: 'manual' }),
+        signal: ac.signal,
+      });
+      const data = await r.json().catch(() => ({}));
+      return res.status(r.status).json(data);
+    } catch (err: any) {
+      // Tới đây = sub-handler không trả lời được (timeout/rớt), KHÔNG biết Graph đã nhận chưa.
+      // Row (nếu đã claim) vẫn nằm trong transcript → bảo người trực NHÌN transcript trước khi gửi lại.
+      return res.status(502).json({
+        error: `Gửi FB không xác nhận được (${err?.name === 'AbortError' ? `quá ${timeoutMs}ms` : err.message}). Tin CÓ THỂ đã tới khách — kiểm tra transcript trước khi gửi lại, đừng gửi mù.`,
+        maybe_sent: true,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // 0. FAIL-CLOSED (25/07): chỉ gửi khi channel_type có sub-handler THẬT SỰ tương thích.
   //    Trước đây `subPathByType[type] || 'zalo-personal'` fail-OPEN ⇒ mọi type lạ
   //    (app / facebook / facebook_web) bị đẩy sang handler Zalo. Đường đó KHÔNG BAO GIỜ gửi
@@ -716,9 +750,8 @@ router.post('/send', async (req, res) => {
   //    'sending' → lật 'failed'; mà transcript KHÔNG lọc status ⇒ tin hiện như ĐÃ GỬI trong
   //    khi khách chưa từng nhận ("tin ma" — đo 25/07: 18 row 'failed' đang render như vậy).
   //    Phải chặn TRƯỚC câu insert bên dưới, vì chính câu insert đẻ ra tin ma.
-  //    ⚠️ KHÔNG map facebook/facebook_web vào đây: 2 handler đó nhận body KHÁC HẲN
-  //    (facebook cần {page_id, recipient_id}; facebook-web là `/:name/send`) ⇒ nối đường gửi
-  //    tay cho chúng là FEATURE riêng, không phải đổi 1 dòng map.
+  //    ⚠️ facebook (Graph API) ĐÃ xử lý ở nhánh proxy phía TRÊN (19/08) — không rơi xuống đây nữa.
+  //    facebook_web vẫn CHƯA: handler `/:name/send` body khác hẳn ⇒ vẫn là feature riêng, chưa nối.
   const subPathByType: Record<string, string> = { zalo_personal: 'zalo-personal', cskh: 'cskh' };
   const sub = subPathByType[inst.channel_type];
   if (!sub) {
