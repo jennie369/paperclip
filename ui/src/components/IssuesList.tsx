@@ -8,10 +8,12 @@ import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import { groupBy } from "../lib/groupBy";
-import { formatDate, cn } from "../lib/utils";
+import { formatDate, formatDateTime, cn } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { StatusIcon } from "./StatusIcon";
+import { issueStatusDescription } from "../lib/status-colors";
 import { PriorityIcon } from "./PriorityIcon";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { EmptyState } from "./EmptyState";
 import { Identity } from "./Identity";
 import { IssueRow } from "./IssueRow";
@@ -214,6 +216,11 @@ function IssuesSearchInput({ initialValue, onValueCommitted }: IssuesSearchInput
   );
 }
 
+/**
+ * @archetype list
+ * @size small
+ * @navigable
+ */
 export function IssuesList({
   issues,
   isLoading,
@@ -464,16 +471,25 @@ export function IssuesList({
                   <div className="space-y-1">
                     <span className="text-xs text-muted-foreground">Status</span>
                     <div className="space-y-0.5">
-                      {statusOrder.map((s) => (
-                        <label key={s} className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-accent/50 cursor-pointer">
-                          <Checkbox
-                            checked={viewState.statuses.includes(s)}
-                            onCheckedChange={() => updateView({ statuses: toggleInArray(viewState.statuses, s) })}
-                          />
-                          <StatusIcon status={s} />
-                          <span className="text-sm">{statusLabel(s)}</span>
-                        </label>
-                      ))}
+                      <TooltipProvider>
+                        {statusOrder.map((s) => (
+                          <Tooltip key={s} delayDuration={300}>
+                            <TooltipTrigger asChild>
+                              <label className="flex items-center gap-2 px-2 py-1 rounded-sm hover:bg-accent/50 cursor-pointer">
+                                <Checkbox
+                                  checked={viewState.statuses.includes(s)}
+                                  onCheckedChange={() => updateView({ statuses: toggleInArray(viewState.statuses, s) })}
+                                />
+                                <StatusIcon status={s} />
+                                <span className="text-sm">{statusLabel(s)}</span>
+                              </label>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-[240px]">
+                              {issueStatusDescription[s]}
+                            </TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </TooltipProvider>
                     </div>
                   </div>
 
@@ -668,10 +684,23 @@ export function IssuesList({
           onUpdateIssue={onUpdateIssue}
         />
       ) : (
-        groupedContent.map((group) => (
-          <Collapsible
-            key={group.key}
-            open={!viewState.collapsedGroups.includes(group.key)}
+        <div className="flex flex-col rounded-lg border border-border bg-card overflow-hidden">
+          {groupedContent.length > 0 && (
+            <div className="hidden sm:flex items-center gap-2 border-b border-border bg-muted/40 py-2 pl-3 pr-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <span className="shrink-0 w-[180px] xl:w-[220px]">Trạng thái & ID & Thời gian</span>
+              <span className="flex-1 min-w-0">Tiêu đề</span>
+              <span className="ml-auto flex shrink-0 items-center gap-3">
+                <span className="hidden w-[120px] shrink-0 text-right md:block">Người tạo</span>
+                <span className="hidden w-[120px] shrink-0 md:block">Người nhận</span>
+              </span>
+              {/* Spacer for unread dot / dismiss button */}
+              <span className="w-4 shrink-0" />
+            </div>
+          )}
+          {groupedContent.map((group) => (
+            <Collapsible
+              key={group.key}
+              open={!viewState.collapsedGroups.includes(group.key)}
             onOpenChange={(open) => {
               updateView({
                 collapsedGroups: open
@@ -733,7 +762,7 @@ export function IssuesList({
                         />
                       </span>
                       <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                        {issue.identifier ?? issue.id.slice(0, 8)} · {formatDate(issue.createdAt)}
+                        {issue.identifier ?? issue.id.slice(0, 8)} · {formatDateTime(issue.createdAt)}
                       </span>
                       {liveIssueIds?.has(issue.id) && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 sm:gap-1.5 sm:px-2">
@@ -926,12 +955,12 @@ export function IssuesList({
                       </Popover>
                     </>
                   )}
-                  trailingMeta={formatDate(issue.createdAt)}
                 />
               ))}
             </CollapsibleContent>
           </Collapsible>
-        ))
+        ))}
+        </div>
       )}
     </div>
   );

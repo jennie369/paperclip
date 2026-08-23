@@ -48,7 +48,11 @@ function datetimeLocalToHCMIso(value: string): string {
   return `${withSeconds}+07:00`;
 }
 
+/**
+ * @archetype form
+ */
 export function AddManualRowModal({
+
   open,
   onClose,
   companyId,
@@ -60,6 +64,11 @@ export function AddManualRowModal({
   /** YYYY-MM-DD to prefill. If omitted, uses today HCM. */
   defaultDate?: string;
 }) {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
   const createManual = useCreateTimetableManual(companyId);
   const { data: agents } = useQuery({
     queryKey: ["agents", "list", companyId],

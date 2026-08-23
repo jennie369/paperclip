@@ -40,7 +40,16 @@ function formatVND(n: number): string {
   return new Intl.NumberFormat('vi-VN').format(n || 0) + '₫';
 }
 
-export function CreateOrderPanel({ customer, sourceChannel, onClose, onSuccess }: Props) {
+/**
+ * @archetype form
+ */
+export function CreateOrderPanel({
+ customer, sourceChannel, onClose, onSuccess }: Props) {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
   const qc = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);

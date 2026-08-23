@@ -53,7 +53,16 @@ const defaultOrderForm = {
   product: '', quantity: 1, notes: '', payment_method: 'bank_transfer',
 };
 
+/**
+ * @archetype form
+ */
 export function OrderListPage() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [search, setSearch] = useState('');

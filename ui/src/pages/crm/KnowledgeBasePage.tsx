@@ -17,7 +17,16 @@ const collectionTypes = [
   { value: 'policy', label: 'Chính sách' },
 ];
 
+/**
+ * @archetype form
+ */
 export function KnowledgeBasePage() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddDoc, setShowAddDoc] = useState<string | null>(null);

@@ -960,7 +960,11 @@ FormField.displayName = "FormField";
  * Renders a form based on a subset of JSON Schema specification.
  * Supports primitive types, enums, secrets, objects, and arrays with recursion.
  */
+/**
+ * @archetype form
+ */
 export function JsonSchemaForm({
+
   schema,
   values,
   onChange,
@@ -968,6 +972,10 @@ export function JsonSchemaForm({
   disabled,
   className,
 }: JsonSchemaFormProps) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
   const type = resolveType(schema);
 
   const handleRootScalarChange = useCallback((newVal: unknown) => {

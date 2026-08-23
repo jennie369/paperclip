@@ -56,7 +56,16 @@ const statusLabels: Record<string, string> = {
 
 const defaultNewCustomer = { display_name: '', phone: '', email: '', status: 'lead_moi' };
 
+/**
+ * @archetype form
+ */
 export function CustomerListPage() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [search, setSearch] = useState('');

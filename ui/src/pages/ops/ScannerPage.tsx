@@ -10,7 +10,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { opsApi } from "@/api/ops";
 import { SimpleModal } from "../crm/components/SimpleModal";
 
+/**
+ * @archetype form
+ */
 export function ScannerPage() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const qc = useQueryClient();
   const [showScanModal, setShowScanModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);

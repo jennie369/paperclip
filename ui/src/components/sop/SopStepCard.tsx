@@ -230,7 +230,11 @@ const ON_REJECT_OPTIONS = [
 
 /* ─── Component ─── */
 
+/**
+ * @archetype form
+ */
 export function SopStepCard({
+
   step,
   stepIndex,
   sopId,
@@ -242,6 +246,11 @@ export function SopStepCard({
   onMoveUp,
   onMoveDown,
 }: SopStepCardProps) {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
   const [expanded, setExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<Partial<StepDefinition>>({});

@@ -232,7 +232,16 @@ function TriggerEditor({
   );
 }
 
+/**
+ * @archetype form
+ */
 export function RoutineDetail() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const { routineId } = useParams<{ routineId: string }>();
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();

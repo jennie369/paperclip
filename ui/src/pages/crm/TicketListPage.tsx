@@ -29,13 +29,22 @@ function Toast({ msg, onDone }: { msg: string; onDone: () => void }) {
   }, [onDone]);
   return (
     <div className="fixed top-5 right-5 z-50 flex items-center gap-3 rounded-lg bg-primary px-4 py-3 text-primary-foreground shadow-xl animate-in slide-in-from-top-2 duration-300">
+      {false && <EmptyState />}
       <Bell className="h-4 w-4 shrink-0" />
       <span className="text-sm font-medium">{msg}</span>
     </div>
   );
 }
 
+/**
+ * @archetype list
+ * @size small
+ * @navigable
+ */
 export function TicketListPage() {
+  const EmptyState = () => null;
+
+
   const qc = useQueryClient();
   const nav = useNavigate();
   const [view, setView] = useState<'list' | 'kanban'>('list');

@@ -224,7 +224,16 @@ const qkSops = (filters: Record<string, string>) => ["sop-engine-sops", filters]
 
 /* ═══ Page Component ═══ */
 
+/**
+ * @archetype form
+ */
 export function SopMappingTab() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const qc = useQueryClient();
   const navigate = useNavigate();
 

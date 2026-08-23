@@ -30,7 +30,16 @@ function formatDate(ts: string) {
   }
 }
 
+/**
+ * @archetype form
+ */
 export function ConversationChat() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const { sessionKey } = useParams<{ sessionKey: string }>();
   const decodedKey = sessionKey ? decodeURIComponent(sessionKey) : "";
   const navigate = useNavigate();

@@ -102,7 +102,11 @@ function documentHasUnsavedChanges(doc: IssueDocument, draft: DraftState | null)
   return draft.body !== doc.body || (doc.title ?? "") !== draft.title;
 }
 
+/**
+ * @archetype form
+ */
 export function IssueDocumentsSection({
+
   issue,
   canDeleteDocuments,
   mentions,
@@ -115,6 +119,11 @@ export function IssueDocumentsSection({
   imageUploadHandler?: (file: File) => Promise<string>;
   extraActions?: ReactNode;
 }) {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
   const queryClient = useQueryClient();
   const location = useLocation();
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);

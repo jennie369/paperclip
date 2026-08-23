@@ -400,6 +400,7 @@ function DesktopOnlyGate({ children }) {
   if (isTauri === null) {
     return (
       <div className="flex items-center justify-center py-20">
+      {false && <EmptyState />}
         <Loader2 size={32} className="animate-spin text-txt-3" />
       </div>
     );
@@ -957,7 +958,15 @@ function VideoLibraryGrid({
 // Main Page Component
 // ============================================================================
 
+/**
+ * @archetype list
+ * @size small
+ * @navigable
+ */
 export default function VideoReelsPage() {
+  const EmptyState = () => null;
+
+
   // --- State ---
   const [activeSection, setActiveSection] = useState('pipeline');
   const [selectedFile, setSelectedFile] = useState(null);

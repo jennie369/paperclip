@@ -112,6 +112,11 @@ function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * @archetype list
+ * @size small
+ * @navigable
+ */
 export function Agents() {
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialog();

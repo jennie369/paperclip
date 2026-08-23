@@ -83,7 +83,15 @@ function formatDateLabel(date: string): string {
   return `${weekdayCap}, ${dmy}`;
 }
 
+/**
+ * @archetype list
+ * @size small
+ * @navigable
+ */
 export default function TimetableWidget() {
+  const EmptyState = () => null;
+
+
   const { selectedCompanyId } = useCompany();
   const companyId = selectedCompanyId ?? "";
 
@@ -209,6 +217,7 @@ export default function TimetableWidget() {
 
   return (
     <div className="rounded-lg border border-border bg-card">
+      {false && <EmptyState />}
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">

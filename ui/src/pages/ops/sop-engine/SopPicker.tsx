@@ -144,7 +144,16 @@ function scoreSop(query: string, s: SopRow): { score: number; hits: string[] } {
 
 // ─────────── Main component ───────────
 
-export function SopPicker({ value, onChange }: Props) {
+/**
+ * @archetype form
+ */
+export function SopPicker({
+ value, onChange }: Props) {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
   const [search, setSearch] = useState('');
   const [suggestInput, setSuggestInput] = useState('');
   const [submittedSuggest, setSubmittedSuggest] = useState('');

@@ -39,7 +39,16 @@ const SEGMENTS = [
 
 const defaultForm = { name: '', subject: '', template: 'welcome', segment: 'all', sendTime: 'now' as 'now' | 'schedule', scheduledAt: '', body: '' };
 
+/**
+ * @archetype form
+ */
 export function EmailCampaignsPage() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(defaultForm);

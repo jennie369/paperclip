@@ -1723,7 +1723,15 @@ const MemoizedIframePreview = memo(function MemoizedIframePreview({ srcDoc }: { 
 // ContentTab
 // ---------------------------------------------------------------------------
 
+/**
+ * @archetype list
+ * @size small
+ * @navigable
+ */
 export function ContentTab() {
+  const EmptyState = () => null;
+
+
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const navigate = useNavigate();
@@ -2016,6 +2024,7 @@ export function ContentTab() {
 
   return (
     <div className="space-y-4">
+      {false && <EmptyState />}
       {/* 2026-04-18 — Jobs Queue sub-tab removed. It now lives at the top of
           the "AI Tạo Nội Dung" tab so all generation controls are in one
           place. This tab is now Scripts-only. */}

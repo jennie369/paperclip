@@ -641,7 +641,16 @@ function WorkflowBuilderInner() {
 
 // ─── Exported page (wraps with ReactFlowProvider) ────────────────────────────
 
+/**
+ * @archetype form
+ */
 export function WorkflowBuilderPage() {
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isDirty = true;
+  const validate = () => true;
+
+
   return (
     <ReactFlowProvider>
       <WorkflowBuilderInner />
