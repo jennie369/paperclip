@@ -83,7 +83,15 @@ export function loadSalesCloserMediaFromCatalog(projectRoot: string): MediaLibra
     console.warn(`[Router/media] Failed to parse catalog ${p}:`, err?.message);
     return null;
   }
-  const rawItems = Array.isArray(catalog?.items) ? catalog.items : [];
+  // FAIL-CLOSED (Codex P5-R2 [high]): catalog parse-được nhưng items rỗng/không-array ({}, {"items":
+  // null}, {"items":[]}) = KHÔNG coi là load thành công. Trả null để loadMediaLibrary fallback sang
+  // media-library.json — nếu coerce thành [] rồi trả MediaLibrary 0-item thì cache 60s = câm media
+  // dù fallback còn dùng được. sales-closer LUÔN có sản phẩm; 0 item = catalog hỏng, KHÔNG hợp lệ.
+  if (!Array.isArray(catalog?.items) || catalog.items.length === 0) {
+    console.error(`[Router/media] ⚠️ catalog items rỗng/không phải array (${p}) — trả null để fallback media-library.json`);
+    return null;
+  }
+  const rawItems = catalog.items;
   // Duplicate id: prompt render + parseMediaMarkers (lib.items.find) resolve về item ĐẦU → id trùng
   // = gửi nhầm ảnh câm (Codex P5-R1 [medium]). Catalog audit (product_catalog_index_audit.py) đã bắt
   // dup, nhưng loader phải TỰ phòng: giữ item ĐẦU cho mỗi id + cảnh báo TO (không im lặng ăn trùng).
@@ -97,6 +105,11 @@ export function loadSalesCloserMediaFromCatalog(projectRoot: string): MediaLibra
     }
     seenIds.add(e.id);
     items.push(buildMediaItemFromCatalogEntry(e));
+  }
+  if (items.length === 0) {
+    // Tất cả entry thiếu id / bị lọc hết → cũng fail-closed để fallback (thay vì cache 0-item câm).
+    console.error(`[Router/media] ⚠️ catalog 0 item hợp lệ sau lọc (${p}) — trả null để fallback`);
+    return null;
   }
   return {
     agent_slug: 'sales-closer',

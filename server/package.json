@@ -41,7 +41,7 @@
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "typecheck": "pnpm --filter @paperclipai/plugin-sdk build && tsc --noEmit",
-    "test:reply-contract": "vitest run reply-contract reply-gateway-dispatch comment-no-realtime-guard operator-report-leak auto-match-media-regression catalog-derive-parity item-to-media-url-routing"
+    "test:reply-contract": "vitest run reply-contract reply-gateway-dispatch comment-no-realtime-guard operator-report-leak auto-match-media-regression catalog-derive-parity item-to-media-url-routing catalog-media-source-failclosed"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.888.0",
