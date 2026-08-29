@@ -84,9 +84,20 @@ export function loadSalesCloserMediaFromCatalog(projectRoot: string): MediaLibra
     return null;
   }
   const rawItems = Array.isArray(catalog?.items) ? catalog.items : [];
-  const items = rawItems
-    .filter((e: any) => e && e.id)
-    .map((e: any) => buildMediaItemFromCatalogEntry(e));
+  // Duplicate id: prompt render + parseMediaMarkers (lib.items.find) resolve về item ĐẦU → id trùng
+  // = gửi nhầm ảnh câm (Codex P5-R1 [medium]). Catalog audit (product_catalog_index_audit.py) đã bắt
+  // dup, nhưng loader phải TỰ phòng: giữ item ĐẦU cho mỗi id + cảnh báo TO (không im lặng ăn trùng).
+  const seenIds = new Set<string>();
+  const items: MediaLibraryItem[] = [];
+  for (const e of rawItems) {
+    if (!e || !e.id) continue;
+    if (seenIds.has(e.id)) {
+      console.error(`[Router/media] ⚠️ DUPLICATE id trong catalog: '${e.id}' — bỏ bản sau, giữ bản đầu. Sửa catalog.`);
+      continue;
+    }
+    seenIds.add(e.id);
+    items.push(buildMediaItemFromCatalogEntry(e));
+  }
   return {
     agent_slug: 'sales-closer',
     version: String(catalog?.version || 'catalog'),

@@ -1786,6 +1786,26 @@ export function loadMediaLibrary(agentSlug: string): MediaLibrary | null {
     lib = loadSalesCloserMediaFromCatalog(projectRoot);
     if (lib) {
       console.log(`[Router/media] sales-closer: loaded ${lib.items.length} item từ catalog (Option A)`);
+    } else {
+      // Catalog thiếu/hỏng (mount lệch, ghi lỗi, PROJECT_ROOT sai) → KHÔNG để sales-closer câm media.
+      // Fallback agents/sales-closer/media-library.json (sync-generated, giữ sống cho social-posting)
+      // + cảnh báo TO cho người trực (Codex P5-R1 [high]: đừng cache null im lặng). Dữ liệu fallback
+      // có thể CŨ hơn catalog nhưng "có ảnh cũ" > "câm hoàn toàn".
+      const fbPath = pathResolve(projectRoot, 'agents', agentSlug, 'media-library.json');
+      console.error(
+        `[Router/media] ⚠️ sales-closer CATALOG LOAD FAILED → fallback ${fbPath} (dữ liệu có thể CŨ). ` +
+        `Kiểm PROJECT_ROOT + product-catalog-index.json NGAY.`,
+      );
+      if (existsSync(fbPath)) {
+        try {
+          lib = JSON.parse(readFileSync(fbPath, 'utf-8')) as MediaLibrary;
+          console.error(`[Router/media] fallback OK: ${lib?.items?.length ?? 0} item từ media-library.json cũ`);
+        } catch (err: any) {
+          console.error(`[Router/media] ⚠️ fallback media-library.json CŨNG lỗi parse: ${err.message} — sales-closer sẽ KHÔNG có media tới khi sửa`);
+        }
+      } else {
+        console.error(`[Router/media] ⚠️ fallback media-library.json KHÔNG tồn tại — sales-closer KHÔNG có media`);
+      }
     }
   } else {
     const libPath = pathResolve(projectRoot, 'agents', agentSlug, 'media-library.json');

@@ -41,6 +41,11 @@ describe("§6.1 parity gate — Python derive_tags ↔ TypeScript deriveTags (pe
 
     // 2. TS deriveTags áp lên CÙNG catalog.
     const catalog = JSON.parse(readFileSync(catPath, "utf-8")) as { items: any[] };
+    // Trước khi key theo id: assert RAW catalog KHÔNG có id trùng (Codex P5-R1 [medium] — nếu trùng,
+    // cả 2 bên key-by-id sẽ collapse mà runtime giữ cả 2 → parity "khớp giả" nhưng send resolve nhầm).
+    const rawIds = (catalog.items || []).filter((e: any) => e && e.id).map((e: any) => e.id);
+    const dupIds = rawIds.filter((id: string, i: number) => rawIds.indexOf(id) !== i);
+    expect(dupIds, `catalog có id TRÙNG (parity gate mù dup): ${[...new Set(dupIds)].join(", ")}`).toEqual([]);
     const tsTags: Record<string, string[]> = {};
     for (const e of catalog.items || []) {
       if (e && e.id) tsTags[e.id] = deriveTags(e.covers);
