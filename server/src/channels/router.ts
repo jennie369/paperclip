@@ -34,6 +34,7 @@ import {
 } from './crm/purchase-stage-handler.js';
 import { renderHistoryForPrompt, stripInjectedContext } from './session-history-util.js';
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
+import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -1777,15 +1778,24 @@ export function loadMediaLibrary(agentSlug: string): MediaLibrary | null {
   }
 
   const projectRoot = PROJECT_ROOT;
-  const libPath = pathResolve(projectRoot, 'agents', agentSlug, 'media-library.json');
-
   let lib: MediaLibrary | null = null;
-  if (existsSync(libPath)) {
-    try {
-      const raw = readFileSync(libPath, 'utf-8');
-      lib = JSON.parse(raw) as MediaLibrary;
-    } catch (err: any) {
-      console.warn(`[Router/media] Failed to parse ${libPath}:`, err.message);
+
+  if (agentSlug === 'sales-closer') {
+    // Option A (OD-1, plan §5.1): đọc THẲNG product-catalog-index.json + transform-on-read (derive
+    // tags TS khớp Python — parity gate §6.1). Chỉ sales-closer; agent khác giữ đường file cũ.
+    lib = loadSalesCloserMediaFromCatalog(projectRoot);
+    if (lib) {
+      console.log(`[Router/media] sales-closer: loaded ${lib.items.length} item từ catalog (Option A)`);
+    }
+  } else {
+    const libPath = pathResolve(projectRoot, 'agents', agentSlug, 'media-library.json');
+    if (existsSync(libPath)) {
+      try {
+        const raw = readFileSync(libPath, 'utf-8');
+        lib = JSON.parse(raw) as MediaLibrary;
+      } catch (err: any) {
+        console.warn(`[Router/media] Failed to parse ${libPath}:`, err.message);
+      }
     }
   }
 
@@ -1908,12 +1918,20 @@ export function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile
       // so the pre-ship media audit (STALE_MULTI) / P-MEDIA2 can flag the under-indexed product.
       console.log(`[Router/media] UNDER_MIN id=${item.id} has only ${item.all_images.length} image(s)`);
     }
-    return capped.map((p) => ({
-      path: p,
-      mimeType: mimeFromExt(p) || item.mimeType,
-      filename: item.name,
-      caption: item.description,
-    }));
+    return capped.map((p) => {
+      // URL (http/https) → field `url` để channel tự download (zalo channel.ts + cskh
+      // resolveMediaToLocalPath cùng logic: path-local-trước, url-download-sau). GÁN URL vào `path`
+      // = câm: pathIsAbsolute(URL)=false → resolve rác → existsSync=false → url undefined → bỏ ảnh
+      // (18/134 catalog entry có URL, 4 entry toàn-URL mất sạch ảnh). Plan §Deviations D-2 / §5.1 đ4.
+      const isUrl = /^https?:\/\//i.test(p);
+      return {
+        path: isUrl ? undefined : p,
+        url: isUrl ? p : undefined,
+        mimeType: mimeFromExt(p) || item.mimeType,
+        filename: item.name,
+        caption: item.description,
+      };
+    });
   }
   return [{
     url: item.url || undefined,

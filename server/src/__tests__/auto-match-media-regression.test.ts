@@ -103,7 +103,7 @@ describe("autoMatchMediaFromReply — NEGATIVE (guard đúng phải trả [])", 
   });
 });
 
-describe("autoMatchMediaFromReply — POSITIVE trên DỮ LIỆU THẬT (baseline agents/sales-closer/media-library.json)", () => {
+describe("autoMatchMediaFromReply — POSITIVE trên DỮ LIỆU THẬT (nguồn sales-closer qua loadMediaLibrary — sau P-A = catalog-derived)", () => {
   const lib = loadMediaLibrary("sales-closer");
   if (!lib) {
     throw new Error(
