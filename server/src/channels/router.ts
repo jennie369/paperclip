@@ -1770,7 +1770,7 @@ const mediaLibraryCache = new Map<string, { lib: MediaLibrary | null; expiresAt:
  *
  * Cached 60s.
  */
-function loadMediaLibrary(agentSlug: string): MediaLibrary | null {
+export function loadMediaLibrary(agentSlug: string): MediaLibrary | null {
   const cached = mediaLibraryCache.get(agentSlug);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.lib;
@@ -1857,13 +1857,13 @@ export interface MessageChunk {
 }
 
 /** Strip Vietnamese accents + lowercase for fuzzy product-name matching. */
-function stripAccentsLower(s: string): string {
+export function stripAccentsLower(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/đ/gi, 'd').toLowerCase();
 }
 
 // Tag values that are generic (không phải danh tính sản phẩm) — bỏ qua khi auto-match.
-const GENERIC_MEDIA_TAGS = new Set([
+export const GENERIC_MEDIA_TAGS = new Set([
   'image', 'crystal', 'set', 'pdf', 'video', 'vi', 'stone', 'course', 'trading',
   'feng_shui', 'yinyang_masters', 'starter', 'tier0', 'tier1', 'tier2', 'tier3',
   'wealth', 'love', 'purple', 'pink', 'yellow', 'guide', 'infographic', 'brand',
@@ -1898,7 +1898,7 @@ function mimeFromExt(p: string): string | undefined {
 // parseMediaMarkers ([[SEND_MEDIA]]) + autoMatchMediaFromReply (fallback quên marker) → chống
 // split-brain. item.all_images (list PATH) → N ảnh (cap); item chỉ url/path (không all_images)
 // → 1 MediaFile GIỮ url-only backward-compat (Codex: fallback all_images||[path] rớt url).
-function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile[] {
+export function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile[] {
   if (item.all_images && item.all_images.length) {
     const capped = item.all_images.slice(0, MEDIA_PRODUCT_IMAGES_MAX);
     if (item.all_images.length > MEDIA_PRODUCT_IMAGES_MAX) {
@@ -1931,7 +1931,7 @@ function itemToMediaFiles(item: MediaLibrary['items'][number]): MediaFile[] {
  * media theo TÊN sản phẩm/set (tag danh-tính) xuất hiện trong reply → đính kèm.
  * Precise: chỉ match tag ≥6 ký tự, không generic; cap tổng MEDIA_MAX_PER_MARKER.
  */
-function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaFile[] {
+export function autoMatchMediaFromReply(text: string, lib: MediaLibrary | null): MediaFile[] {
   if (!lib?.items?.length || !text) return [];
   const PROMISE_RE = /(g[uử]i|xem|đính\s*kèm|k[eè]m)[\s\S]{0,30}(h[ìi]nh|ảnh|photo|catalog|b[ải]ng\s*gi[áa]|file)/i;
   if (!PROMISE_RE.test(text)) return [];
