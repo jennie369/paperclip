@@ -17,6 +17,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
+import { isPauseDisabled, isResumeDisabled } from "../lib/agent-action-availability";
 import { AgentConfigForm } from "../components/AgentConfigForm";
 import { PageTabBar } from "../components/PageTabBar";
 import { adapterLabels, roleLabels } from "../components/agent-config-primitives";
@@ -842,27 +843,28 @@ export function AgentDetail() {
             <Play className="h-3.5 w-3.5 sm:mr-1" />
             <span className="hidden sm:inline">Run Heartbeat</span>
           </Button>
-          {agent.status === "paused" ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => agentAction.mutate("resume")}
-              disabled={agentAction.isPending || isPendingApproval}
-            >
-              <Play className="h-3.5 w-3.5 sm:mr-1" />
-              <span className="hidden sm:inline">Resume</span>
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => agentAction.mutate("pause")}
-              disabled={agentAction.isPending || isPendingApproval}
-            >
-              <Pause className="h-3.5 w-3.5 sm:mr-1" />
-              <span className="hidden sm:inline">Pause</span>
-            </Button>
-          )}
+          {/* Pause + Resume = 2 nút riêng (không toggle 1-nút gây bấm nhầm/2 lần).
+              disabled khớp server guards agents.pause()/resume() (agents.ts:408-453):
+              pause throws cho terminated; resume throws cho terminated + pending_approval.
+              Xem plan 2026-08-31-PAPERCLIP-NO-AUTOPAUSE-ON-ERROR-SPLIT-BUTTON. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => agentAction.mutate("pause")}
+            disabled={isPauseDisabled(agent.status, agentAction.isPending)}
+          >
+            <Pause className="h-3.5 w-3.5 sm:mr-1" />
+            <span className="hidden sm:inline">Pause</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => agentAction.mutate("resume")}
+            disabled={isResumeDisabled(agent.status, agentAction.isPending)}
+          >
+            <Play className="h-3.5 w-3.5 sm:mr-1" />
+            <span className="hidden sm:inline">Resume</span>
+          </Button>
           <span className="hidden sm:inline"><StatusBadge status={agent.status} /></span>
           {mobileLiveRun && (
             <Link

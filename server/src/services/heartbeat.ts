@@ -21,6 +21,7 @@ import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { boundedPoll } from "./bounded-poll.js";
 import { publishLiveEvent } from "./live-events.js";
+import { isHeartbeatSkipped } from "./heartbeat-eligibility.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
@@ -1912,7 +1913,7 @@ export function heartbeatService(db: Db) {
       await cancelRunInternal(run.id, "Cancelled because the agent no longer exists");
       return null;
     }
-    if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
+    if (isHeartbeatSkipped(agent.status)) {
       await cancelRunInternal(run.id, "Cancelled because the agent is not invokable");
       return null;
     }
@@ -2223,7 +2224,7 @@ export function heartbeatService(db: Db) {
     return withAgentStartLock(agentId, async () => {
       const agent = await getAgent(agentId);
       if (!agent) return [];
-      if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") {
+      if (isHeartbeatSkipped(agent.status)) {
         return [];
       }
       const policy = parseHeartbeatPolicy(agent);
@@ -4358,7 +4359,7 @@ export function heartbeatService(db: Db) {
       const staleResyncIds: string[] = [];
 
       for (const agent of allAgents) {
-        if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
+        if (isHeartbeatSkipped(agent.status)) continue;
         const policy = parseHeartbeatPolicy(agent);
         if (!policy.enabled) continue;
         // Must have at least one schedule: cron OR intervalSec
