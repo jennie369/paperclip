@@ -258,15 +258,17 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     // `paperclip_model_list_audit.py --provider antigravity --against-agy` diffs
     // agy's live list against all three copies.
     // 2026-08-15: +3.7 Flash x3, +3.6 Flash x3 (agy had them, all lists stopped at 3.5).
+    // 2026-09-03: +3.8 Flash x3 (agy shipped 3.8, verbatim via `agy models`).
+    'Gemini 3.8 Flash (High)',
+    'Gemini 3.8 Flash (Medium)',
+    'Gemini 3.8 Flash (Low)',
     'Gemini 3.7 Flash (High)',
     'Gemini 3.7 Flash (Medium)',
     'Gemini 3.7 Flash (Low)',
     'Gemini 3.6 Flash (High)',
     'Gemini 3.6 Flash (Medium)',
     'Gemini 3.6 Flash (Low)',
-    'Gemini 3.5 Flash (High)',
-    'Gemini 3.5 Flash (Medium)',
-    'Gemini 3.5 Flash (Low)',
+    // 2026-09-03: removed Gemini 3.5 Flash x3 — agy no longer lists them.
     'Gemini 3.1 Pro (High)',
     'Gemini 3.1 Pro (Low)',
     'Claude Sonnet 4.6 (Thinking)',

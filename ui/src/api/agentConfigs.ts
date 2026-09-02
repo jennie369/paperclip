@@ -89,17 +89,19 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     // ⚠️ ORDER IS BEHAVIOUR HERE (unlike the other two copies): AgentEditPage's
     // handleProviderChange assigns PROVIDER_MODELS[provider][0] when the user
     // switches provider, so element 0 is the default model for reply agents.
-    // 2026-08-15: +3.7 Flash x3, +3.6 Flash x3 — 3.7 (High) placed first so
-    // switching to Antigravity defaults to the newest fast model.
+    // 2026-08-15: +3.7 Flash x3, +3.6 Flash x3 — newest fast model placed first so
+    // switching to Antigravity defaults to it.
+    // 2026-09-03: +3.8 Flash x3, 3.8 (High) now first (newest fast model = default).
+    "Gemini 3.8 Flash (High)",
+    "Gemini 3.8 Flash (Medium)",
+    "Gemini 3.8 Flash (Low)",
     "Gemini 3.7 Flash (High)",
     "Gemini 3.7 Flash (Medium)",
     "Gemini 3.7 Flash (Low)",
     "Gemini 3.6 Flash (High)",
     "Gemini 3.6 Flash (Medium)",
     "Gemini 3.6 Flash (Low)",
-    "Gemini 3.5 Flash (High)",
-    "Gemini 3.5 Flash (Medium)",
-    "Gemini 3.5 Flash (Low)",
+    // 2026-09-03: removed Gemini 3.5 Flash x3 — agy no longer lists them.
     "Gemini 3.1 Pro (High)",
     "Gemini 3.1 Pro (Low)",
     "Claude Sonnet 4.6 (Thinking)",
