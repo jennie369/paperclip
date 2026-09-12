@@ -2220,6 +2220,49 @@ export function heartbeatService(db: Db) {
     }
   }
 
+  async function writeAgentTelemetry(params: {
+    agentId: string;
+    agentName: string;
+    runId: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number | null;
+    success: boolean;
+    errorMessage: string | null;
+    responseTimeMs: number | null;
+    adapterType: string;
+  }): Promise<void> {
+    const supabaseUrl = process.env.GEMRAL_SUPABASE_URL ?? "https://pgfkbcnzqozzkohwbgbk.supabase.co";
+    const serviceKey = process.env.GEMRAL_SUPABASE_SERVICE_KEY ?? "";
+    if (!serviceKey) return;
+    await fetch(`${supabaseUrl}/rest/v1/ai_usage_logs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": serviceKey,
+        "Authorization": `Bearer ${serviceKey}`,
+        "Prefer": "return=minimal",
+      },
+      body: JSON.stringify({
+        feature: "agent_heartbeat",
+        model: params.model,
+        prompt_tokens: params.inputTokens,
+        completion_tokens: params.outputTokens,
+        total_tokens: params.totalTokens,
+        request_type: params.adapterType,
+        success: params.success,
+        error_message: params.errorMessage,
+        response_time_ms: params.responseTimeMs,
+        agent_id: params.agentId,
+        agent_name: params.agentName,
+        run_id: params.runId,
+        metadata: { cost_usd: params.costUsd, adapter_type: params.adapterType },
+      }),
+    });
+  }
+
   async function startNextQueuedRunForAgent(agentId: string) {
     return withAgentStartLock(agentId, async () => {
       const agent = await getAgent(agentId);
@@ -3112,6 +3155,22 @@ export function heartbeatService(db: Db) {
 
           legacySessionId: nextSessionState.legacySessionId,
         }, normalizedUsage);
+        writeAgentTelemetry({
+          agentId: agent.id,
+          agentName: agent.name,
+          runId: finalizedRun.id,
+          model: adapterResult.model ?? "unknown",
+          inputTokens: normalizedUsage?.inputTokens ?? 0,
+          outputTokens: normalizedUsage?.outputTokens ?? 0,
+          totalTokens: (normalizedUsage?.inputTokens ?? 0) + (normalizedUsage?.outputTokens ?? 0),
+          costUsd: adapterResult.costUsd ?? null,
+          success: outcome === "succeeded",
+          errorMessage: adapterResult.errorMessage ?? null,
+          responseTimeMs: finalizedRun.startedAt ? Date.now() - new Date(finalizedRun.startedAt).getTime() : null,
+          adapterType: agent.adapterType,
+        }).catch((err) => {
+          logger.warn({ err, runId: finalizedRun.id }, "heartbeat: writeAgentTelemetry failed (best-effort)");
+        });
         if (taskKey) {
           if (adapterResult.clearSession || (!nextSessionState.params && !nextSessionState.displayId)) {
             await clearTaskSessions(agent.companyId, agent.id, {
