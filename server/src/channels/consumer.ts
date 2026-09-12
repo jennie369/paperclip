@@ -297,7 +297,7 @@ export function startConsumer(): void {
       // (a) Reschedule unanswered customer inbound.
       const { data: pend } = await supabase
         .from('channel_pending_messages')
-        .select('channel_name, thread_id, from_uid, sender_name, peer_kind, metadata')
+        .select('channel_name, thread_id, from_uid, sender_name, peer_kind, metadata, created_at')
         .eq('status', 'pending')
         .is('handled_by', null)
         .order('created_at', { ascending: true })
@@ -311,6 +311,11 @@ export function startConsumer(): void {
           const ch = row.channel_name as string;
           const tid = row.thread_id as string;
           if (!ch || !tid) continue;
+          // GEM-887: skip stale cskh-internal test sessions (>48h) — periodic DB cleanup handles the rest via pg_cron.
+          if (ch === 'cskh-internal') {
+            const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+            if ((row.created_at as string) < fortyEightHoursAgo) continue;
+          }
           const isGroup = row.peer_kind === 'group';
           const sessionKey = isGroup ? `${ch}:${tid}:group` : `${ch}:${tid}:${row.from_uid}`;
           if (seen.has(sessionKey)) continue;
