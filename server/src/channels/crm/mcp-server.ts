@@ -9,6 +9,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createClient } from '@supabase/supabase-js';
+import * as fs from 'fs';
 import { matchGemralUser, enrichWithGemralData } from './gemral-bridge.js';
 
 // Initialize Supabase — same config as channels/zalo-personal/supabase.ts
@@ -55,6 +56,34 @@ const TOOLS = [
         source_channel: { type: 'string' },
       },
       required: ['customer_id', 'items'],
+    },
+  },
+  {
+    name: 'create_shopify_order',
+    description:
+      'Tạo đơn Shopify THẬT cho khách chốt mua (draft order → complete). MẶC ĐỊNH đơn UNPAID; chỉ đặt mark_paid=true khi ĐÃ xác nhận khách chuyển khoản đủ (có bill) — KHÔNG bao giờ tự suy tiền. KHÁC create_order (chỉ ghi crm_orders, không phải đơn Shopify). variant_id + giá tra product-catalog-index.json.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        variant_id: { type: 'string', description: 'shopify_variant_id (tra product-catalog-index.json)' },
+        quantity: { type: 'number', description: 'Số lượng (mặc định 1)' },
+        customer_id: { type: 'string', description: 'Shopify customer id (khách cũ). Bỏ trống nếu chỉ có SĐT.' },
+        customer_phone: { type: 'string', description: 'SĐT khách — dùng tự tìm customer_id nếu chưa có' },
+        shipping_name: { type: 'string' },
+        shipping_phone: { type: 'string' },
+        shipping_address1: { type: 'string', description: 'Địa chỉ giao đầy đủ' },
+        shipping_city: { type: 'string', description: 'Tỉnh/TP' },
+        discount_pct: { type: 'number', description: 'Giảm theo % (vd 10)' },
+        discount_amount: { type: 'number', description: 'Giảm số tiền cố định VND (thay cho %)' },
+        discount_title: { type: 'string', description: 'Nhãn ưu đãi' },
+        note: { type: 'string' },
+        tags: { type: 'string' },
+        mark_paid: {
+          type: 'boolean',
+          description: 'CHỈ true khi ĐÃ xác nhận khách CK đủ (có bill). Mặc định false = đơn unpaid, nhân viên/chị check + mark paid sau.',
+        },
+      },
+      required: ['variant_id', 'shipping_name', 'shipping_phone', 'shipping_address1'],
     },
   },
   {
@@ -319,6 +348,133 @@ export async function handleCreateOrder(args: any): Promise<string> {
     total: formatVND(total),
     item_count: items.length,
   });
+}
+
+// ─── create_shopify_order: đơn Shopify THẬT (draft → complete) ───
+// Đọc write-token từ gem-bridge-agent/.env (SHOPIFY_ADMIN_TOKEN) — không cần đổi env fleet.
+function getShopifyWriteConf(): { store: string; token: string } {
+  let store = process.env.SHOPIFY_STORE_URL || process.env.SHOPIFY_STORE || '';
+  let token = process.env.SHOPIFY_ADMIN_TOKEN || '';
+  if (!store || !token) {
+    const candidates = [
+      process.env.GEM_BRIDGE_ENV_PATH,
+      'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner/gem-bridge-agent/.env',
+    ].filter(Boolean) as string[];
+    for (const p of candidates) {
+      try {
+        const txt = fs.readFileSync(p, 'utf-8');
+        for (const raw of txt.split(/\r?\n/)) {
+          const ln = raw.trim();
+          if (!ln || ln.startsWith('#') || !ln.includes('=')) continue;
+          const idx = ln.indexOf('=');
+          const k = ln.slice(0, idx).trim();
+          const v = ln.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+          if (k === 'SHOPIFY_ADMIN_TOKEN' && !token) token = v;
+          if (k === 'SHOPIFY_STORE' && !store) store = v;
+        }
+        if (store && token) break;
+      } catch {
+        /* file không có → thử ứng viên kế */
+      }
+    }
+  }
+  token = token || shopifyToken; // last resort (có thể thiếu write scope)
+  store = store || 'yinyang-masters.myshopify.com';
+  if (!store.endsWith('myshopify.com')) store = `${store}.myshopify.com`;
+  return { store, token };
+}
+
+async function shopifyAdmin(
+  store: string,
+  token: string,
+  method: string,
+  path: string,
+  body?: any,
+): Promise<any> {
+  const res = await fetch(`https://${store}/admin/api/2024-01${path}`, {
+    method,
+    headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Shopify ${method} ${path} → HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+  return text ? JSON.parse(text) : {};
+}
+
+export async function handleCreateShopifyOrder(args: any): Promise<string> {
+  try {
+    const variantId = args.variant_id;
+    if (!variantId) {
+      return JSON.stringify({ success: false, error: 'Thiếu variant_id (tra product-catalog-index.json)' });
+    }
+    const qty = Number(args.quantity || 1);
+    const { store, token } = getShopifyWriteConf();
+    if (!token) return JSON.stringify({ success: false, error: 'Thiếu Shopify write token (gem-bridge-agent/.env SHOPIFY_ADMIN_TOKEN)' });
+
+    // resolve customer_id: chỉ nhận Shopify id NUMERIC (tránh CRM uuid lọt vào), else search theo SĐT
+    let customerId: number | null = null;
+    if (args.customer_id != null && /^\d+$/.test(String(args.customer_id))) {
+      customerId = Number(args.customer_id);
+    }
+    const phone = String(args.customer_phone || args.shipping_phone || '').trim();
+    if (!customerId && phone) {
+      const d = await shopifyAdmin(store, token, 'GET', `/customers/search.json?query=${encodeURIComponent('phone:' + phone)}`);
+      const cs = d.customers || [];
+      if (cs.length === 1) customerId = cs[0].id;
+      else if (cs.length > 1) {
+        return JSON.stringify({ success: false, error: `Nhiều khách khớp SĐT ${phone} — cần customer_id rõ ràng` });
+      }
+    }
+
+    const draft: any = {
+      line_items: [{ variant_id: Number(variantId), quantity: qty }],
+      use_customer_default_address: false,
+      shipping_address: {
+        name: args.shipping_name,
+        phone: args.shipping_phone || phone,
+        address1: args.shipping_address1 || args.shipping_address,
+        city: args.shipping_city || '',
+        country: 'Vietnam',
+      },
+      tags: args.tags || 'agent-order,chat-order,sales-closer',
+      source_name: 'chat',
+    };
+    if (customerId) draft.customer = { id: customerId };
+    if (args.note) draft.note = args.note;
+    const dTitle = args.discount_title || 'Ưu đãi';
+    if (args.discount_pct) {
+      draft.applied_discount = { title: dTitle, description: dTitle, value_type: 'percentage', value: Number(args.discount_pct).toFixed(1) };
+    } else if (args.discount_amount) {
+      draft.applied_discount = { title: dTitle, description: dTitle, value_type: 'fixed_amount', value: String(Math.round(Number(args.discount_amount))) };
+    }
+
+    const created = await shopifyAdmin(store, token, 'POST', '/draft_orders.json', { draft_order: draft });
+    const did = created.draft_order?.id;
+    if (!did) return JSON.stringify({ success: false, error: 'Tạo draft order thất bại' });
+
+    // SAFETY: mark_paid CHỈ khi tường minh true (xác nhận tiền = nhân viên, KHÔNG tự suy tiền).
+    const markPaid = args.mark_paid === true || args.mark_paid === 'true';
+    const paymentPending = markPaid ? 'false' : 'true';
+    const done = await shopifyAdmin(store, token, 'PUT', `/draft_orders/${did}/complete.json?payment_pending=${paymentPending}`);
+    const orderId = done.draft_order?.order_id;
+
+    // verify by-effect: đọc lại order thật
+    const o = (await shopifyAdmin(store, token, 'GET', `/orders/${orderId}.json`)).order || {};
+    return JSON.stringify({
+      success: true,
+      order_number: o.order_number,
+      order_id: orderId,
+      financial_status: o.financial_status,
+      total: o.total_price,
+      currency: o.currency,
+      marked_paid: markPaid,
+      admin_url: `https://admin.shopify.com/store/${store.split('.')[0]}/orders/${orderId}`,
+    });
+  } catch (err: any) {
+    return JSON.stringify({ success: false, error: `Lỗi tạo đơn Shopify: ${err.message}` });
+  }
 }
 
 export async function handleCreateTicket(args: any): Promise<string> {
@@ -910,6 +1066,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       switch (name) {
         case 'create_order':
           result = await handleCreateOrder(args);
+          break;
+        case 'create_shopify_order':
+          result = await handleCreateShopifyOrder(args);
           break;
         case 'create_ticket':
           result = await handleCreateTicket(args);

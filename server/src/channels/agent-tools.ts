@@ -26,6 +26,7 @@
 import { supabase } from './zalo-personal/supabase.js';
 import {
   handleCreateOrder,
+  handleCreateShopifyOrder,
   handleCreateTicket,
   handleSearchProduct,
   handleCRMUpdate,
@@ -71,6 +72,7 @@ export const ALLOWED_TOOLS = [
   'crm_update',
   'send_email',
   'create_order',
+  'create_shopify_order',
   'lookup_order_shopify',
   'recall_memory',
   // Public
@@ -317,6 +319,11 @@ export async function executeTool(call: ToolCall, ctx: ToolExecutionContext): Pr
       // ── 9 MCP handlers ──────────────────────────────────────────────────
       case 'create_order':
         result = wrapMcpResult(await handleCreateOrder({ ...call.args, source_channel: ctx.channelName }));
+        break;
+      case 'create_shopify_order':
+        // KHÔNG auto-inject verifiedCustomerId (đó là CRM/verify id, KHÔNG phải Shopify customer_id).
+        // Handler tự resolve Shopify customer qua customer_phone. mark_paid mặc định false (unpaid).
+        result = wrapMcpResult(await handleCreateShopifyOrder(call.args));
         break;
       case 'create_ticket':
         result = wrapMcpResult(await handleCreateTicket({
