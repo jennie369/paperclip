@@ -269,7 +269,7 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
     resolvedCommand,
   });
 
-  const timeoutSec = asNumber(config.timeoutSec, 0);
+  const timeoutSec = asNumber(config.timeoutSec, 3600);
   const graceSec = asNumber(config.graceSec, 20);
   const extraArgs = (() => {
     const fromExtraArgs = asStringArray(config.extraArgs);
@@ -461,15 +461,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     savedPersonaHash !== currentPersonaHash;
   const cwdMatches =
     runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd);
+  // Timer wakes must always start a fresh session so the agent reads HEARTBEAT.md
+  // from the top and runs Pha 0 wake-gate with the new RUN_ID.  Resuming a prior
+  // session causes the agent to continue old conversation context (e.g. issue-work
+  // from a previous wake) and skip wake-gate entirely — confirmed root-cause of
+  // GEM-728 (revenue-growth-officer silent for 6 days 2026-08-17→08-23).
+  const isTimerWake =
+    typeof context.wakeReason === "string" &&
+    context.wakeReason.trim() === "heartbeat_timer";
   const canResumeSession =
-    runtimeSessionId.length > 0 && cwdMatches && !personaChanged;
+    !isTimerWake && runtimeSessionId.length > 0 && cwdMatches && !personaChanged;
   const sessionId = canResumeSession ? runtimeSessionId : null;
   if (runtimeSessionId && !canResumeSession) {
-    const reason = !cwdMatches
-      ? `saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}"`
-      : personaChanged
-        ? `persona files changed (${PERSONA_FILE_NAMES.join("/")}) — forcing fresh session so agent re-reads updated instructions`
-        : "session cannot be resumed";
+    const reason = isTimerWake
+      ? `timer wake (heartbeat_timer) — forcing fresh session so agent runs Pha 0 wake-gate`
+      : !cwdMatches
+        ? `saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}"`
+        : personaChanged
+          ? `persona files changed (${PERSONA_FILE_NAMES.join("/")}) — forcing fresh session so agent re-reads updated instructions`
+          : "session cannot be resumed";
     await onLog(
       "stdout",
       `[paperclip] Claude session "${runtimeSessionId}" ${reason}.\n`,
@@ -788,6 +798,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   try {
     const initial = await runAttempt(sessionId ?? null);
+    if (initial.proc.timedOut) {
+      await onLog(
+        "stdout",
+        `[paperclip:telemetry] ${JSON.stringify({ event: "timeout", timeoutSec, at: new Date().toISOString() })}\n`,
+      );
+    }
     if (
       sessionId &&
       !initial.proc.timedOut &&
@@ -798,6 +814,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       await onLog(
         "stdout",
         `[paperclip] Claude resume session "${sessionId}" is unavailable; retrying with a fresh session.\n`,
+      );
+      await onLog(
+        "stdout",
+        `[paperclip:telemetry] ${JSON.stringify({ event: "retry", reason: "unknown_session", sessionId, retryNo: 1, at: new Date().toISOString() })}\n`,
       );
       const retry = await runAttempt(null);
       return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true });
@@ -816,6 +836,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       await onLog(
         "stdout",
         `[paperclip] Claude session "${sessionId}" context is too long; retrying with a fresh session.\n`,
+      );
+      await onLog(
+        "stdout",
+        `[paperclip:telemetry] ${JSON.stringify({ event: "retry", reason: "prompt_too_long", sessionId, retryNo: 1, at: new Date().toISOString() })}\n`,
       );
       const retry = await runAttempt(null);
       return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true });
