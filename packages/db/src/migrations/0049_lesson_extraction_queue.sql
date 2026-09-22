@@ -28,9 +28,25 @@ CREATE TABLE IF NOT EXISTS "lesson_extraction_queue" (
 	CONSTRAINT "uq_lesson_extraction_queue" UNIQUE("issue_id","agent_id")
 );
 --> statement-breakpoint
-ALTER TABLE "lesson_extraction_queue" ADD CONSTRAINT "lesson_extraction_queue_issue_id_issues_id_fk" FOREIGN KEY ("issue_id") REFERENCES "public"."issues"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "lesson_extraction_queue" ADD CONSTRAINT "lesson_extraction_queue_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "public"."agents"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "lesson_extraction_queue" ADD CONSTRAINT "lesson_extraction_queue_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "idx_lesson_queue_agent_status" ON "lesson_extraction_queue" USING btree ("agent_id","status");--> statement-breakpoint
-CREATE INDEX "idx_lesson_queue_company_closed" ON "lesson_extraction_queue" USING btree ("company_id","closed_at");--> statement-breakpoint
-CREATE INDEX "idx_lesson_queue_status_created" ON "lesson_extraction_queue" USING btree ("status","created_at");
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'lesson_extraction_queue_issue_id_issues_id_fk'
+  ) THEN
+    ALTER TABLE "lesson_extraction_queue" ADD CONSTRAINT "lesson_extraction_queue_issue_id_issues_id_fk" FOREIGN KEY ("issue_id") REFERENCES "public"."issues"("id") ON DELETE cascade ON UPDATE no action;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'lesson_extraction_queue_agent_id_agents_id_fk'
+  ) THEN
+    ALTER TABLE "lesson_extraction_queue" ADD CONSTRAINT "lesson_extraction_queue_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "public"."agents"("id") ON DELETE cascade ON UPDATE no action;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'lesson_extraction_queue_company_id_companies_id_fk'
+  ) THEN
+    ALTER TABLE "lesson_extraction_queue" ADD CONSTRAINT "lesson_extraction_queue_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;
+  END IF;
+END $$;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_lesson_queue_agent_status" ON "lesson_extraction_queue" USING btree ("agent_id","status");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_lesson_queue_company_closed" ON "lesson_extraction_queue" USING btree ("company_id","closed_at");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_lesson_queue_status_created" ON "lesson_extraction_queue" USING btree ("status","created_at");
