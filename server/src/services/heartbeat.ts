@@ -2232,6 +2232,7 @@ export function heartbeatService(db: Db) {
     success: boolean;
     errorMessage: string | null;
     responseTimeMs: number | null;
+    inferenceTimeMs: number | null;
     adapterType: string;
   }): Promise<void> {
     const supabaseUrl = process.env.GEMRAL_SUPABASE_URL ?? "https://pgfkbcnzqozzkohwbgbk.supabase.co";
@@ -2258,7 +2259,7 @@ export function heartbeatService(db: Db) {
         agent_id: params.agentId,
         agent_name: params.agentName,
         run_id: params.runId,
-        metadata: { cost_usd: params.costUsd, adapter_type: params.adapterType },
+        metadata: { cost_usd: params.costUsd, adapter_type: params.adapterType, inference_time_ms: params.inferenceTimeMs },
       }),
     });
   }
@@ -2937,6 +2938,7 @@ export function heartbeatService(db: Db) {
           "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
         );
       }
+      const inferenceStartMs = Date.now();
       const adapterResult = await adapter.execute({
         runId: run.id,
         agent,
@@ -2950,6 +2952,7 @@ export function heartbeatService(db: Db) {
         },
         authToken: authToken ?? undefined,
       });
+      const inferenceTimeMs = Date.now() - inferenceStartMs;
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
             db,
@@ -3167,6 +3170,7 @@ export function heartbeatService(db: Db) {
           success: outcome === "succeeded",
           errorMessage: adapterResult.errorMessage ?? null,
           responseTimeMs: finalizedRun.startedAt ? Date.now() - new Date(finalizedRun.startedAt).getTime() : null,
+          inferenceTimeMs: inferenceTimeMs,
           adapterType: agent.adapterType,
         }).catch((err) => {
           logger.warn({ err, runId: finalizedRun.id }, "heartbeat: writeAgentTelemetry failed (best-effort)");
