@@ -69,6 +69,7 @@ export const PROVIDER_LABELS: Record<AgentProvider, string> = {
 
 export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
   claude: [
+    "claude-opus-5-5", // 2026-09-24
     "claude-opus-4-8", // 2026-08-01 — agent Gem Doanh Thu dùng
     "claude-opus-5", // 2026-07-26 — agent gem-beat dùng
     "claude-opus-4-7",

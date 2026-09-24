@@ -239,6 +239,8 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     // (ui/src/api/agentConfigs.ts) đã có opus-4-7 từ trước mà bản server này thiếu,
     // tức hai danh sách đã lệch nhau. Đồng bộ lại cùng lượt.
     // 2026-08-01: +opus-4-8 (agent Gem Doanh Thu dùng) — sweep đồng bộ 4 list.
+    // 2026-09-24: +opus-5-5 — sweep đồng bộ 4 list.
+    'claude-opus-5-5',
     'claude-opus-4-8',
     'claude-opus-5',
     'claude-opus-4-7',
