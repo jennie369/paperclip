@@ -33,7 +33,9 @@ import {
   isClaudeMaxTurnsResult,
   isClaudeUnknownSessionError,
   isClaudePromptTooLong,
+  isClaudeWeeklyLimitHit,
 } from "./parse.js";
+import { readClaudeToken, fetchClaudeQuota } from "./quota.js";
 import { resolveClaudeDesiredSkillNames } from "./skills.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -843,6 +845,45 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       );
       const retry = await runAttempt(null);
       return toAdapterResult(retry, { fallbackSessionId: null, clearSessionOnMissingSession: true });
+    }
+
+    // When Claude Code's weekly usage limit is hit there is no point retrying —
+    // the quota won't recover until the billing period resets. Instead, surface
+    // a dedicated errorCode so the Paperclip server can either cooldown until
+    // resetsAt or fall back to the Antigravity provider.
+    if (
+      !initial.proc.timedOut &&
+      (initial.proc.exitCode ?? 0) !== 0 &&
+      initial.parsed &&
+      isClaudeWeeklyLimitHit(initial.parsed)
+    ) {
+      let resetsAt: string | null = null;
+      try {
+        const token = await readClaudeToken();
+        if (token) {
+          const windows = await fetchClaudeQuota(token);
+          const weeklyWindow = windows.find((w) =>
+            /week/i.test(typeof w.label === "string" ? w.label : ""),
+          );
+          resetsAt = typeof weeklyWindow?.resetsAt === "string" ? weeklyWindow.resetsAt : null;
+        }
+      } catch {
+        // best-effort: quota fetch failing should not block the error response
+      }
+      await onLog(
+        "stdout",
+        `[paperclip] Claude weekly usage limit hit. Reset at: ${resetsAt ?? "unknown"}. Consider enabling Antigravity fallback.\n`,
+      );
+      await onLog(
+        "stdout",
+        `[paperclip:telemetry] ${JSON.stringify({ event: "weekly_limit_hit", resetsAt, at: new Date().toISOString() })}\n`,
+      );
+      const base = toAdapterResult(initial, { fallbackSessionId: runtimeSessionId || runtime.sessionId });
+      return {
+        ...base,
+        errorCode: "claude_weekly_limit",
+        errorMeta: { ...(base.errorMeta ?? {}), resetsAt },
+      };
     }
 
     return toAdapterResult(initial, { fallbackSessionId: runtimeSessionId || runtime.sessionId });

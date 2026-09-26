@@ -188,3 +188,18 @@ export function isClaudePromptTooLong(parsed: Record<string, unknown>): boolean 
 
   return allMessages.some((msg) => /prompt is too long|context(?:\s+window)? too long|context(?:\s+length)? exceeded/i.test(msg));
 }
+
+// Detects when Claude Code's weekly (or per-billing-period) usage limit has been hit.
+// When true the adapter returns errorCode "claude_weekly_limit" and errorMeta.resetsAt
+// so the Paperclip server can either cooldown until reset or fall back to Antigravity.
+export function isClaudeWeeklyLimitHit(parsed: Record<string, unknown> | null | undefined): boolean {
+  if (!parsed) return false;
+  const resultText = asString(parsed.result, "").trim();
+  const allMessages = [resultText, ...extractClaudeErrorMessages(parsed)]
+    .map((msg) => msg.trim())
+    .filter(Boolean);
+
+  return allMessages.some((msg) =>
+    /usage\s+limit\s+(?:reached|exceeded|hit)|weekly\s+(?:usage\s+)?limit|claude\s+code\s+usage\s+limit|billing\s+period.*limit\s+(?:reached|exceeded|hit)|plan\s+(?:usage\s+)?limit\s+(?:reached|exceeded)|over(?:age)?\s+.*usage.*limit|exceeded.*usage.*limit/i.test(msg),
+  );
+}
