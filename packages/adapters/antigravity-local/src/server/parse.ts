@@ -457,10 +457,18 @@ export function detectAntigravityAuthRequired(input: {
   return { requiresAuth };
 }
 
+// Quota is read from agy's STDERR only. stdout carries the run transcript (the
+// agent's own prose + tool output as JSONL) — an agent that WRITES "Reddit rate
+// limit 45s" or "quota target caps" is not out of quota. Scanning stdout marked
+// 71/78 exit-0 successful runs as antigravity_quota_exhausted (GEM-1004, measured
+// 26/09); every real hit (7/7) was an stderr line `error: RESOURCE_EXHAUSTED
+// (code 429)`. `stdout` stays in the signature for caller compatibility.
 export function detectAntigravityQuotaExhausted(input: {
   stdout: string;
   stderr: string;
 }): { exhausted: boolean } {
-  const exhausted = scanLines(input.stdout, input.stderr).some((line) => QUOTA_EXHAUSTED_RE.test(line));
+  const exhausted = scanLines("", input.stderr)
+    .filter((line) => !line.startsWith("[paperclip]"))
+    .some((line) => QUOTA_EXHAUSTED_RE.test(line));
   return { exhausted };
 }

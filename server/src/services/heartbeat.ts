@@ -34,6 +34,7 @@ import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import { summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
+import { planQuotaRetry, readQuotaRetryPlan, type QuotaRetryPlan } from "./quota-retry.js";
 import {
   buildWorkspaceReadyComment,
   cleanupExecutionWorkspaceArtifacts,
@@ -1964,6 +1965,7 @@ export function heartbeatService(db: Db) {
   async function finalizeAgentStatus(
     agentId: string,
     outcome: "succeeded" | "failed" | "cancelled" | "timed_out",
+    opts?: { retryScheduled?: boolean },
   ) {
     const existing = await getAgent(agentId);
     if (!existing) return;
@@ -1973,10 +1975,11 @@ export function heartbeatService(db: Db) {
     }
 
     const runningCount = await countRunningRunsForAgent(agentId);
+    // A quota failure with a scheduled retry is not an agent fault → idle, not error.
     const nextStatus =
       runningCount > 0
         ? "running"
-        : outcome === "succeeded" || outcome === "cancelled"
+        : outcome === "succeeded" || outcome === "cancelled" || opts?.retryScheduled
           ? "idle"
           : "error";
 
@@ -2005,6 +2008,115 @@ export function heartbeatService(db: Db) {
         },
       });
     }
+  }
+
+  // GEM-1004: quota wall → persist a retry plan in agent_runtime_state.state_json
+  // (survives restart) instead of leaving the agent in `error`. A later successful
+  // run clears any pending plan. Best-effort: a failure here must not break the
+  // run-finalize path (the run is already recorded as failed).
+  async function syncQuotaRetryAfterRun(input: {
+    agent: typeof agents.$inferSelect;
+    run: typeof heartbeatRuns.$inferSelect;
+    context: Record<string, unknown>;
+    issueId: string | null;
+    outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
+    adapterResult: AdapterExecutionResult;
+    nextSeq: () => number;
+  }): Promise<QuotaRetryPlan | null> {
+    const { agent, run, context, outcome, adapterResult } = input;
+    try {
+      if (outcome === "succeeded") {
+        await db
+          .update(agentRuntimeState)
+          .set({ stateJson: sql`${agentRuntimeState.stateJson} - 'quotaRetry'`, updatedAt: new Date() })
+          .where(and(
+            eq(agentRuntimeState.agentId, agent.id),
+            sql`(${agentRuntimeState.stateJson} -> 'quotaRetry') is not null`,
+          ));
+        return null;
+      }
+      if (outcome !== "failed") return null;
+
+      const plan = planQuotaRetry({
+        errorCode: adapterResult.errorCode,
+        errorMeta: adapterResult.errorMeta ?? null,
+        priorAttempts: asNumber(context.quotaRetryAttempt, 0),
+        runId: run.id,
+        // Timer runs sit on the evergreen heartbeat thread — let the retry re-derive it.
+        issueId: context.heartbeatThread === true ? null : input.issueId,
+        fromTimer: run.invocationSource === "timer",
+        now: new Date(),
+      });
+      if (!plan) return null;
+
+      await db
+        .update(agentRuntimeState)
+        .set({
+          stateJson: sql`${agentRuntimeState.stateJson} || jsonb_build_object('quotaRetry', ${JSON.stringify(plan)}::jsonb)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(agentRuntimeState.agentId, agent.id));
+      await appendRunEvent(run, input.nextSeq(), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message: `Quota exhausted (${plan.errorCode}) — retry ${plan.attempt} scheduled at ${plan.retryAt}`,
+        payload: plan as unknown as Record<string, unknown>,
+      });
+      return plan;
+    } catch (err) {
+      logger.warn({ err, runId: run.id, agentId: agent.id }, "quota retry: failed to sync plan (best-effort)");
+      return null;
+    }
+  }
+
+  // Fire due quota retries. The claim is one atomic UPDATE (CTE snapshots the plan,
+  // the UPDATE removes it) so two overlapping ticks cannot double-fire a retry.
+  async function fireDueQuotaRetries(now: Date) {
+    const claimed = await boundedPoll(db, (tx) =>
+      tx.execute(sql`
+        with due as (
+          select agent_id, state_json -> 'quotaRetry' as plan
+          from agent_runtime_state
+          where (state_json -> 'quotaRetry' ->> 'retryAt') ~ '^\\d{4}-'
+            and (state_json -> 'quotaRetry' ->> 'retryAt')::timestamptz <= ${now.toISOString()}::timestamptz
+          for update skip locked
+        )
+        update agent_runtime_state s
+        set state_json = s.state_json - 'quotaRetry', updated_at = ${now.toISOString()}::timestamptz
+        from due
+        where s.agent_id = due.agent_id
+        returning s.agent_id as "agentId", due.plan as "plan"
+      `),
+    );
+    const rows = Array.from(claimed as unknown as Iterable<{ agentId: string; plan: unknown }>);
+    let fired = 0;
+    for (const row of rows) {
+      const plan = readQuotaRetryPlan(row.plan);
+      if (!plan) continue;
+      try {
+        const run = await enqueueWakeup(row.agentId, {
+          source: plan.source,
+          triggerDetail: "system",
+          reason: "quota_retry",
+          payload: plan.issueId ? { issueId: plan.issueId } : null,
+          requestedByActorType: "system",
+          requestedByActorId: "quota_retry_scheduler",
+          contextSnapshot: {
+            ...(plan.issueId ? { issueId: plan.issueId } : {}),
+            retryOfRunId: plan.retryOfRunId,
+            retryReason: plan.errorCode,
+            quotaRetryAttempt: plan.attempt,
+          },
+        });
+        if (run) fired += 1;
+        logger.info({ agentId: row.agentId, plan, runId: run?.id ?? null }, "quota retry: fired");
+      } catch (err) {
+        // paused / budget-blocked / terminated → drop the retry, leave a trace.
+        logger.warn({ err, agentId: row.agentId, plan }, "quota retry: wake rejected");
+      }
+    }
+    return { due: rows.length, fired };
   }
 
   async function reapOrphanedRuns(opts?: { staleThresholdMs?: number }) {
@@ -3195,7 +3307,16 @@ export function heartbeatService(db: Db) {
           }
         }
       }
-      await finalizeAgentStatus(agent.id, outcome);
+      const quotaRetry = await syncQuotaRetryAfterRun({
+        agent,
+        run: finalizedRun ?? run,
+        context,
+        issueId,
+        outcome,
+        adapterResult,
+        nextSeq: () => seq++,
+      });
+      await finalizeAgentStatus(agent.id, outcome, { retryScheduled: quotaRetry !== null });
     } catch (err) {
       const message = redactCurrentUserText(
         err instanceof Error ? err.message : "Unknown adapter failure",
@@ -4563,7 +4684,15 @@ export function heartbeatService(db: Db) {
         }
       }
 
-      return { checked, enqueued, skipped };
+      // GEM-1004: quota retries ride the same tick (persisted plan, fires after restart too).
+      let quotaRetries = { due: 0, fired: 0 };
+      try {
+        quotaRetries = await fireDueQuotaRetries(now);
+      } catch (err) {
+        logger.warn({ err }, "[tickTimers] quota retry pass failed");
+      }
+
+      return { checked, enqueued, skipped, quotaRetries };
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),
