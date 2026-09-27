@@ -400,6 +400,14 @@ export async function runAgentWithConfig(
     // internally; they return the raw model reply and this is the only place it
     // is cleaned. Side-channels (_escalation/_outboundMedia) are set on `config`
     // (same object the consumer reads after runAgent returns).
+    // ── Marker tool loop ([[CALL: tool(...)]]) — MUST run BEFORE postProcessReply ──
+    // postProcessReply Rule 3b strips every [[CALL:…]] as a leak; without this loop the
+    // agent's tool calls (create_shopify_order, create_ticket, verify_customer_identity…)
+    // were silently discarded for all CLI providers (27/09: sales-closer "chốt đơn" never
+    // created the Shopify order; CALL args with a CRM uuid also tripped the leak guard →
+    // agent_output_corrupted → bot auto-paused).
+    reply = await runMarkerToolLoop(reply, config, sessionKey, messageForAgent, dispatch, signal);
+
     const mediaLib = loadMediaLibrary(config.slug);
     reply = await postProcessReply(reply, config, mediaLib);
 
@@ -2735,6 +2743,57 @@ export function parseEscalationMarker(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_TOOL_ROUNDS = 2;
+
+/**
+ * Parse + execute [[CALL: …]] markers in a raw model reply.
+ * - Side-effect-only calls that all succeed → keep the model's own text (no extra LLM turn).
+ * - Any info tool or any failure → re-dispatch ONCE per round with the tool observation so
+ *   the customer reply is grounded in real results (bounded by MAX_TOOL_ROUNDS).
+ * Leftover markers after the last round are still stripped by postProcessReply.
+ */
+async function runMarkerToolLoop(
+  reply: string,
+  config: AgentConfig,
+  sessionKey: string,
+  messageForAgent: string,
+  dispatch: (msg: string) => Promise<string>,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!/\[\[\s*CALL\s*:/i.test(reply)) return reply;
+  // Lazy import: agent-tools → crm/mcp-server builds a Supabase client at module load;
+  // a static import would make router.ts unloadable in env-less reply-contract tests.
+  const { parseToolCalls, executeToolCalls, renderToolResultsForPrompt, isSideEffectOnlyTool } =
+    await import('./agent-tools.js');
+  let current = reply;
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const { calls, cleanedText } = parseToolCalls(current);
+    if (calls.length === 0) return current;
+
+    const ctx = await loadToolExecutionContext(config.slug, sessionKey);
+    const results = await executeToolCalls(calls, ctx);
+    console.log(
+      `[Router/tools] ${config.slug}: round ${round + 1} executed ` +
+        calls.map((c, i) => `${c.name}=${results[i].ok ? 'ok' : 'fail'}`).join(', '),
+    );
+
+    const needsObservation = calls.some((c, i) => !isSideEffectOnlyTool(c.name) || !results[i].ok);
+    if (!needsObservation && cleanedText.trim()) return cleanedText;
+
+    const observation = renderToolResultsForPrompt(calls, results);
+    try {
+      current = await dispatch(
+        `${messageForAgent}\n\n${observation}\n\nBản nháp trả lời trước khi có kết quả tool (sửa lại cho đúng kết quả, KHÔNG gọi lại tool đã OK):\n${cleanedText}`,
+      );
+    } catch (err: any) {
+      console.warn(`[Router/tools] ${config.slug}: observation re-dispatch failed: ${err.message}`);
+      return cleanedText;
+    }
+    if (signal?.aborted) throw new AgentAbortedError();
+  }
+  return current;
+}
 
 /**
  * Load tool execution context (verified customer + channel name) from

@@ -428,6 +428,30 @@ export async function handleCreateShopifyOrder(args: any): Promise<string> {
       }
     }
 
+    // Idempotency (BUG-023: side-effect dedup): agent may re-emit the same CALL on a later
+    // turn (vd khách gửi bill) → trả đơn đã có thay vì tạo đơn trùng. Cùng khách + cùng
+    // variant trong 24h = cùng đơn.
+    if (customerId) {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const recent = await shopifyAdmin(
+        store, token, 'GET',
+        `/orders.json?customer_id=${customerId}&status=any&created_at_min=${encodeURIComponent(since)}&fields=id,order_number,financial_status,total_price,line_items`,
+      );
+      const dup = (recent.orders || []).find((o: any) =>
+        (o.line_items || []).some((li: any) => String(li.variant_id) === String(variantId)));
+      if (dup) {
+        return JSON.stringify({
+          success: true,
+          duplicate: true,
+          order_number: dup.order_number,
+          order_id: dup.id,
+          financial_status: dup.financial_status,
+          total: dup.total_price,
+          note: 'Đơn đã tạo trước đó (<24h) — không tạo thêm.',
+        });
+      }
+    }
+
     const draft: any = {
       line_items: [{ variant_id: Number(variantId), quantity: qty }],
       use_customer_default_address: false,

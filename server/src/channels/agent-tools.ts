@@ -93,6 +93,45 @@ export function isGatedTool(name: ToolName): boolean {
   return GATED_TOOL_NAMES.has(name);
 }
 
+/** Tools whose result the customer reply does not need (write-only side effects). */
+const SIDE_EFFECT_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'create_ticket', 'create_order', 'create_shopify_order', 'crm_update', 'send_email',
+]);
+
+export function isSideEffectOnlyTool(name: string): boolean {
+  return SIDE_EFFECT_ONLY_TOOLS.has(name);
+}
+
+/**
+ * Parse agent args. Accepts a JSON object, loose `{key:"v"}`, or the prompt contract form
+ * `key="v", n=1, flag=true` (sales-closer AGENTS.md) — the latter used to fail JSON.parse
+ * and the call was silently dropped.
+ */
+function parseToolArgs(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return JSON.parse(trimmed.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'));
+    }
+  }
+  const args: Record<string, unknown> = {};
+  const pairRe = /(\w+)\s*[=:]\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|-?\d+(?:\.\d+)?|true|false|null)/g;
+  let m: RegExpExecArray | null;
+  let matched = 0;
+  while ((m = pairRe.exec(trimmed)) !== null) {
+    matched++;
+    const v = m[2];
+    if (v.startsWith('"')) args[m[1]] = JSON.parse(v);
+    else if (v.startsWith("'")) args[m[1]] = v.slice(1, -1).replace(/\\'/g, "'");
+    else args[m[1]] = JSON.parse(v);
+  }
+  if (!matched) throw new Error('no key=value pairs');
+  return args;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool call data structures
 // ─────────────────────────────────────────────────────────────────────────────
@@ -147,18 +186,11 @@ export function parseToolCalls(text: string): { calls: ToolCall[]; cleanedText: 
 
     let args: Record<string, unknown> = {};
     const trimmed = (argsRaw || '').trim();
-    if (trimmed) {
-      try {
-        if (trimmed.startsWith('{')) {
-          args = JSON.parse(trimmed);
-        } else {
-          // Tolerate {key:"val"} loose JSON by quoting bare keys
-          args = JSON.parse(trimmed.replace(/(\w+)\s*:/g, '"$1":'));
-        }
-      } catch (err: any) {
-        console.warn(`[agent-tools] Failed to parse args for ${name}(${trimmed.substring(0, 60)}): ${err.message}`);
-        return '';
-      }
+    try {
+      args = parseToolArgs(trimmed);
+    } catch (err: any) {
+      console.warn(`[agent-tools] Failed to parse args for ${name}(${trimmed.substring(0, 60)}): ${err.message}`);
+      return '';
     }
 
     calls.push({ name: name as ToolName, args, raw: match });
@@ -323,7 +355,9 @@ export async function executeTool(call: ToolCall, ctx: ToolExecutionContext): Pr
       case 'create_shopify_order':
         // KHÔNG auto-inject verifiedCustomerId (đó là CRM/verify id, KHÔNG phải Shopify customer_id).
         // Handler tự resolve Shopify customer qua customer_phone. mark_paid mặc định false (unpaid).
-        result = wrapMcpResult(await handleCreateShopifyOrder(call.args));
+        // Chat path KHÔNG BAO GIỜ mark paid (AGENTS.md §THANH TOÁN — xác nhận tiền = nhân viên):
+        // ép false ở tầng code, không tin prompt.
+        result = wrapMcpResult(await handleCreateShopifyOrder({ ...call.args, mark_paid: false }));
         break;
       case 'create_ticket':
         result = wrapMcpResult(await handleCreateTicket({
