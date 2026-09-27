@@ -40,6 +40,14 @@ function backoffFor(errorCode: string): readonly number[] | null {
 const MIN_DELAY_MS = 5 * 60_000;
 const MAX_DELAY_MS = 7 * 24 * 60 * 60_000;
 const RESET_SLACK_MS = 2 * 60_000;
+/**
+ * De-synchronise retries (GEM-1009): agents that hit the same 429 wall at the same
+ * minute would otherwise all retry at the same +30 min mark and hit it together again.
+ * Additive only (never earlier than the base delay): backoff +0..20%, resetsAt +0..3 min.
+ * Transient 10 min → ≤12 min keeps a 09:41 slot-window retry before 10:00.
+ */
+export const RETRY_JITTER_FRACTION = 0.2;
+const RESET_JITTER_MS = 3 * 60_000;
 
 export type QuotaRetryPlan = {
   retryAt: string;
@@ -75,8 +83,11 @@ export function planQuotaRetry(input: {
   issueId: string | null;
   fromTimer: boolean;
   now: Date;
+  /** [0,1) source for jitter — injectable for deterministic tests. */
+  random?: () => number;
 }): QuotaRetryPlan | null {
   const { errorCode, now } = input;
+  const r = Math.min(0.999999, Math.max(0, (input.random ?? Math.random)()));
   const backoff = errorCode ? backoffFor(errorCode) : null;
   if (!errorCode || !backoff) return null;
   const prior = Number.isFinite(input.priorAttempts) && input.priorAttempts > 0 ? Math.floor(input.priorAttempts) : 0;
@@ -85,8 +96,8 @@ export function planQuotaRetry(input: {
   const resetsAtMs = readResetsAt(input.errorMeta, now);
   const rawDelay =
     resetsAtMs !== null
-      ? resetsAtMs - now.getTime() + RESET_SLACK_MS
-      : backoff[prior] * 60_000;
+      ? resetsAtMs - now.getTime() + RESET_SLACK_MS + r * RESET_JITTER_MS
+      : backoff[prior] * 60_000 * (1 + r * RETRY_JITTER_FRACTION);
   const delay = Math.min(MAX_DELAY_MS, Math.max(MIN_DELAY_MS, rawDelay));
 
   return {

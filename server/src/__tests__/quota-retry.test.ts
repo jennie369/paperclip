@@ -35,7 +35,7 @@ describe("detectAntigravityQuotaExhausted", () => {
 
 describe("planQuotaRetry", () => {
   const now = new Date("2026-09-26T18:00:00.000Z");
-  const base = { runId: "run-1", issueId: null, fromTimer: true, now };
+  const base = { runId: "run-1", issueId: null, fromTimer: true, now, random: () => 0 };
 
   it("schedules a backoff retry for antigravity_quota_exhausted", () => {
     const plan = planQuotaRetry({ ...base, errorCode: "antigravity_quota_exhausted", priorAttempts: 0 });
@@ -108,7 +108,7 @@ describe("planQuotaRetry — transient disconnect (slot-window agents)", () => {
   // 09:41 HCM = 02:41Z; Yinyang morning window closes 10:00 HCM = 03:00Z.
   const failAt = new Date("2026-09-27T02:41:00.000Z");
   const windowClose = Date.parse("2026-09-27T03:00:00.000Z");
-  const base = { runId: "run-yy", issueId: null, fromTimer: true, now: failAt };
+  const base = { runId: "run-yy", issueId: null, fromTimer: true, now: failAt, random: () => 0 };
 
   it("retries a 09:41 failure INSIDE the 09:00-10:00 window", () => {
     const plan = planQuotaRetry({ ...base, errorCode: "antigravity_transient_disconnect", priorAttempts: 0 });
@@ -124,5 +124,36 @@ describe("planQuotaRetry — transient disconnect (slot-window agents)", () => {
 
   it("keeps plain adapter_failed non-retryable", () => {
     expect(planQuotaRetry({ ...base, errorCode: "adapter_failed", priorAttempts: 0 })).toBeNull();
+  });
+});
+
+describe("planQuotaRetry — jitter (GEM-1009 retry herd)", () => {
+  const now = new Date("2026-09-26T13:00:00.000Z");
+  const base = { runId: "run-j", issueId: null, fromTimer: true, now, priorAttempts: 0 };
+  const delayMin = (p: ReturnType<typeof planQuotaRetry>) => (Date.parse(p!.retryAt) - now.getTime()) / 60_000;
+
+  it("spreads quota retries over +0..20% of the base backoff, never earlier", () => {
+    expect(delayMin(planQuotaRetry({ ...base, errorCode: "antigravity_quota_exhausted", random: () => 0 }))).toBe(30);
+    expect(delayMin(planQuotaRetry({ ...base, errorCode: "antigravity_quota_exhausted", random: () => 0.5 }))).toBe(33);
+    expect(delayMin(planQuotaRetry({ ...base, errorCode: "antigravity_quota_exhausted", random: () => 0.9999 }))).toBeLessThan(36);
+  });
+
+  it("two agents failing the same minute get different retry times", () => {
+    const a = planQuotaRetry({ ...base, errorCode: "antigravity_quota_exhausted", random: () => 0.1 });
+    const b = planQuotaRetry({ ...base, errorCode: "antigravity_quota_exhausted", random: () => 0.7 });
+    expect(a!.retryAt).not.toBe(b!.retryAt);
+  });
+
+  it("worst-case jitter still lands a 09:41 transient retry before the 10:00 window close", () => {
+    const failAt = new Date("2026-09-27T02:41:00.000Z");
+    const plan = planQuotaRetry({ ...base, now: failAt, errorCode: "antigravity_transient_disconnect", random: () => 0.9999 });
+    expect(Date.parse(plan!.retryAt)).toBeLessThan(Date.parse("2026-09-27T03:00:00.000Z"));
+  });
+
+  it("jitters provider resetsAt by at most 3 min after the 2 min slack", () => {
+    const resetsAt = new Date(now.getTime() + 60 * 60_000).toISOString();
+    const d = delayMin(planQuotaRetry({ ...base, errorCode: "claude_weekly_limit", errorMeta: { resetsAt }, random: () => 0.9999 }));
+    expect(d).toBeGreaterThanOrEqual(62);
+    expect(d).toBeLessThan(65);
   });
 });
