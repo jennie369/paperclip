@@ -134,6 +134,16 @@ async function handleMessagingEvent(pageId: string, channelName: string, event: 
   const messageId: string = event.message?.mid || `postback_${Date.now()}`;
   const timestamp = event.timestamp ? new Date(event.timestamp) : new Date();
 
+  // STORY FILTER (27/09): khách trả lời / nhắc tên trong STORY của Page tới qua Messenger như
+  // một DM thường (Graph gắn `message.reply_to.story` hoặc attachment `story_mention`). Đó là
+  // phản ứng với nội dung (emoji 🔥👍, "cảm ơn đã chia sẻ"), KHÔNG phải khách hỏi — để agent
+  // trả lời thì câu trả lời lạc đề ("Xin lỗi, em không thể xử lý yêu cầu này."). Gắn nhãn
+  // fb_context → router bỏ auto-reply, consumer ẩn phiên chỉ-có-story khỏi Hộp thư.
+  const replyTo = event.message?.reply_to;
+  const hasStoryMention = attachments.some((a: any) => a?.type === 'story_mention');
+  const fbContext: 'story_reply' | 'story_mention' | undefined =
+    replyTo?.story ? 'story_reply' : hasStoryMention ? 'story_mention' : undefined;
+
   // Resolve sender name from Graph API (cached)
   const senderName = await resolveSenderName(senderId, pageId);
 
@@ -173,6 +183,8 @@ async function handleMessagingEvent(pageId: string, channelName: string, event: 
       platform: 'facebook',
       page_id: pageId,
       attachments: attachments.length > 0 ? attachments : undefined,
+      ...(fbContext ? { fb_context: fbContext, story_url: replyTo?.story?.url || undefined } : {}),
+      ...(replyTo?.mid ? { reply_to_mid: replyTo.mid } : {}),
     },
     timestamp,
     dedupeKey: `fb:${channelName}:${senderId}:${messageId}`,

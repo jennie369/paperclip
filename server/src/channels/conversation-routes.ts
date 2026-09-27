@@ -32,6 +32,8 @@ router.get('/', async (req, res) => {
   } else {
     query = query.or('peer_kind.is.null,peer_kind.neq.comment');
   }
+  // Phiên chỉ có tương tác STORY Facebook (consumer gắn metadata.fb_story_only) — ẩn như comment.
+  query = query.or('metadata->>fb_story_only.is.null,metadata->>fb_story_only.neq.true');
 
   if (channel) query = query.eq('channel_name', String(channel));
   if (label) query = query.eq('label', String(label));

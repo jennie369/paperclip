@@ -735,6 +735,10 @@ async function processResolved(
   const sessionKey = isGroup
     ? `${merged.channel}:${merged.chatId}:group`
     : `${merged.channel}:${merged.chatId}:${merged.senderId}`;
+  // Thời điểm THẬT của tin (created_at pending cuối), không phải giờ xử lý.
+  const msgAt = (merged.timestamp instanceof Date && !isNaN(merged.timestamp.getTime()))
+    ? merged.timestamp.toISOString()
+    : new Date().toISOString();
   const sess = await session.getOrCreate(sessionKey, {
     channelName: merged.channel,
     agentSlug,
@@ -743,6 +747,7 @@ async function processResolved(
     senderId: isGroup ? merged.chatId : merged.senderId,
     senderName: isGroup ? (merged.metadata?.groupName || 'Group') : merged.senderName,
     metadata: isGroup ? { is_group: true, group_name: merged.metadata?.groupName } : {},
+    messageAt: msgAt,
   });
 
   // NOTE: user message is persisted to channel_sessions.history inside
@@ -750,10 +755,17 @@ async function processResolved(
   // BUG-047 (duplicate entries ~300ms apart).
 
   // Update conversation metadata for Unified Inbox
-  const sessionUpdate: Record<string, any> = {
-    last_message_at: new Date().toISOString(),
+  // Preview/last_message_* ghi RIÊNG (dưới) theo THỜI ĐIỂM TIN, không theo giờ xử lý:
+  // consumer có thể chạy trễ sau khi agent đã trả lời (debounce/paused/retry) → ghi
+  // now() + nội dung khách sẽ ĐÈ preview câu reply mới hơn (bug homyhue 25/09).
+  // Tin ra (channel_sent_messages) cập nhật preview qua trigger DB
+  // `trg_channel_sent_touch_session` (migration 20260927_channel_session_preview_outbound).
+  const previewUpdate = {
+    last_message_at: msgAt,
     last_message_preview: merged.content.substring(0, 200),
     last_message_sender: merged.senderName || merged.senderId,
+  };
+  const sessionUpdate: Record<string, any> = {
     unread_count: ((sess as any).unread_count || 0) + 1,
     has_attachments: !!(merged.media && merged.media.length > 0),
   };
@@ -775,8 +787,28 @@ async function processResolved(
   // RPC atomic để KHÔNG clobber bot_paused (cửa sổ race lớn nhất — mỗi tin khách 1 lần, đọc
   // snapshot dòng getOrCreate rồi ghi đè sau CRM-resolve/context-build ~1-3s). Plan 2026-08-10.
   try { await supabase.from('channel_sessions').update(sessionUpdate).eq('session_key', sessionKey); } catch {}
+  // Chỉ ghi preview khi tin này MỚI HƠN hoặc bằng tin cuối đang hiển thị (không lùi thời gian).
+  try {
+    await supabase.from('channel_sessions').update(previewUpdate)
+      .eq('session_key', sessionKey)
+      .or(`last_message_at.is.null,last_message_at.lte.${msgAt}`);
+  } catch {}
   if (merged.metadata?.source) {
     try { await supabase.rpc('channel_session_merge_meta', { p_session_key: sessionKey, p_patch: { last_source: merged.metadata.source } }); } catch {}
+  }
+  // STORY FILTER (27/09): phiên chỉ có tương tác story FB → cờ fb_story_only=true (Hộp thư ẩn);
+  // khách nhắn DM thật sau đó → gỡ cờ, phiên hiện lại bình thường. Phiên đã có DM thật từ
+  // trước thì story reply chỉ là 1 tin trong thread (không ẩn cả hội thoại).
+  if (!isGroup && merged.channelType === 'facebook') {
+    const storyOnlyNow = (sess as any).metadata?.fb_story_only === true;
+    const isNewSession = !(sess as any).last_message_preview;
+    if (merged.metadata?.fb_context && (isNewSession || storyOnlyNow)) {
+      if (!storyOnlyNow) {
+        try { await supabase.rpc('channel_session_merge_meta', { p_session_key: sessionKey, p_patch: { fb_story_only: true } }); } catch {}
+      }
+    } else if (!merged.metadata?.fb_context && storyOnlyNow) {
+      try { await supabase.rpc('channel_session_merge_meta', { p_session_key: sessionKey, p_patch: { fb_story_only: false } }); } catch {}
+    }
   }
 
   // Get history for agent context

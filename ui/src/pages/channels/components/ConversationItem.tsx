@@ -147,6 +147,9 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
 
   // Format message preview - truncate and clean up
   const preview = formatPreview(conv.last_message_preview);
+  // Nhóm: nội dung có thể đã mang sẵn "Tên: ..." → không lặp nhãn ("VUHO: VUHO: ...").
+  const rawLabel = previewSenderLabel(conv.last_message_sender, isGroup);
+  const senderLabel = rawLabel && preview.startsWith(`${rawLabel}:`) ? "" : rawLabel;
 
   return (
     <>
@@ -253,8 +256,8 @@ export function ConversationItem({ conversation: conv, isSelected, onClick, onAc
             {/* Row 3: Message preview */}
             <div className="flex items-center gap-2">
               <p className={`text-[13px] truncate flex-1 ${isUnread ? "text-foreground" : "text-muted-foreground"}`}>
-                {conv.last_message_sender && (
-                  <span className="font-medium">{conv.last_message_sender}: </span>
+                {senderLabel && (
+                  <span className="font-medium">{senderLabel}: </span>
                 )}
                 {preview || "..."}
               </p>
@@ -345,6 +348,15 @@ function formatPhoneNumber(phone: string | null | undefined): string {
 }
 
 // Helper: Clean and truncate message preview
+// Nhãn người gửi trước preview — chuẩn Messenger/Zalo: tin phía mình gửi (agent/người, DB
+// trigger ghi 'Bạn'; mirror cũ ghi 'agent') → "Bạn"; hội thoại 1-1 tin khách → không nhãn
+// (tên đã ở tiêu đề dòng); nhóm → tên người nói.
+function previewSenderLabel(sender: string | null | undefined, isGroup: boolean): string {
+  if (!sender) return "";
+  if (sender === "Bạn" || sender === "agent") return "Bạn";
+  return isGroup ? sender : "";
+}
+
 function formatPreview(preview: string | null | undefined): string {
   if (!preview) return "";
 

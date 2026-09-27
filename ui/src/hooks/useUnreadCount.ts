@@ -33,7 +33,11 @@ export function useUnreadCount() {
       // Muted conversations must not contribute to the sidebar badge or the
       // browser-tab title count. `not is true` matches both false and NULL so
       // un-muted rows (default) are still counted.
-      .not("is_muted", "is", true);
+      .not("is_muted", "is", true)
+      // Cùng tập với danh sách Hộp thư (conversation-routes): bỏ bình luận + phiên chỉ-story FB,
+      // nếu không badge đếm hội thoại mà chị không thấy trong danh sách.
+      .or("peer_kind.is.null,peer_kind.neq.comment")
+      .or("metadata->>fb_story_only.is.null,metadata->>fb_story_only.neq.true");
 
     const rows = data || [];
     const total = rows.reduce((sum, s) => sum + (s.unread_count || 0), 0);

@@ -12,6 +12,8 @@ export interface SessionDefaults {
   senderId?: string;
   senderName?: string;
   metadata?: Record<string, any>;
+  /** Thời điểm THẬT của tin tạo phiên (không phải giờ xử lý) — seed last_message_at khi tạo mới. */
+  messageAt?: string;
 }
 
 /**
@@ -30,13 +32,12 @@ export async function getOrCreate(
     .single();
 
   if (existing) {
-    // Update last_message_at
+    // KHÔNG chạm last_message_at (27/09): chỉ 2 điểm ghi last_message_* — consumer (tin VÀO,
+    // theo thời điểm tin, không lùi) + trigger DB trg_channel_sent_touch_session (tin RA).
+    // Bump now() ở đây từng làm preview đè câu trả lời mới hơn (bug homyhue 25/09).
     await supabase
       .from('channel_sessions')
-      .update({
-        last_message_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .update({ updated_at: new Date().toISOString() })
       .eq('session_key', sessionKey);
 
     return existing as SessionRow;
@@ -56,7 +57,7 @@ export async function getOrCreate(
       history: [],
       history_count: 0,
       status: 'active',
-      last_message_at: new Date().toISOString(),
+      last_message_at: defaults.messageAt || new Date().toISOString(),
       metadata: defaults.metadata || {},
     })
     .select('*')
@@ -77,7 +78,7 @@ export async function getOrCreate(
       history: [],
       history_count: 0,
       status: 'active',
-      last_message_at: new Date().toISOString(),
+      last_message_at: defaults.messageAt || new Date().toISOString(),
       metadata: defaults.metadata || {},
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -130,7 +131,7 @@ export async function appendMessage(
     .update({
       history,
       history_count: history.length,
-      last_message_at: new Date().toISOString(),
+      // last_message_at KHÔNG bump ở đây — xem getOrCreate (27/09).
       updated_at: new Date().toISOString(),
     })
     .eq('session_key', sessionKey);

@@ -101,6 +101,14 @@ export async function resolveAgent(msg: InboundMessage): Promise<string> {
     return '';
   }
 
+  // ── Tier 0b: Tương tác STORY Facebook (reply/mention story) — KHÔNG auto-reply ──
+  // Gắn nhãn ở facebook/webhook.ts (metadata.fb_context). Đây là phản ứng với nội dung
+  // Page, không phải câu hỏi; người vẫn xem được trong thread nếu khách có DM thật.
+  if (msg.metadata?.fb_context) {
+    (msg as any)._skipReason = 'fb_story_interaction';
+    return '';
+  }
+
   // ── Tier 1: Check ignored chats ──
   const { data: ignored } = await supabase
     .from('chat_ignored')
