@@ -2060,7 +2060,7 @@ export function heartbeatService(db: Db) {
         eventType: "lifecycle",
         stream: "system",
         level: "warn",
-        message: `Quota exhausted (${plan.errorCode}) — retry ${plan.attempt} scheduled at ${plan.retryAt}`,
+        message: `Retryable failure (${plan.errorCode}) — retry ${plan.attempt} scheduled at ${plan.retryAt}`,
         payload: plan as unknown as Record<string, unknown>,
       });
       return plan;

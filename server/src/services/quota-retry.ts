@@ -21,6 +21,22 @@ export const QUOTA_RETRY_ERROR_CODES: ReadonlySet<string> = new Set([
 export const QUOTA_RETRY_BACKOFF_MIN = [30, 60, 120] as const;
 export const QUOTA_RETRY_MAX_ATTEMPTS = QUOTA_RETRY_BACKOFF_MIN.length;
 
+/**
+ * Transient transport failures (agent stream dropped mid-response) — not a quota wall,
+ * so retry SHORT: slot-window agents (Yinyang 09:30 wake, window closes 10:00) must land
+ * the retry inside the window (GEM-1017: 09:40 fail + 10 min = 09:50 still in-window).
+ */
+export const TRANSIENT_RETRY_ERROR_CODES: ReadonlySet<string> = new Set([
+  "antigravity_transient_disconnect",
+]);
+export const TRANSIENT_RETRY_BACKOFF_MIN = [10, 20] as const;
+
+function backoffFor(errorCode: string): readonly number[] | null {
+  if (QUOTA_RETRY_ERROR_CODES.has(errorCode)) return QUOTA_RETRY_BACKOFF_MIN;
+  if (TRANSIENT_RETRY_ERROR_CODES.has(errorCode)) return TRANSIENT_RETRY_BACKOFF_MIN;
+  return null;
+}
+
 const MIN_DELAY_MS = 5 * 60_000;
 const MAX_DELAY_MS = 7 * 24 * 60 * 60_000;
 const RESET_SLACK_MS = 2 * 60_000;
@@ -61,15 +77,16 @@ export function planQuotaRetry(input: {
   now: Date;
 }): QuotaRetryPlan | null {
   const { errorCode, now } = input;
-  if (!errorCode || !QUOTA_RETRY_ERROR_CODES.has(errorCode)) return null;
+  const backoff = errorCode ? backoffFor(errorCode) : null;
+  if (!errorCode || !backoff) return null;
   const prior = Number.isFinite(input.priorAttempts) && input.priorAttempts > 0 ? Math.floor(input.priorAttempts) : 0;
-  if (prior >= QUOTA_RETRY_MAX_ATTEMPTS) return null;
+  if (prior >= backoff.length) return null;
 
   const resetsAtMs = readResetsAt(input.errorMeta, now);
   const rawDelay =
     resetsAtMs !== null
       ? resetsAtMs - now.getTime() + RESET_SLACK_MS
-      : QUOTA_RETRY_BACKOFF_MIN[prior] * 60_000;
+      : backoff[prior] * 60_000;
   const delay = Math.min(MAX_DELAY_MS, Math.max(MIN_DELAY_MS, rawDelay));
 
   return {

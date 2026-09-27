@@ -11,6 +11,7 @@ export {
   antigravityTranscriptPath,
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
+  detectAntigravityTransientDisconnect,
 } from "./parse.js";
 export { defaultAgyCommand } from "./execute.js";
 import type { AdapterSessionCodec } from "@paperclipai/adapter-utils";

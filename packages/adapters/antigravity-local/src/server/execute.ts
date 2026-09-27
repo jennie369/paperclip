@@ -31,6 +31,7 @@ import { DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
 import {
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
+  detectAntigravityTransientDisconnect,
   findAntigravityRunByTurnMarker,
   looksLikeSystemPromptLeak,
   parseAntigravityStdout,
@@ -1116,6 +1117,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     } else if (quotaMeta.exhausted) {
       errorCode = "antigravity_quota_exhausted";
       errorMessage = stderrLine || "Antigravity Ultra quota exhausted.";
+    } else if (!exitOk && detectAntigravityTransientDisconnect({ stderr: attempt.proc.stderr }).transient) {
+      errorCode = "antigravity_transient_disconnect";
+      errorMessage = stderrLine || "Antigravity agent stream disconnected mid-response.";
     } else if (!exitOk) {
       errorMessage = stderrLine || `Antigravity (agy) exited with code ${attempt.proc.exitCode ?? -1}`;
     } else if (!summary) {

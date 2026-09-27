@@ -441,6 +441,11 @@ const AUTH_REQUIRED_RE =
   /(?:not\s+authenticated|please\s+authenticate|authentication\s+required|unauthorized|invalid\s+credentials|not\s+logged\s+in|login\s+required|consent\s+could\s+not\s+be\s+obtained|invalid\s+authorization\s+code|requires\s+authentication)/i;
 const QUOTA_EXHAUSTED_RE =
   /(?:resource_exhausted|quota|rate[-\s]?limit|too many requests|\b429\b|billing details|no capacity available|usage limit)/i;
+// agy's streaming link to its agent dropped mid-response ("the connection to the agent
+// was interrupted … subscriber fell behind updates, stalled for 10s"). Same prompt
+// succeeds on a fresh run minutes later (GEM-1017: 11 runs/day by 27/09).
+const TRANSIENT_DISCONNECT_RE =
+  /(?:connection to the agent was interrupted|subscriber fell behind updates|stalled for \d+s)/i;
 
 function scanLines(stdout: string, stderr: string): string[] {
   return `${stdout}\n${stderr}`
@@ -471,4 +476,12 @@ export function detectAntigravityQuotaExhausted(input: {
     .filter((line) => !line.startsWith("[paperclip]"))
     .some((line) => QUOTA_EXHAUSTED_RE.test(line));
   return { exhausted };
+}
+
+/** STDERR-only, like quota: stdout is the agent's own transcript prose. */
+export function detectAntigravityTransientDisconnect(input: { stderr: string }): { transient: boolean } {
+  const transient = scanLines("", input.stderr)
+    .filter((line) => !line.startsWith("[paperclip]"))
+    .some((line) => TRANSIENT_DISCONNECT_RE.test(line));
+  return { transient };
 }
