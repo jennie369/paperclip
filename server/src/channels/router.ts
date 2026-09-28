@@ -3048,6 +3048,24 @@ async function buildSystemPrompt(
     }
   }
 
+  // JSON SSOT inline GỌN (29/09): prompt sales-closer phình 710k ký tự (catalog 483KB thụt dòng +
+  // cskh-qa 208KB) → agy quá 5' timeout → reply rỗng → khách bị bỏ rơi câm (homyhue 28/09).
+  // Ghi compact + bỏ trường agent KHÔNG dùng: link/đường dẫn ảnh (gửi ảnh qua [[SEND_MEDIA: id]],
+  // server tự tra ảnh từ file catalog gốc — catalog-media-source.ts), `origin`/`freq` (provenance).
+  // Giữ id/name/covers/price/variant/links/description/includes/answer. Parse lỗi → nạp nguyên văn.
+  const INLINE_JSON_OMIT = new Set(['images', 'all_images', 'all_image_urls', 'path', 'origin', 'freq']);
+  function tryLoadJsonSlim(filePath: string, header: string): void {
+    if (!existsSync(filePath)) return;
+    const raw = readFileSync(filePath, 'utf-8');
+    try {
+      const slim = JSON.stringify(JSON.parse(raw), (k, v) => (INLINE_JSON_OMIT.has(k) ? undefined : v));
+      parts.push(`# ${header}\n` + slim);
+    } catch {
+      parts.push(`# ${header}\n` + raw);
+    }
+    loadedFiles.push(header);
+  }
+
   // 0. Owner info (shared USER.md) + Agent identity
   tryLoad(pathResolve(projectRoot, 'agents', 'USER.md'), 'THÔNG TIN OWNER');
   tryLoad(pathResolve(agentsDir, 'IDENTITY.md'), 'NHÂN CÁCH AGENT');
@@ -3120,7 +3138,10 @@ async function buildSystemPrompt(
       if (Array.isArray(names)) {
         for (const name of names) {
           if (typeof name === 'string') {
-            tryLoad(pathResolve(projectRoot, name), `SSOT REF: ${name.split('/').pop()}`);
+            const refPath = pathResolve(projectRoot, name);
+            const refHeader = `SSOT REF: ${name.split('/').pop()}`;
+            if (name.endsWith('.json')) tryLoadJsonSlim(refPath, refHeader);
+            else tryLoad(refPath, refHeader);
           }
         }
       }
