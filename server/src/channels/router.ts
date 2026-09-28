@@ -35,6 +35,7 @@ import {
 import { renderHistoryForPrompt, stripInjectedContext } from './session-history-util.js';
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
+import { selectInlineJson } from './inline-ssot-select.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -339,7 +340,11 @@ export async function runAgentWithConfig(
   // Company context resolved either from the config override (set by SOP
   // executor or channel consumer) or the single-tenant default GEMRAL.
   const companyId = (config as any)._companyId || DEFAULT_COMPANY_ID;
-  const systemPrompt = await buildSystemPrompt(config, customerContext, companyId);
+  // Chuỗi tra cứu cho SSOT inline chọn lọc: câu hiện tại + 3 lượt KHÁCH gần nhất (câu ngắn kiểu
+  // "còn không em?" cần ngữ cảnh lượt trước để biết đang nói SP nào).
+  const recentUser = (history || []).filter((h) => h.role === 'user').slice(-3).map((h) => h.content || '');
+  const retrievalQuery = [...recentUser, message || ''].join('\n').slice(-4000);
+  const systemPrompt = await buildSystemPrompt(config, customerContext, companyId, retrievalQuery);
   // Time-aware, payment-safe history for EVERY provider: strip injected CRM context,
   // stamp each turn with [DD/MM HH:mm] (HCM), mark pre-boundary turns [CŨ] + downgrade old
   // bill/link-card images, and insert a "PHIÊN TRƯỚC KẾT THÚC" note. Prevents the agent
@@ -3031,6 +3036,7 @@ async function buildSystemPrompt(
   config: AgentConfig,
   customerContext?: any,
   companyId: string = DEFAULT_COMPANY_ID,
+  retrievalQuery: string = '',
 ): Promise<string> {
   const projectRoot = PROJECT_ROOT;
   const agentsDir = pathResolve(
@@ -3054,11 +3060,14 @@ async function buildSystemPrompt(
   // server tự tra ảnh từ file catalog gốc — catalog-media-source.ts), `origin`/`freq` (provenance).
   // Giữ id/name/covers/price/variant/links/description/includes/answer. Parse lỗi → nạp nguyên văn.
   const INLINE_JSON_OMIT = new Set(['images', 'all_images', 'all_image_urls', 'path', 'origin', 'freq']);
-  function tryLoadJsonSlim(filePath: string, header: string): void {
+  function tryLoadJsonSlim(filePath: string, header: string, relPath: string = ''): void {
     if (!existsSync(filePath)) return;
     const raw = readFileSync(filePath, 'utf-8');
     try {
-      const slim = JSON.stringify(JSON.parse(raw), (k, v) => (INLINE_JSON_OMIT.has(k) ? undefined : v));
+      const parsed = JSON.parse(raw);
+      // Chọn lọc theo câu khách (inline-ssot-select.ts): mục lục đủ + chi tiết mục khớp → prompt nhỏ.
+      const picked = selectInlineJson(relPath.split('/').pop() || '', parsed, retrievalQuery, relPath);
+      const slim = picked ?? JSON.stringify(parsed, (k, v) => (INLINE_JSON_OMIT.has(k) ? undefined : v));
       parts.push(`# ${header}\n` + slim);
     } catch {
       parts.push(`# ${header}\n` + raw);
@@ -3140,7 +3149,7 @@ async function buildSystemPrompt(
           if (typeof name === 'string') {
             const refPath = pathResolve(projectRoot, name);
             const refHeader = `SSOT REF: ${name.split('/').pop()}`;
-            if (name.endsWith('.json')) tryLoadJsonSlim(refPath, refHeader);
+            if (name.endsWith('.json')) tryLoadJsonSlim(refPath, refHeader, name);
             else tryLoad(refPath, refHeader);
           }
         }
