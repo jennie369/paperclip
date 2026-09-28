@@ -3293,6 +3293,11 @@ async function saveHistory(
     history = history.slice(history.length - limit);
   }
 
+  // Inbox preview: last agent reply text, capped at 120 chars. Mirrors what
+  // trg_channel_sent_touch_session sets on the normal send path so the Hộp thư
+  // preview stays in sync when saveHistory writes directly (GEM-1028).
+  const preview = agentReply.substring(0, 120);
+
   // If row exists, UPDATE (preserves real chat_id from channel ingestion).
   // If row missing (training/test sessions), INSERT with synthetic chat_id.
   // Without this insert path, loadHistory always returns [] for training →
@@ -3306,6 +3311,7 @@ async function saveHistory(
         history_count: history.length,
         agent_slug: config.slug,
         last_message_at: now,
+        preview,
         updated_at: now,
       })
       .eq('session_key', sessionKey);
@@ -3319,6 +3325,7 @@ async function saveHistory(
         history_count: history.length,
         agent_slug: config.slug,
         last_message_at: now,
+        preview,
         updated_at: now,
       });
   }
