@@ -240,10 +240,12 @@ export const PROVIDER_MODELS: Record<AgentProvider, string[]> = {
     // tức hai danh sách đã lệch nhau. Đồng bộ lại cùng lượt.
     // 2026-08-01: +opus-4-8 (agent Gem Doanh Thu dùng) — sweep đồng bộ 4 list.
     // 2026-09-24: +opus-5-5 — sweep đồng bộ 4 list.
+    // 2026-09-29: +sonnet-5-5 — sweep đồng bộ 4 list.
     'claude-opus-5-5',
     'claude-opus-4-8',
     'claude-opus-5',
     'claude-opus-4-7',
+    'claude-sonnet-5-5',
     'claude-sonnet-4-6',
     'claude-opus-4-6',
     'claude-haiku-4-5-20251001',
