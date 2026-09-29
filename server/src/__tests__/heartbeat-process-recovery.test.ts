@@ -247,6 +247,34 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(runs[0]?.status).toBe("failed");
   });
 
+  it("does not retry after detach → activity clears warning → child exits (lifecycle)", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+    const { agentId, runId } = await seedRunFixture({
+      adapterType: "antigravity_local",
+      processPid: child.pid ?? null,
+      includeIssue: false,
+    });
+    const heartbeat = heartbeatService(db);
+
+    await heartbeat.reapOrphanedRuns();
+    expect((await heartbeat.getRun(runId))?.errorCode).toBe("process_detached");
+
+    await heartbeat.reportRunActivity(runId);
+    expect((await heartbeat.getRun(runId))?.errorCode).toBeNull();
+
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGKILL");
+    await exited;
+    childProcesses.delete(child);
+
+    const result = await heartbeat.reapOrphanedRuns();
+    expect(result.reaped).toBe(1);
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+  });
+
   it("does not queue a second retry after the first process-loss retry was already used", async () => {
     const { agentId, runId, issueId } = await seedRunFixture({
       processPid: 999_999_999,

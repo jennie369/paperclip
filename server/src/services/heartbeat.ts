@@ -70,6 +70,9 @@ const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
+// Tiền tố message event lifecycle khi run bị detached — dấu vết BỀN (event không bị xoá khi
+// clearDetachedRunWarning dọn errorCode), reaper dựa vào đây để không retry lượt từng detached.
+const DETACHED_EVENT_MESSAGE_PREFIX = "Lost in-memory process handle";
 const startLocksByAgent = new Map<string, Promise<void>>();
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -2172,7 +2175,7 @@ export function heartbeatService(db: Db) {
 
       if (tracksLocalChild && run.processPid && isProcessAlive(run.processPid)) {
         if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
-          const detachedMessage = `Lost in-memory process handle, but child pid ${run.processPid} is still alive`;
+          const detachedMessage = `${DETACHED_EVENT_MESSAGE_PREFIX}, but child pid ${run.processPid} is still alive`;
           const detachedRun = await setRunStatus(run.id, "running", {
             error: detachedMessage,
             errorCode: DETACHED_PROCESS_ERROR_CODE,
@@ -2199,6 +2202,24 @@ export function heartbeatService(db: Db) {
         !!run.processPid &&
         (run.processLossRetryCount ?? 0) < 1 &&
         run.errorCode !== DETACHED_PROCESS_ERROR_CODE;
+
+      // errorCode có thể đã bị clearDetachedRunWarning dọn khi tiến trình báo hoạt động lại →
+      // tra event lifecycle bền để biết run này từng detached (Codex R2).
+      if (shouldRetry) {
+        const everDetached = await db
+          .select({ id: heartbeatRunEvents.id })
+          .from(heartbeatRunEvents)
+          .where(
+            and(
+              eq(heartbeatRunEvents.runId, run.id),
+              eq(heartbeatRunEvents.eventType, "lifecycle"),
+              sql`${heartbeatRunEvents.message} like ${DETACHED_EVENT_MESSAGE_PREFIX + "%"}`,
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows.length > 0);
+        if (everDetached) shouldRetry = false;
+      }
 
       // Skip retry if the assigned issue is already done/cancelled — work was committed before the crash
       if (shouldRetry) {
