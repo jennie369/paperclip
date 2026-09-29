@@ -2176,10 +2176,18 @@ export function heartbeatService(db: Db) {
       if (tracksLocalChild && run.processPid && isProcessAlive(run.processPid)) {
         if (run.errorCode !== DETACHED_PROCESS_ERROR_CODE) {
           const detachedMessage = `${DETACHED_EVENT_MESSAGE_PREFIX}, but child pid ${run.processPid} is still alive`;
-          const detachedRun = await setRunStatus(run.id, "running", {
-            error: detachedMessage,
-            errorCode: DETACHED_PROCESS_ERROR_CODE,
-          });
+          // Dấu vết BỀN ghi CÙNG lệnh UPDATE (atomic) vào contextSnapshot — clearDetachedRunWarning
+          // không đụng field này; CAS status='running' để không hồi sinh run reaper khác vừa fail.
+          const detachedRun = await setRunStatus(
+            run.id,
+            "running",
+            {
+              error: detachedMessage,
+              errorCode: DETACHED_PROCESS_ERROR_CODE,
+              contextSnapshot: sql`coalesce(${heartbeatRuns.contextSnapshot}, '{}'::jsonb) || jsonb_build_object('processDetachedAt', ${now.toISOString()}::text)` as unknown as Record<string, unknown>,
+            },
+            { expectedStatus: "running" },
+          );
           if (detachedRun) {
             await appendRunEvent(detachedRun, await nextRunEventSeq(detachedRun.id), {
               eventType: "lifecycle",
@@ -2205,6 +2213,10 @@ export function heartbeatService(db: Db) {
 
       // errorCode có thể đã bị clearDetachedRunWarning dọn khi tiến trình báo hoạt động lại →
       // tra event lifecycle bền để biết run này từng detached (Codex R2).
+      if (shouldRetry && readNonEmptyString(parseObject(run.contextSnapshot).processDetachedAt)) {
+        shouldRetry = false;
+      }
+      // Run detached trước bản vá này chỉ có event lifecycle (chưa có processDetachedAt).
       if (shouldRetry) {
         const everDetached = await db
           .select({ id: heartbeatRunEvents.id })
@@ -2253,6 +2265,12 @@ export function heartbeatService(db: Db) {
         { expectedStatus: "running" },
       );
       if (!finalizedRun) continue;
+      // Quyết lại trên dòng RETURNING (đã khoá khi UPDATE): reaper khác có thể vừa đánh dấu
+      // detached giữa lúc mình snapshot và lúc mình chiếm → không retry, sửa lại message.
+      if (shouldRetry && readNonEmptyString(parseObject(finalizedRun.contextSnapshot).processDetachedAt)) {
+        shouldRetry = false;
+        finalizedRun = (await setRunStatus(run.id, "failed", { error: baseMessage })) ?? finalizedRun;
+      }
       await setWakeupStatus(run.wakeupRequestId, "failed", {
         finishedAt: now,
         error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,

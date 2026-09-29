@@ -73,6 +73,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     includeIssue?: boolean;
     runErrorCode?: string | null;
     runError?: string | null;
+    contextExtra?: Record<string, unknown>;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -122,7 +123,10 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       triggerDetail: "system",
       status: input?.runStatus ?? "running",
       wakeupRequestId,
-      contextSnapshot: input?.includeIssue === false ? {} : { issueId },
+      contextSnapshot: {
+        ...(input?.includeIssue === false ? {} : { issueId }),
+        ...(input?.contextExtra ?? {}),
+      },
       processPid: input?.processPid ?? null,
       processLossRetryCount: input?.processLossRetryCount ?? 0,
       errorCode: input?.runErrorCode ?? null,
@@ -273,6 +277,20 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
     expect(runs).toHaveLength(1);
     expect(runs[0]?.status).toBe("failed");
+  });
+
+  it("does not retry when only the atomic processDetachedAt marker survives (event insert lost)", async () => {
+    const { agentId } = await seedRunFixture({
+      adapterType: "antigravity_local",
+      processPid: 999_999_999,
+      contextExtra: { processDetachedAt: "2026-09-29T02:14:00.000Z" },
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reapOrphanedRuns();
+    expect(result.reaped).toBe(1);
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(1);
   });
 
   it("does not queue a second retry after the first process-loss retry was already used", async () => {
