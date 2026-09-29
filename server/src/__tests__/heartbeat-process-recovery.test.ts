@@ -231,6 +231,22 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(retryRun?.retryOfRunId).toBe(runId);
   });
 
+  it("does not retry a run that was previously detached (may have finished external work)", async () => {
+    const { agentId } = await seedRunFixture({
+      adapterType: "antigravity_local",
+      processPid: 999_999_999,
+      runErrorCode: "process_detached",
+      runError: "Lost in-memory process handle, but child pid 999999999 is still alive",
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reapOrphanedRuns();
+    expect(result.reaped).toBe(1);
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+  });
+
   it("does not queue a second retry after the first process-loss retry was already used", async () => {
     const { agentId, runId, issueId } = await seedRunFixture({
       processPid: 999_999_999,

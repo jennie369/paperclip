@@ -1621,11 +1621,16 @@ export function heartbeatService(db: Db) {
     runId: string,
     status: string,
     patch?: Partial<typeof heartbeatRuns.$inferInsert>,
+    opts?: { expectedStatus?: string },
   ) {
     const updated = await db
       .update(heartbeatRuns)
       .set({ status, ...patch, updatedAt: new Date() })
-      .where(eq(heartbeatRuns.id, runId))
+      .where(
+        opts?.expectedStatus
+          ? and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, opts.expectedStatus))
+          : eq(heartbeatRuns.id, runId),
+      )
       .returning()
       .then((rows) => rows[0] ?? null);
 
@@ -2187,7 +2192,13 @@ export function heartbeatService(db: Db) {
         continue;
       }
 
-      let shouldRetry = tracksLocalChild && !!run.processPid && (run.processLossRetryCount ?? 0) < 1;
+      // Không retry lượt đã từng `process_detached`: tiến trình sống qua restart rồi tự exit ⇒ có
+      // thể đã làm xong việc ra ngoài (đăng bài...) mà server không thấy → chạy lại = đăng đôi.
+      let shouldRetry =
+        tracksLocalChild &&
+        !!run.processPid &&
+        (run.processLossRetryCount ?? 0) < 1 &&
+        run.errorCode !== DETACHED_PROCESS_ERROR_CODE;
 
       // Skip retry if the assigned issue is already done/cancelled — work was committed before the crash
       if (shouldRetry) {
@@ -2208,11 +2219,19 @@ export function heartbeatService(db: Db) {
         ? `Process lost -- child pid ${run.processPid} is no longer running`
         : "Process lost -- server may have restarted";
 
-      let finalizedRun = await setRunStatus(run.id, "failed", {
-        error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
-        errorCode: "process_lost",
-        finishedAt: now,
-      });
+      // Chiếm dòng có điều kiện status='running' → 2 reaper chạy song song chỉ 1 bên thắng,
+      // bên thua bỏ qua (không enqueue retry đôi).
+      let finalizedRun = await setRunStatus(
+        run.id,
+        "failed",
+        {
+          error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
+          errorCode: "process_lost",
+          finishedAt: now,
+        },
+        { expectedStatus: "running" },
+      );
+      if (!finalizedRun) continue;
       await setWakeupStatus(run.wakeupRequestId, "failed", {
         finishedAt: now,
         error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
