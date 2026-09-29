@@ -89,6 +89,11 @@ export default function MediaGalleryGrid({
     setDragOverIndex(index);
   };
 
+  const handleDragLeave = (e) => {
+    e.stopPropagation();
+    setDragOverIndex(null);
+  };
+
   const handleDrop = (e, dropIndex) => {
     e.preventDefault();
     e.stopPropagation();

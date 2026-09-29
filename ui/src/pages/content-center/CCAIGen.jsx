@@ -5663,7 +5663,6 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
                                       stepId={slot.stepId}
                                       stepLabel={`Email ${idx + 1}/${activeOnbDoc.emailCount}`}
                                       defaultFrom={emailSender}
-                                      track={aiTrack}
                                       htmlBody={slot.htmlBody || ''}
                                       htmlSubject={slot.htmlSubject || ''}
                                       htmlPreview={slot.htmlPreview || ''}
