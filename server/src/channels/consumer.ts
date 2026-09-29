@@ -1001,6 +1001,29 @@ async function processResolved(
         console.log(`${logPrefix} Agent produced empty reply — staying silent (no fallback), left in inbox`);
         await markBatch('agent', 'skipped', 'agent_silent');
         if (customerId && merged.peerKind !== 'group') aiSummarizer.scheduleSummary(sessionKey, customerId);
+        // GEM-1037: "để lại inbox cho người" chỉ đúng khi CÓ người biết mà vào. Trước đây rỗng = câm
+        // hoàn toàn (khách Zalo Hồ Thị Mỹ Huệ bị bỏ rơi 28→29/09, 3 tin, ~20h không ai hay).
+        // Chỉ DM khách thật (group/comment không có người đang chờ trả lời). noPause: sự cố hạ tầng,
+        // không khoá phiên (tin sau của khách vẫn được bot thử lại). Ticket dedup + ping phanh 30'/session.
+        if (merged.peerKind !== 'group' && merged.peerKind !== 'comment') {
+          handleEscalation({
+            agentSlug,
+            sessionKey,
+            channelName: merged.channel,
+            chatId: merged.chatId,
+            customerId: customerId || null,
+            customerName: ((merged as any)._customerContext?.name as string) || merged.senderName || null,
+            reason: 'agent_silent',
+            priority: 'high',
+            summary: `Agent ${agentSlug} trả lời RỖNG (provider timeout/lỗi) — khách chưa nhận được phản hồi nào. Vào Hộp thư trả lời tay.`,
+            triggerMessage: merged.content,
+            agentReply: '(agent trả rỗng — KHÔNG có gì được gửi cho khách)',
+            noPause: true,
+            statusLine: 'Bot KHÔNG bị tắt (tin kế tiếp của khách sẽ được bot thử lại). Cần người trả lời tay tin này.',
+          }).catch((err) => {
+            console.error(`${logPrefix} agent_silent alert unexpected throw: ${err.message}`);
+          });
+        }
         return;
       }
 

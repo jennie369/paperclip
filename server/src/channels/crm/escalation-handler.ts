@@ -45,6 +45,14 @@ export interface EscalationContext {
    * serve the customer via the Gemini fallback for a bounded window.
    */
   pausePatch?: Record<string, unknown>;
+  /**
+   * Cảnh báo-không-khoá (GEM-1037): bỏ Step 1 (không pause bot, không containment).
+   * Dùng khi sự cố là HẠ TẦNG (agent trả rỗng / provider timeout), KHÔNG phải khách bức xúc —
+   * khoá phiên sẽ làm tin kế tiếp của khách cũng không ai trả lời. Vẫn ghi ticket + ping.
+   */
+  noPause?: boolean;
+  /** Ghi đè câu trạng thái cuối tin Telegram (mặc định suy từ kết quả pause). */
+  statusLine?: string;
 }
 
 export interface EscalationResult {
@@ -76,7 +84,7 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
   // didPause / botCurrentlyPaused feed the ping message variant (Step 3).
   let didPause = false;
   let botCurrentlyPaused = false;
-  if (!isTraining) {
+  if (!isTraining && !ctx.noPause) {
     if (ctx.pausePatch) {
       // Gem-Master (hoặc caller tùy biến): containment HẸN GIỜ qua merge_meta (agy_disabled_until…).
       // KHÁC bot_paused — engine gem-master (gemini-proxy) đọc agy_disabled_until riêng. KHÔNG route
@@ -230,7 +238,9 @@ export async function handleEscalation(ctx: EscalationContext): Promise<Escalati
   }
 
   // Câu trạng thái phản ánh THẬT (C2/G5): KHÔNG nói "bot vẫn chạy" khi bot đang tắt.
-  const statusLine = ctx.pausePatch
+  const statusLine = ctx.statusLine
+    ? ctx.statusLine
+    : ctx.pausePatch
     ? 'Đã tạm khoá phiên (containment). Cần xử lý tay.'
     : didPause
       ? 'Bot đã dừng cho session này. Cần xử lý tay.'
