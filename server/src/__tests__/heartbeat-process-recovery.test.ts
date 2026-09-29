@@ -209,6 +209,28 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(issue?.checkoutRunId).toBe(runId);
   });
 
+  // 2026-09-29: antigravity_local thiếu khỏi SESSIONED_LOCAL_ADAPTERS → lượt agy mất tiến trình
+  // khi server restart KHÔNG được retry (7 agent content lỡ slot sáng 29/09).
+  it("queues one retry for antigravity_local when the recorded pid is dead", async () => {
+    const { agentId, runId } = await seedRunFixture({
+      adapterType: "antigravity_local",
+      processPid: 999_999_999,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reapOrphanedRuns();
+    expect(result.reaped).toBe(1);
+
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(2);
+    const retryRun = runs.find((row) => row.id !== runId);
+    expect(retryRun?.status).toBe("queued");
+    expect(retryRun?.retryOfRunId).toBe(runId);
+  });
+
   it("does not queue a second retry after the first process-loss retry was already used", async () => {
     const { agentId, runId, issueId } = await seedRunFixture({
       processPid: 999_999_999,
@@ -233,7 +255,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(issues.id, issueId))
       .then((rows) => rows[0] ?? null);
     expect(issue?.executionRunId).toBeNull();
-    expect(issue?.checkoutRunId).toBe(runId);
+    // GEM-317 (4412f06ff): run kết thúc thì release xoá luôn checkoutRunId.
+    expect(issue?.checkoutRunId).toBeNull();
   });
 
   it("reaps a run when the runningProcesses Map entry is stale and the recorded pid is dead", async () => {

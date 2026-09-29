@@ -75,6 +75,9 @@ const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const execFile = promisify(execFileCallback);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
+  // antigravity_local cũng spawn child local có pid → phải được reap/retry như các adapter dưới
+  // (thiếu = lượt agy mất tiến trình khi server restart không bao giờ retry, 29/09).
+  "antigravity_local",
   "claude_local",
   "codex_local",
   "cursor",
