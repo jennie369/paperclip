@@ -1788,6 +1788,25 @@ export function agentRoutes(db: Db) {
       }
     }
 
+    // GEM-1048: runtimeConfig PATCH = MERGE (top-level + heartbeat), like adapterConfig.
+    // Replacing wholesale let a partial `{heartbeat:{cronExpression}}` drop `enabled`,
+    // and tickTimers skips agents without `enabled` → agent silently stops waking.
+    // The UI already sends a fully merged object, so this is a no-op for it.
+    if (incomingRuntimeConfig) {
+      const existingRuntimeConfig = asRecord(existing.runtimeConfig) ?? {};
+      const mergedRuntimeConfig: Record<string, unknown> = {
+        ...existingRuntimeConfig,
+        ...incomingRuntimeConfig,
+      };
+      if (incomingHeartbeat) {
+        mergedRuntimeConfig.heartbeat = {
+          ...(asRecord(existingRuntimeConfig.heartbeat) ?? {}),
+          ...incomingHeartbeat,
+        };
+      }
+      patchData.runtimeConfig = mergedRuntimeConfig;
+    }
+
     if (Object.prototype.hasOwnProperty.call(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {
