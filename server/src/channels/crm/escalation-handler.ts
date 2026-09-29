@@ -408,14 +408,23 @@ async function pingTelegramBoard(args: TelegramPingArgs): Promise<boolean> {
     parse_mode: 'Markdown',
   };
 
-  const res = await fetch(url, {
+  const post = (payload: Record<string, unknown>) => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 
+  let res = await post(body);
   if (!res.ok) {
     const errBody = await res.text();
+    // Nội dung khách (URL có `_`, `[Hình ảnh…]`) làm Markdown legacy vỡ → Telegram 400 "can't parse
+    // entities" → cảnh báo mất câm đúng lúc khách gửi ảnh. Gửi lại dạng text thuần thay vì nuốt.
+    if (res.status === 400 && /parse entities/i.test(errBody)) {
+      const { parse_mode: _drop, ...plain } = body;
+      res = await post(plain);
+      if (res.ok) return true;
+      throw new Error(`Telegram API ${res.status} (plain retry): ${(await res.text()).substring(0, 200)}`);
+    }
     throw new Error(`Telegram API ${res.status}: ${errBody.substring(0, 200)}`);
   }
   return true;

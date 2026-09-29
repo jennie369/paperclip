@@ -84,6 +84,26 @@ describe("handleEscalation noPause (agent_silent alert)", () => {
     expect(sentText).toContain("Bot KHÔNG bị tắt (test)");
   });
 
+  it("Telegram 400 'can't parse entities' (URL có _) → gửi lại text thuần, KHÔNG mất cảnh báo", async () => {
+    const bodies: any[] = [];
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      const b = JSON.parse(init.body);
+      bodies.push(b);
+      return b.parse_mode
+        ? ({ ok: false, status: 400, text: async () => "Bad Request: can't parse entities" } as any)
+        : ({ ok: true, status: 200, text: async () => "" } as any);
+    }) as any;
+    await handleEscalation({
+      ...baseCtx,
+      noPause: true,
+      triggerMessage: "[Hình ảnh khách gửi: https://x.co/a_b_c.jpg",
+    });
+    expect(bodies.length).toBe(2);
+    expect(bodies[0].parse_mode).toBe("Markdown");
+    expect(bodies[1].parse_mode).toBeUndefined();
+    expect(bodies[1].text).toContain("a_b_c.jpg");
+  });
+
   it("mặc định (không noPause): vẫn pause qua cskh_toggle_bot — hành vi cũ không đổi", async () => {
     await handleEscalation({ ...baseCtx, reason: "customer_hostile" });
     expect(rpcCalls).toContain("cskh_toggle_bot");
