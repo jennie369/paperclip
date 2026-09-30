@@ -49,6 +49,7 @@ import kbRoutes from "./channels/crm/knowledge-base/kb-routes.js";
 import trackingRoutes from "./channels/crm/tracking/tracking-routes.js";
 import conversationRoutes from "./channels/conversation-routes.js";
 import opsRoutes from "./channels/ops-routes.js";
+import ccDbProxy from "./channels/cc-db-proxy.js";
 import sopEngineRoutes from "./channels/sop-engine-routes.js";
 import cronRegistryRoutes from "./channels/cron-registry-routes.js";
 import registryMarketplaceRoutes from "./channels/registry-marketplace-routes.js";
@@ -272,6 +273,7 @@ export async function createApp(
   api.use("/channels/crm/kb", kbRoutes);
   api.use("/channels/tracking", trackingRoutes);
   api.use("/channels/conversations", conversationRoutes);
+  api.use("/cc-db", ccDbProxy); // GEM-1069: đường service_role cho cc_email_sends/cc_generation_jobs (thay policy anon)
   api.use("/ops", opsRoutes);
   api.use("/ops/sop-engine", sopEngineRoutes);
   api.use("/registry/crons", cronRegistryRoutes);

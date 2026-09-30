@@ -18,4 +18,17 @@ if (!supabaseUrl || !supabaseKey) {
   console.warn("[supabaseClient] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+// GEM-1069: 2 bảng PII/tốn tiền KHÔNG còn policy anon → REST của chúng đi qua server Paperclip
+// (service_role, server/src/channels/cc-db-proxy.ts). Consumer `supabase.from('cc_email_sends')…` giữ nguyên.
+const CC_PROXIED_TABLES = new Set(["cc_email_sends", "cc_generation_jobs"]);
+const REST_PREFIX = `${supabaseUrl}/rest/v1/`;
+const proxiedFetch: typeof fetch = (input, init) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (!url.startsWith(REST_PREFIX)) return fetch(input, init);
+  const rest = url.slice(REST_PREFIX.length); // "<bảng>?query" — query PostgREST giữ nguyên
+  if (!CC_PROXIED_TABLES.has(rest.split("?")[0])) return fetch(input, init);
+  const target = `/api/cc-db/rest/v1/${rest}`;
+  return fetch(typeof input === "string" || input instanceof URL ? target : new Request(target, input), init);
+};
+
+export const supabase = createClient(supabaseUrl, supabaseKey, { global: { fetch: proxiedFetch } });
