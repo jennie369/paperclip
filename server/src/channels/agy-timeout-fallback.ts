@@ -53,18 +53,99 @@ export function resolveAgyFallback(env: NodeJS.ProcessEnv = process.env): Timeou
 }
 
 /**
+ * Circuit-breaker theo provider (GEM-1068, ENG-0930-F1050-02): fallback 1 lần chỉ cứu khách khỏi bị bỏ rơi,
+ * KHÔNG giảm độ trễ — khi agy đang 429/chậm mỗi tin vẫn chờ đủ 5' rồi mới sang claude. Sau `threshold` lần
+ * timeout LIÊN TIẾP thì "mở mạch": `cooldownMs` tới bỏ qua primary, chạy fallback ngay. Hết cooldown → half-open,
+ * cho ĐÚNG 1 lượt thử primary (single-flight, các lượt khác vẫn đi fallback); thành công → đóng, timeout → mở lại.
+ * Chỉ đếm ProviderTimeoutError (abort do khách nhắn mới / exit≠0 không phải dấu hiệu provider chậm).
+ */
+export class TimeoutCircuitBreaker {
+  private consecutive = 0;
+  private openUntil = 0;
+  private probing = false;
+  constructor(
+    private readonly threshold: number,
+    private readonly cooldownMs: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** true = chạy primary; false = mạch đang mở → đi thẳng fallback. */
+  allowPrimary(): boolean {
+    if (this.threshold <= 0 || this.consecutive < this.threshold) return true;
+    if (this.now() < this.openUntil) return false;
+    if (this.probing) return false;
+    this.probing = true;
+    return true;
+  }
+  recordSuccess(): void {
+    this.consecutive = 0;
+    this.openUntil = 0;
+    this.probing = false;
+  }
+  recordTimeout(): void {
+    this.consecutive += 1;
+    this.probing = false;
+    if (this.threshold > 0 && this.consecutive >= this.threshold) this.openUntil = this.now() + this.cooldownMs;
+  }
+  /** Lượt thử half-open kết thúc bằng lỗi KHÔNG phải timeout → nhả cờ để lượt sau thử lại (không kẹt probing). */
+  releaseProbe(): void {
+    this.probing = false;
+  }
+  get isOpen(): boolean {
+    return this.threshold > 0 && this.consecutive >= this.threshold;
+  }
+}
+
+const breakers = new Map<string, TimeoutCircuitBreaker>();
+
+/** `<AGY|CLAUDE|GEMINI>_BREAKER_THRESHOLD` (mặc định 2, 0 = tắt) · `<…>_BREAKER_COOLDOWN_MS` (mặc định 600000 = 10'). */
+export function getTimeoutBreaker(primary: string, env: NodeJS.ProcessEnv = process.env): TimeoutCircuitBreaker | null {
+  const entry = (FALLBACK_MAP as Record<string, (typeof FALLBACK_MAP)[keyof typeof FALLBACK_MAP]>)[primary];
+  if (!entry) return null;
+  let b = breakers.get(primary);
+  if (!b) {
+    const thr = Number.parseInt(env[`${entry.envPrefix}_BREAKER_THRESHOLD`] ?? '', 10);
+    const cd = Number.parseInt(env[`${entry.envPrefix}_BREAKER_COOLDOWN_MS`] ?? '', 10);
+    b = new TimeoutCircuitBreaker(Number.isFinite(thr) && thr >= 0 ? thr : 2, Number.isFinite(cd) && cd > 0 ? cd : 600_000);
+    breakers.set(primary, b);
+  }
+  return b;
+}
+
+/** Chỉ cho test: xoá trạng thái breaker toàn cục. */
+export function resetTimeoutBreakers(): void {
+  breakers.clear();
+}
+
+/**
  * Chạy `primary`; nếu nó timeout (ProviderTimeoutError) và có `fallback` → chạy `fallback` ĐÚNG 1 lần.
  * Lỗi của fallback được ném nguyên (caller quyết định im lặng) — KHÔNG lặp thêm.
+ * Có `breaker` + `fallback`: mạch mở ⇒ bỏ qua primary (`onSkip`), chạy fallback luôn.
  */
 export async function runWithTimeoutFallback<T>(
   primary: () => Promise<T>,
   fallback: (() => Promise<T>) | null,
   onFallback?: (err: ProviderTimeoutError) => void,
+  breaker?: TimeoutCircuitBreaker | null,
+  onSkip?: () => void,
 ): Promise<T> {
+  // Không có fallback ⇒ breaker vô nghĩa (không có chỗ để chuyển) → hành vi cũ.
+  const cb = fallback ? breaker ?? null : null;
+  if (cb && !cb.allowPrimary()) {
+    onSkip?.();
+    return fallback!();
+  }
   try {
-    return await primary();
+    const out = await primary();
+    cb?.recordSuccess();
+    return out;
   } catch (err) {
-    if (!(err instanceof ProviderTimeoutError) || !fallback) throw err;
+    if (!(err instanceof ProviderTimeoutError)) {
+      cb?.releaseProbe();
+      throw err;
+    }
+    cb?.recordTimeout();
+    if (!fallback) throw err;
     onFallback?.(err);
     return fallback();
   }

@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ProviderTimeoutError,
+  TimeoutCircuitBreaker,
+  getTimeoutBreaker,
+  resetTimeoutBreakers,
   resolveAgyFallback,
   resolveTimeoutFallback,
   runWithTimeoutFallback,
@@ -113,5 +116,102 @@ describe('router wiring (guard chống revert)', () => {
   });
   it('không còn Error trần "CLI timed out" trong router.ts', () => {
     expect(src).not.toMatch(/new Error\(`(Claude|Gemini|Antigravity) CLI timed out/);
+  });
+});
+
+describe('TimeoutCircuitBreaker (GEM-1068: agy chậm/429 → khỏi chờ 5 phút mỗi tin)', () => {
+  const mk = (thr = 2, cd = 1000) => {
+    let t = 0;
+    const b = new TimeoutCircuitBreaker(thr, cd, () => t);
+    return { b, advance: (ms: number) => { t += ms; } };
+  };
+  const slow = () => Promise.reject(timeout());
+
+  it('dưới ngưỡng: vẫn chạy primary rồi fallback (hành vi GEM-1050); đủ ngưỡng: lượt kế bỏ qua primary', async () => {
+    const { b } = mk(2);
+    const fb = vi.fn().mockResolvedValue('claude reply');
+    const primary = vi.fn().mockImplementation(slow);
+    const onSkip = vi.fn();
+    await runWithTimeoutFallback(primary, fb, undefined, b, onSkip); // timeout #1
+    expect(b.isOpen).toBe(false);
+    await runWithTimeoutFallback(primary, fb, undefined, b, onSkip); // timeout #2 → mở
+    expect(b.isOpen).toBe(true);
+    expect(primary).toHaveBeenCalledTimes(2);
+    await expect(runWithTimeoutFallback(primary, fb, undefined, b, onSkip)).resolves.toBe('claude reply');
+    expect(primary).toHaveBeenCalledTimes(2); // KHÔNG chờ primary nữa
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(fb).toHaveBeenCalledTimes(3);
+  });
+
+  it('hết cooldown → half-open: đúng 1 lượt thử primary, lượt đồng thời khác vẫn đi fallback', async () => {
+    const { b, advance } = mk(1, 1000);
+    const fb = vi.fn().mockResolvedValue('fb');
+    await runWithTimeoutFallback(slow, fb, undefined, b); // mở
+    advance(1001);
+    let release!: (v: string) => void;
+    const probe = vi.fn().mockImplementation(() => new Promise<string>((r) => { release = r; }));
+    const p1 = runWithTimeoutFallback(probe, fb, undefined, b); // lượt thử
+    const p2 = runWithTimeoutFallback(probe, fb, undefined, b); // lượt song song
+    await expect(p2).resolves.toBe('fb');
+    expect(probe).toHaveBeenCalledTimes(1);
+    release('agy ok');
+    await expect(p1).resolves.toBe('agy ok');
+    expect(b.isOpen).toBe(false); // thành công → đóng mạch
+  });
+
+  it('lượt thử half-open lại timeout → mở lại cooldown mới', async () => {
+    const { b, advance } = mk(1, 1000);
+    const fb = vi.fn().mockResolvedValue('fb');
+    await runWithTimeoutFallback(slow, fb, undefined, b);
+    advance(1001);
+    await runWithTimeoutFallback(slow, fb, undefined, b); // probe timeout
+    const primary = vi.fn().mockResolvedValue('x');
+    await runWithTimeoutFallback(primary, fb, undefined, b);
+    expect(primary).not.toHaveBeenCalled(); // vẫn mở
+  });
+
+  it('lỗi KHÔNG phải timeout không tính vào ngưỡng và nhả cờ probe (không kẹt half-open)', async () => {
+    const { b, advance } = mk(1, 1000);
+    const fb = vi.fn().mockResolvedValue('fb');
+    await runWithTimeoutFallback(slow, fb, undefined, b);
+    advance(1001);
+    await expect(runWithTimeoutFallback(() => Promise.reject(new Error('aborted')), fb, undefined, b)).rejects.toThrow('aborted');
+    const primary = vi.fn().mockResolvedValue('ok');
+    await expect(runWithTimeoutFallback(primary, fb, undefined, b)).resolves.toBe('ok'); // được thử lại
+    expect(primary).toHaveBeenCalledTimes(1);
+  });
+
+  it('thành công xen kẽ reset đếm liên tiếp; threshold 0 = tắt; không có fallback = bỏ qua breaker', async () => {
+    const { b } = mk(2);
+    const fb = vi.fn().mockResolvedValue('fb');
+    await runWithTimeoutFallback(slow, fb, undefined, b);
+    await runWithTimeoutFallback(async () => 'ok', fb, undefined, b);
+    await runWithTimeoutFallback(slow, fb, undefined, b);
+    expect(b.isOpen).toBe(false);
+    const off = new TimeoutCircuitBreaker(0, 1000);
+    for (let i = 0; i < 5; i++) await runWithTimeoutFallback(slow, fb, undefined, off);
+    expect(off.allowPrimary()).toBe(true);
+    const err = timeout();
+    const open = new TimeoutCircuitBreaker(1, 1000);
+    open.recordTimeout();
+    await expect(runWithTimeoutFallback(() => Promise.reject(err), null, undefined, open)).rejects.toBe(err);
+  });
+
+  it('getTimeoutBreaker: per-provider, đọc env, provider API → null', () => {
+    resetTimeoutBreakers();
+    const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
+    expect(getTimeoutBreaker('openrouter', env({}))).toBeNull();
+    const a = getTimeoutBreaker('antigravity', env({ AGY_BREAKER_THRESHOLD: '1', AGY_BREAKER_COOLDOWN_MS: '50' }))!;
+    expect(getTimeoutBreaker('antigravity', env({}))).toBe(a); // cache
+    expect(getTimeoutBreaker('claude', env({}))).not.toBe(a);
+    a.recordTimeout();
+    expect(a.isOpen).toBe(true);
+    resetTimeoutBreakers();
+  });
+
+  it('router.ts truyền breaker vào runWithTimeoutFallback (guard chống revert)', () => {
+    const src = readFileSync(fileURLToPath(new URL('../channels/router.ts', import.meta.url)), 'utf-8');
+    const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
+    expect(helper).toContain('getTimeoutBreaker(config.provider)');
   });
 });

@@ -36,7 +36,7 @@ import { renderHistoryForPrompt, stripInjectedContext } from './session-history-
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
 import { selectInlineJson } from './inline-ssot-select.js';
-import { ProviderTimeoutError, resolveTimeoutFallback, runWithTimeoutFallback } from './agy-timeout-fallback.js';
+import { ProviderTimeoutError, getTimeoutBreaker, resolveTimeoutFallback, runWithTimeoutFallback } from './agy-timeout-fallback.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -382,6 +382,9 @@ export async function runAgentWithConfig(
           }
         : null,
       () => console.warn(`[Router/${config.provider}] ${config.slug}: CLI timeout → fallback ${fb?.provider} (${fb?.model}) 1 lần`),
+      // Circuit-breaker (GEM-1068): provider timeout liên tiếp → bỏ qua primary một lúc, khách khỏi chờ 5' mỗi tin.
+      getTimeoutBreaker(config.provider),
+      () => console.warn(`[Router/${config.provider}] ${config.slug}: circuit-breaker MỞ → bỏ qua ${config.provider}, chạy thẳng ${fb?.provider}`),
     );
   };
 
