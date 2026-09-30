@@ -36,6 +36,7 @@ import { renderHistoryForPrompt, stripInjectedContext } from './session-history-
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
 import { selectInlineJson } from './inline-ssot-select.js';
+import { ProviderTimeoutError, resolveAgyFallback, runWithTimeoutFallback } from './agy-timeout-fallback.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -364,8 +365,24 @@ export async function runAgentWithConfig(
         return runViaClaude(config, systemPrompt, chatHistory, msg, sessionKey, signal);
       case 'gemini':
         return runViaGemini(config, systemPrompt, chatHistory, msg, sessionKey, signal);
-      case 'antigravity':
-        return runViaAntigravity(config, systemPrompt, chatHistory, msg, sessionKey, signal);
+      case 'antigravity': {
+        // agy quá 5' → đổi sang claude 1 lần thay vì trả '' (khách bị bỏ rơi câm — GEM-1050).
+        const fb = resolveAgyFallback();
+        return runWithTimeoutFallback(
+          () => runViaAntigravity(config, systemPrompt, chatHistory, msg, sessionKey, signal),
+          fb
+            ? async () => {
+                // Clone: model của agent agy ('Gemini 3.1 Pro (High)') không chạy được trên claude CLI.
+                const fbConfig = { ...config, provider: fb.provider, model: fb.model } as AgentConfig;
+                const out = await runViaClaude(fbConfig, systemPrompt, chatHistory, msg, sessionKey, signal);
+                // Session drill-down (saveHistory) phải trỏ phiên claude đã thật sự xử lý lượt này.
+                (config as any)._agent_session_id = (fbConfig as any)._agent_session_id;
+                return out;
+              }
+            : null,
+          () => console.warn(`[Router/antigravity] ${config.slug}: agy timeout → fallback ${fb?.provider} (${fb?.model}) 1 lần`),
+        );
+      }
       case 'nvidia_nim':
         return runViaNvidiaNim(config, systemPrompt, chatHistory, msg, signal);
       case 'openrouter':
@@ -1388,9 +1405,11 @@ async function runViaAntigravity(
     });
 
     let stderr = '';
+    let timedOut = false;
     const timeout = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGTERM');
-      reject(new Error(`Antigravity CLI timed out for ${config.slug}`));
+      reject(new ProviderTimeoutError('antigravity', 'Antigravity', config.slug));
     }, AGENT_TIMEOUT_MS);
 
     child.stdout?.setEncoding("utf8");
@@ -1403,6 +1422,12 @@ async function runViaAntigravity(
     child.on('close', async (code) => {
       clearTimeout(timeout);
       try { rmSync(promptFile, { force: true }); } catch {}
+      // Đã reject vì timeout (fallback claude có thể đang chạy) → KHÔNG dò brain/ghi đè
+      // _agent_session_id/emit agent:done bằng fallback_message của agy.
+      if (timedOut) {
+        streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: 'antigravity timeout' });
+        return;
+      }
 
       let reply = '';
       try {
