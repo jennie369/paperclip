@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "../lib/utils";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -993,6 +994,13 @@ export function CompanySkills() {
       });
     },
   });
+
+  // Dirty-guard: chỉ khi đang ở chế độ sửa file skill và nội dung nháp khác bản đã lưu.
+  const isDirty =
+    editMode
+    && activeFile != null
+    && draft !== (activeFile.markdown ? splitFrontmatter(activeFile.content).body : activeFile.content);
+  useUnsavedChangesGuard(isDirty, saveFile.isPending);
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Boxes} message="Select a company to manage skills." />;

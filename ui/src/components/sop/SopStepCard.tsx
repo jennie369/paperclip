@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 /* ─── Types ─── */
 
@@ -298,6 +299,15 @@ export function SopStepCard({
     },
     [isEditing, handleCancelEdit],
   );
+
+  // Dirty-guard: đang sửa bước và có ít nhất 1 trường nháp khác giá trị bước hiện tại.
+  // Không có mutation trong card (onUpdate của cha chạy đồng bộ, lưu xong draft về {}).
+  const isDirty =
+    isEditing
+    && Object.entries(draft).some(
+      ([key, value]) => JSON.stringify(value) !== JSON.stringify(step[key as keyof StepDefinition]),
+    );
+  useUnsavedChangesGuard(isDirty);
 
   return (
     <Card

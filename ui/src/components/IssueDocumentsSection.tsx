@@ -5,6 +5,7 @@ import { useLocation } from "@/lib/router";
 import { ApiError } from "../api/client";
 import { issuesApi } from "../api/issues";
 import { useAutosaveIndicator } from "../hooks/useAutosaveIndicator";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
 import { MarkdownBody } from "./MarkdownBody";
@@ -625,6 +626,15 @@ export function IssueDocumentsSection({
       }
     };
   }, [autosaveState, commitDraft, documentConflict, draft, markDocumentDirty, resetAutosaveState, sortedDocuments]);
+
+  // Dirty-guard: tài liệu mới chưa lưu (autosave bỏ qua bản mới) hoặc tài liệu đang sửa
+  // khác bản đã lưu (gồm cả trường hợp xung đột revision, autosave bị chặn).
+  const isDirty = draft != null && (
+    draft.isNew
+      ? draft.key.trim() !== "" || draft.title.trim() !== "" || draft.body.trim() !== ""
+      : sortedDocuments.some((doc) => documentHasUnsavedChanges(doc, draft))
+  );
+  useUnsavedChangesGuard(isDirty, upsertDocument.isPending);
 
   const documentBodyShellClassName = "mt-3 rounded-md";
   const documentBodyPaddingClassName = "";

@@ -7,6 +7,7 @@ import { X, Search, Plus, Minus, Trash2, Package, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { crmApi } from "@/api/crm";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 interface CustomerInfo {
   id: string;
@@ -137,6 +138,20 @@ export function CreateOrderPanel({
       onClose();
     },
   });
+
+  // Dirty-guard: đơn đang soạn (giỏ hàng, giảm giá, giao hàng, thanh toán, ghi chú khác giá trị ban đầu)
+  // mà chưa tạo thì cảnh báo khi đóng/reload tab. Snapshot giao hàng chụp lúc mount (pre-fill từ CRM).
+  const [initialShipping] = useState(() => ({ name: customer.display_name || "", phone: customer.phone || "" }));
+  const isDirty =
+    cart.length > 0 ||
+    discountPercent !== 0 ||
+    discountCode !== "" ||
+    shippingName !== initialShipping.name ||
+    shippingPhone !== initialShipping.phone ||
+    shippingAddress !== "" ||
+    paymentMethod !== "bank_transfer" ||
+    customerNote !== "";
+  useUnsavedChangesGuard(isDirty, createMut.isPending || createMut.isSuccess);
 
   const handleSubmit = () => {
     if (cart.length === 0) return;

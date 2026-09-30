@@ -55,6 +55,7 @@ const defaultOrderForm = {
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: trang danh sách chỉ có ô tìm kiếm/bộ lọc; modal tạo đơn nhanh chọn sản phẩm từ danh mục cố định kèm tên/SĐT/ghi chú ngắn, nhập lại trong vài giây, không có bản nháp dài
  */
 export function OrderListPage() {
   const [errors, setErrors] = useState({});

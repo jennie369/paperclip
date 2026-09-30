@@ -58,6 +58,7 @@ const defaultNewCustomer = { display_name: '', phone: '', email: '', status: 'le
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: trang danh sách chỉ có ô tìm kiếm/bộ lọc; modal thêm khách hàng chỉ 4 ô ngắn (tên, SĐT, email, trạng thái), nhập lại trong vài giây, không có bản nháp dài để mất
  */
 export function CustomerListPage() {
   const [errors, setErrors] = useState({});

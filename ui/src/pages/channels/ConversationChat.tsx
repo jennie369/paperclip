@@ -32,6 +32,7 @@ function formatDate(ts: string) {
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: khung chat chỉ có 1 ô soạn tin ngắn gửi bằng Enter/nút Gửi (sendMut), tin đã gửi nằm trong lịch sử hội thoại nên không có bản nháp dài để mất
  */
 export function ConversationChat() {
   const [errors, setErrors] = useState({});

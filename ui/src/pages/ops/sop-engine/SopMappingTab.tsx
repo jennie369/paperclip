@@ -226,6 +226,7 @@ const qkSops = (filters: Record<string, string>) => ["sop-engine-sops", filters]
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: mọi ô sửa SOP (tên, mô tả, cron, step, body markdown) tự lưu debounce 500-800ms qua PUT /sops/:id nên không có bản nháp chưa lưu kéo dài; ô tìm kiếm/lọc chỉ là bộ lọc trang
  */
 export function SopMappingTab() {
   const [errors, setErrors] = useState({});

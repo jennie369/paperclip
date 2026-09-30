@@ -41,6 +41,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import {
   Tooltip,
   TooltipTrigger,
@@ -1186,6 +1187,14 @@ function EmailTemplatesTab() {
     setNewTmpl({ key: "", label: "", html: "" });
     setShowCreate(false);
   };
+
+  // Dirty-guard cho khối soạn HTML template email (nội dung tốn công nhất trong Config Hub):
+  // đang sửa HTML khác bản đã lưu, hoặc đang tạo template mới đã nhập dở.
+  // Các khối còn lại (kênh, API key, cấu hình chung...) lưu riêng từng ô/onBlur nên không phủ.
+  const isDirty =
+    (editKey !== null && editContent !== ((config?.[`email_template.${editKey}`] as string) || ""))
+    || (showCreate && (newTmpl.key.trim() !== "" || newTmpl.label.trim() !== "" || newTmpl.html.trim() !== ""));
+  useUnsavedChangesGuard(isDirty, saveConfig.isPending);
 
   type TmplItem = { key: string; label: string; category: string };
   const allTemplates = EMAIL_TEMPLATES as unknown as TmplItem[];

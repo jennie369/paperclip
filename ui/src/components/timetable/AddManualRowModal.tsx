@@ -50,6 +50,7 @@ function datetimeLocalToHCMIso(value: string): string {
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: modal SimpleModal thêm nhanh 1 dòng lịch (giờ, agent, tiêu đề, mô tả ngắn), form tự reset mỗi lần mở lại và nút đóng đã bị chặn khi đang gửi, không có bản nháp dài đáng bảo vệ
  */
 export function AddManualRowModal({
 

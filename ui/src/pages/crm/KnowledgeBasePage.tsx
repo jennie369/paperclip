@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimpleModal } from "./components/SimpleModal";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 const collectionTypes = [
   { value: 'document', label: 'Tài liệu' },
@@ -102,6 +103,13 @@ export function KnowledgeBasePage() {
     },
     onSettled: () => { inv(); setShowAddDoc(null); setDocForm({ title: '', content: '' }); },
   });
+
+  // Dirty-guard: một trong 3 modal (tạo bộ sưu tập / FAQ / tài liệu) đang mở và đã nhập nội dung
+  const isDirty =
+    (showCreate && (colForm.name !== '' || colForm.description !== '' || colForm.collection_type !== 'document')) ||
+    (showFAQ && (faqForm.question !== '' || faqForm.answer !== '' || faqForm.collection_id !== '')) ||
+    (!!showAddDoc && (docForm.title !== '' || docForm.content !== ''));
+  useUnsavedChangesGuard(isDirty, createColMut.isPending || addFAQMut.isPending || addDocMut.isPending);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;

@@ -34,6 +34,7 @@ import { MarkdownEditor, type MarkdownEditorRef } from "../components/MarkdownEd
 import { ScheduleEditor, describeSchedule } from "../components/ScheduleEditor";
 import { RunButton } from "../components/AgentActionButtons";
 import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
@@ -344,6 +345,7 @@ export function RoutineDetail() {
       editDraft.catchUpPolicy !== routineDefaults.catchUpPolicy
     );
   }, [editDraft, routineDefaults]);
+  const isDirty = isEditDirty;
 
   useEffect(() => {
     if (!routine) return;
@@ -414,6 +416,7 @@ export function RoutineDetail() {
       });
     },
   });
+  useUnsavedChangesGuard(isDirty, saveRoutine.isPending);
 
   const runRoutine = useMutation({
     mutationFn: () => routinesApi.run(routineId!),

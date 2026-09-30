@@ -962,6 +962,7 @@ FormField.displayName = "FormField";
  */
 /**
  * @archetype form
+ * @capability-skip dirty-guard: component thuần điều khiển bởi cha (values/onChange qua props, không giữ state nhập liệu, nút Lưu nằm ở màn cha PluginSettings) nên dirty-guard thuộc về màn cha
  */
 export function JsonSchemaForm({
 

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimpleModal } from "./components/SimpleModal";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 function timeAgo(d?: string): string {
   if (!d) return '—';
@@ -81,6 +82,11 @@ export function EmailCampaignsPage() {
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ['crm', 'campaigns'] }),
   });
+
+  // Dirty-guard: modal tạo campaign đang mở và có ô khác giá trị mặc định (tên, tiêu đề, nội dung email...)
+  const isDirty =
+    showCreate && (Object.keys(defaultForm) as (keyof typeof defaultForm)[]).some((k) => form[k] !== defaultForm[k]);
+  useUnsavedChangesGuard(isDirty, createMut.isPending);
 
   const list = campaigns || [];
 

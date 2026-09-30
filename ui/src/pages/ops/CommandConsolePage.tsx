@@ -22,6 +22,7 @@ const HELP_TEXT = `Lenh co san:
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: ô gõ lệnh 1 dòng kiểu terminal, Enter là chạy ngay và xoá ô, không có dữ liệu nháp hay nút Lưu
  */
 export function CommandConsolePage() {
   const [errors, setErrors] = useState({});

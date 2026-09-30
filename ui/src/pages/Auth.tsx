@@ -11,6 +11,7 @@ type AuthMode = "sign_in" | "sign_up";
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: form đăng nhập/đăng ký chỉ 2-3 ô (tên, email, mật khẩu), nhập vài giây và gửi ngay; không có bản nháp dài để mất khi rời trang
  */
 export function AuthPage() {
   const [errors, setErrors] = useState({});

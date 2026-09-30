@@ -40,6 +40,7 @@ import {
   GripVertical,
 } from "lucide-react";
 import { useNavigate, useParams } from "@/lib/router";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +126,21 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error((err as Record<string, string>).error || `Lỗi ${res.status}`);
   }
   return res.json();
+}
+
+// Snapshot ổn định để so sánh dirty: chỉ lấy phần người dùng chỉnh (tên, node id/vị trí/data, đường nối),
+// bỏ field ReactFlow tự thêm (measured, selected, dragging...) để không báo dirty oan.
+function workflowSnapshot(name: string, nodes: Node<WorkflowNodeData>[], edges: Edge[]): string {
+  return JSON.stringify({
+    name,
+    nodes: nodes.map((n) => ({ id: n.id, position: n.position, data: n.data })),
+    edges: edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+    })),
+  });
 }
 
 function loadWorkflow(id: string) {
@@ -340,6 +356,12 @@ function WorkflowBuilderInner() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
+  // Baseline để tính isDirty: workflow mới = tên mặc định + canvas rỗng; workflow cũ = chụp SAU KHI tải xong
+  // (null trong lúc đang tải để màn edit không "dirty" ngay khi vừa mở). Cập nhật lại sau mỗi lần lưu thành công.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(() =>
+    workflowId ? null : workflowSnapshot("Workflow mới", [], []),
+  );
+  const savingSnapshotRef = useRef<string | null>(null);
 
   // ── Load existing workflow ──
   const { isLoading } = useQuery({
@@ -370,18 +392,28 @@ function WorkflowBuilderInner() {
     setNodes(loadQuery.data.nodes.map((n) => ({ ...n, type: "workflow" })));
     setEdges(loadQuery.data.edges);
     setSavedId(loadQuery.data.id);
+    setSavedSnapshot(workflowSnapshot(loadQuery.data.name, loadQuery.data.nodes, loadQuery.data.edges));
   }
+
+  const currentSnapshot = useMemo(
+    () => workflowSnapshot(workflowName, nodes, edges),
+    [workflowName, nodes, edges],
+  );
 
   // ── Save mutation ──
   const saveMutation = useMutation({
-    mutationFn: () =>
-      saveWorkflow({
+    mutationFn: () => {
+      // Chụp đúng trạng thái đang gửi đi: sửa thêm trong lúc chờ phản hồi vẫn được tính là chưa lưu.
+      savingSnapshotRef.current = currentSnapshot;
+      return saveWorkflow({
         id: savedId,
         name: workflowName,
         nodes,
         edges,
-      }),
+      });
+    },
     onSuccess: (data) => {
+      setSavedSnapshot(savingSnapshotRef.current);
       setSavedId(data.id);
       queryClient.invalidateQueries({ queryKey: ["workflows"] });
       if (!workflowId && data.id) {
@@ -389,6 +421,10 @@ function WorkflowBuilderInner() {
       }
     },
   });
+
+  // Dirty-guard: cảnh báo đóng/reload tab khi canvas/tên workflow khác bản đã lưu (tắt khi đang lưu)
+  const isDirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
+  useUnsavedChangesGuard(isDirty, saveMutation.isPending);
 
   // ── Run mutation ──
   const runMutation = useMutation({

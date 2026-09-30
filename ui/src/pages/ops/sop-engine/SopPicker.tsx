@@ -146,6 +146,7 @@ function scoreSop(query: string, s: SopRow): { score: number; hits: string[] } {
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: bộ chọn SOP do component cha điều khiển (value/onChange), state cục bộ chỉ là ô tìm kiếm/gợi ý; chọn xong commit ngay qua onChange, không có dữ liệu nháp
  */
 export function SopPicker({
  value, onChange }: Props) {

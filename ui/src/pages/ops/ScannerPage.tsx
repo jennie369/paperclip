@@ -12,6 +12,7 @@ import { SimpleModal } from "../crm/components/SimpleModal";
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: các form là modal ngắn (quét thủ công chọn coin + timeframe, cấu hình scanner, chi tiết pattern) áp dụng/huỷ ngay trong modal, không có bản nháp dài để mất
  */
 export function ScannerPage() {
   const [errors, setErrors] = useState({});

@@ -26,6 +26,7 @@ const tierColors: Record<string, string> = {
 
 /**
  * @archetype form
+ * @capability-skip dirty-guard: trang quản lý CTV: đổi tier, bật/tắt, thanh toán chạy mutation tức thì; hai modal chỉ có lý do từ chối (1 ô) và lời mời CTV (3 ô ngắn) gửi ngay, không có bản nháp dài
  */
 export function AffiliatePage() {
   const [errors, setErrors] = useState({});
