@@ -36,8 +36,6 @@ function formatDate(ts: string) {
 export function ConversationChat() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const { sessionKey } = useParams<{ sessionKey: string }>();

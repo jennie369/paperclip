@@ -45,8 +45,6 @@ const defaultForm = { name: '', subject: '', template: 'welcome', segment: 'all'
 export function EmailCampaignsPage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const qc = useQueryClient();

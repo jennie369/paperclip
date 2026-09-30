@@ -973,8 +973,6 @@ export function JsonSchemaForm({
   className,
 }: JsonSchemaFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
   const type = resolveType(schema);
 

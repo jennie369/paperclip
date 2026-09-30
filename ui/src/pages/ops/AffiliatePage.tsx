@@ -30,8 +30,6 @@ const tierColors: Record<string, string> = {
 export function AffiliatePage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const navigate = useNavigate();

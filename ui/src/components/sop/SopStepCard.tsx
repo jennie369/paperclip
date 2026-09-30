@@ -248,8 +248,6 @@ export function SopStepCard({
 }: SopStepCardProps) {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
   const [expanded, setExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);

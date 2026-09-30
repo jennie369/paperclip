@@ -151,8 +151,6 @@ export function SopPicker({
  value, onChange }: Props) {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
   const [search, setSearch] = useState('');
   const [suggestInput, setSuggestInput] = useState('');

@@ -26,8 +26,6 @@ const HELP_TEXT = `Lenh co san:
 export function CommandConsolePage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const [logs, setLogs] = useState<LogEntry[]>([

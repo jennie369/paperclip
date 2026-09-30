@@ -62,8 +62,6 @@ const defaultNewCustomer = { display_name: '', phone: '', email: '', status: 'le
 export function CustomerListPage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const navigate = useNavigate();

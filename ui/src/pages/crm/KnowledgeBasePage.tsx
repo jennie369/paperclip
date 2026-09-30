@@ -23,8 +23,6 @@ const collectionTypes = [
 export function KnowledgeBasePage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const qc = useQueryClient();

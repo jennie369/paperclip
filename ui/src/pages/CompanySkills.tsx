@@ -738,8 +738,6 @@ function SkillPane({
 export function CompanySkills() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const { "*": routePath } = useParams<{ "*": string }>();

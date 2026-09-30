@@ -47,8 +47,6 @@ export function CreateOrderPanel({
  customer, sourceChannel, onClose, onSuccess }: Props) {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
   const qc = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");

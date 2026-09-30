@@ -59,8 +59,6 @@ const defaultOrderForm = {
 export function OrderListPage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const navigate = useNavigate();

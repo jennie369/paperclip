@@ -200,8 +200,6 @@ function SectionHeader({ icon: Icon, title, right }: { icon: React.ComponentType
 export function ConfigHubPage() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
 
   const [activeTab, setActiveTab] = useState<TabKey>("channels");

@@ -121,8 +121,6 @@ export function IssueDocumentsSection({
 }) {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isDirty = true;
-  const validate = () => true;
 
   const queryClient = useQueryClient();
   const location = useLocation();
