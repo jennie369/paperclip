@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ProviderTimeoutError,
   resolveAgyFallback,
+  resolveTimeoutFallback,
   runWithTimeoutFallback,
 } from '../channels/agy-timeout-fallback.js';
 
@@ -61,16 +62,56 @@ describe('resolveAgyFallback', () => {
   });
 });
 
+describe('resolveTimeoutFallback (GEM-1067: claude/gemini cùng lớp lỗi với agy)', () => {
+  const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
+  it('claude → gemini flash; gemini → claude sonnet; agy → claude sonnet', () => {
+    expect(resolveTimeoutFallback('claude', env({}))).toEqual({ provider: 'gemini', model: 'gemini-2.5-flash' });
+    expect(resolveTimeoutFallback('gemini', env({}))).toEqual({ provider: 'claude', model: 'claude-sonnet-4-6' });
+    expect(resolveTimeoutFallback('antigravity', env({}))).toEqual({ provider: 'claude', model: 'claude-sonnet-4-6' });
+  });
+  it('mỗi provider tắt/đổi model ĐỘC LẬP bằng env riêng', () => {
+    expect(resolveTimeoutFallback('claude', env({ CLAUDE_TIMEOUT_FALLBACK: 'off' }))).toBeNull();
+    expect(resolveTimeoutFallback('gemini', env({ CLAUDE_TIMEOUT_FALLBACK: 'off' }))).not.toBeNull();
+    expect(resolveTimeoutFallback('gemini', env({ GEMINI_TIMEOUT_FALLBACK_MODEL: ' claude-opus-4-8 ' }))?.model).toBe('claude-opus-4-8');
+    expect(resolveTimeoutFallback('claude', env({ CLAUDE_TIMEOUT_FALLBACK_MODEL: 'gemini-2.5-pro' }))?.model).toBe('gemini-2.5-pro');
+  });
+  it('provider API (nvidia_nim/openrouter) hoặc lạ → null (hành vi cũ)', () => {
+    for (const p of ['nvidia_nim', 'openrouter', 'whatever']) expect(resolveTimeoutFallback(p, env({}))).toBeNull();
+  });
+  it('claude/gemini timeout: message giữ định dạng cũ để grep log/probe', () => {
+    expect(new ProviderTimeoutError('claude', 'Claude', 'sales-closer').message).toBe('Claude CLI timed out for sales-closer');
+    expect(new ProviderTimeoutError('gemini', 'Gemini', 'sales-closer').message).toBe('Gemini CLI timed out for sales-closer');
+  });
+});
+
 describe('router wiring (guard chống revert)', () => {
   const src = readFileSync(fileURLToPath(new URL('../channels/router.ts', import.meta.url)), 'utf-8');
-  it("dispatch 'antigravity' đi qua runWithTimeoutFallback", () => {
-    const block = src.slice(src.indexOf("case 'antigravity':"), src.indexOf("case 'nvidia_nim':"));
-    expect(block).toContain('runWithTimeoutFallback(');
-    expect(block).toContain('runViaClaude(fbConfig');
+  it('dispatch claude/gemini/antigravity đều đi qua withTimeoutFallback → runWithTimeoutFallback', () => {
+    const dispatch = src.slice(src.indexOf('const dispatch = async'), src.indexOf("case 'nvidia_nim':"));
+    for (const p of ['claude', 'gemini', 'antigravity']) {
+      expect(dispatch).toMatch(new RegExp(`case '${p}':\\s*return withTimeoutFallback\\(`));
+    }
+    const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
+    expect(helper).toContain('runWithTimeoutFallback(');
+    expect(helper).toContain('runViaGemini(fbConfig');
+    expect(helper).toContain('runViaClaude(fbConfig');
   });
-  it('runViaAntigravity ném ProviderTimeoutError khi quá hạn (không phải Error trần)', () => {
+  it("fallback claude⇄gemini dùng phiên trắng (sessionKey '') — id phiên provider kia không resume được", () => {
+    const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
+    expect(helper).toContain("config.provider === 'antigravity' ? sessionKey : ''");
+  });
+  it('3 runner CLI ném ProviderTimeoutError khi quá hạn (không phải Error trần) + guard timedOut ở close', () => {
+    const claude = src.slice(src.indexOf('async function runViaClaude('), src.indexOf('async function runViaGemini('));
+    expect(claude).toContain("new ProviderTimeoutError('claude'");
+    expect(claude).toContain('if (settled) return;');
+    const gemini = src.slice(src.indexOf('async function runViaGemini('), src.indexOf('async function runViaAntigravity('));
+    expect(gemini).toContain("new ProviderTimeoutError('gemini'");
+    expect(gemini).toContain('if (timedOut)');
     const fn = src.slice(src.indexOf('async function runViaAntigravity('), src.indexOf('async function runViaOpenRouter('));
     expect(fn).toContain("new ProviderTimeoutError('antigravity'");
     expect(fn).toContain('if (timedOut)');
+  });
+  it('không còn Error trần "CLI timed out" trong router.ts', () => {
+    expect(src).not.toMatch(/new Error\(`(Claude|Gemini|Antigravity) CLI timed out/);
   });
 });

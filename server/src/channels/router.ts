@@ -36,7 +36,7 @@ import { renderHistoryForPrompt, stripInjectedContext } from './session-history-
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
 import { selectInlineJson } from './inline-ssot-select.js';
-import { ProviderTimeoutError, resolveAgyFallback, runWithTimeoutFallback } from './agy-timeout-fallback.js';
+import { ProviderTimeoutError, resolveTimeoutFallback, runWithTimeoutFallback } from './agy-timeout-fallback.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -359,30 +359,40 @@ export async function runAgentWithConfig(
 
   // Single dispatch closure so the pre-send payment gate can regenerate once without
   // duplicating the provider switch.
+  // CLI quá 5' → đổi provider 1 lần thay vì trả '' (khách bị bỏ rơi câm — GEM-1050 agy→claude,
+  // GEM-1067 claude→gemini · gemini→claude). Fallback gọi thẳng runViaX, không qua dispatch ⇒ không lặp.
+  const withTimeoutFallback = (primary: () => Promise<string>, msg: string): Promise<string> => {
+    const fb = resolveTimeoutFallback(config.provider);
+    return runWithTimeoutFallback(
+      primary,
+      fb
+        ? async () => {
+            // Clone: model của agent gốc ('Gemini 3.1 Pro (High)', 'claude-…') không chạy được trên CLI đích.
+            const fbConfig = { ...config, provider: fb.provider, model: fb.model } as AgentConfig;
+            // agy không lưu phiên CLI nên claude fallback được resume phiên claude của thread (như cũ).
+            // claude⇄gemini: id phiên của provider kia KHÔNG resume được ở CLI này → phiên trắng ('' = không
+            // đọc/ghi channel_sessions); lịch sử vẫn đủ vì phiên mới nhận buildFullPrompt(history).
+            const fbSessionKey = config.provider === 'antigravity' ? sessionKey : '';
+            const out = fb.provider === 'gemini'
+              ? await runViaGemini(fbConfig, systemPrompt, chatHistory, msg, fbSessionKey, signal)
+              : await runViaClaude(fbConfig, systemPrompt, chatHistory, msg, fbSessionKey, signal);
+            // Session drill-down (saveHistory) phải trỏ phiên đã thật sự xử lý lượt này.
+            (config as any)._agent_session_id = (fbConfig as any)._agent_session_id;
+            return out;
+          }
+        : null,
+      () => console.warn(`[Router/${config.provider}] ${config.slug}: CLI timeout → fallback ${fb?.provider} (${fb?.model}) 1 lần`),
+    );
+  };
+
   const dispatch = async (msg: string): Promise<string> => {
     switch (config.provider) {
       case 'claude':
-        return runViaClaude(config, systemPrompt, chatHistory, msg, sessionKey, signal);
+        return withTimeoutFallback(() => runViaClaude(config, systemPrompt, chatHistory, msg, sessionKey, signal), msg);
       case 'gemini':
-        return runViaGemini(config, systemPrompt, chatHistory, msg, sessionKey, signal);
-      case 'antigravity': {
-        // agy quá 5' → đổi sang claude 1 lần thay vì trả '' (khách bị bỏ rơi câm — GEM-1050).
-        const fb = resolveAgyFallback();
-        return runWithTimeoutFallback(
-          () => runViaAntigravity(config, systemPrompt, chatHistory, msg, sessionKey, signal),
-          fb
-            ? async () => {
-                // Clone: model của agent agy ('Gemini 3.1 Pro (High)') không chạy được trên claude CLI.
-                const fbConfig = { ...config, provider: fb.provider, model: fb.model } as AgentConfig;
-                const out = await runViaClaude(fbConfig, systemPrompt, chatHistory, msg, sessionKey, signal);
-                // Session drill-down (saveHistory) phải trỏ phiên claude đã thật sự xử lý lượt này.
-                (config as any)._agent_session_id = (fbConfig as any)._agent_session_id;
-                return out;
-              }
-            : null,
-          () => console.warn(`[Router/antigravity] ${config.slug}: agy timeout → fallback ${fb?.provider} (${fb?.model}) 1 lần`),
-        );
-      }
+        return withTimeoutFallback(() => runViaGemini(config, systemPrompt, chatHistory, msg, sessionKey, signal), msg);
+      case 'antigravity':
+        return withTimeoutFallback(() => runViaAntigravity(config, systemPrompt, chatHistory, msg, sessionKey, signal), msg);
       case 'nvidia_nim':
         return runViaNvidiaNim(config, systemPrompt, chatHistory, msg, signal);
       case 'openrouter':
@@ -658,7 +668,7 @@ async function runViaClaude(
     const timeout = setTimeout(() => {
       settled = true;
       child.kill('SIGTERM');
-      reject(new Error(`Claude CLI timed out for ${config.slug}`));
+      reject(new ProviderTimeoutError('claude', 'Claude', config.slug));
     }, AGENT_TIMEOUT_MS);
     const onAbort = () => {
       if (settled) return;
@@ -1105,9 +1115,11 @@ async function runViaGemini(
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
     const timeout = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGTERM');
-      reject(new Error(`Gemini CLI timed out for ${config.slug}`));
+      reject(new ProviderTimeoutError('gemini', 'Gemini', config.slug));
     }, AGENT_TIMEOUT_MS);
 
     child.stdout?.setEncoding("utf8");
@@ -1124,6 +1136,12 @@ async function runViaGemini(
 
     child.on('close', async (code) => {
       clearTimeout(timeout);
+      // Đã reject vì timeout (fallback claude có thể đang chạy) → KHÔNG parse/ghi phiên/emit agent:done
+      // bằng "Xin lỗi, hệ thống đang xử lý" của tiến trình bị kill (đè _agent_session_id của fallback).
+      if (timedOut) {
+        streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: 'gemini timeout' });
+        return;
+      }
 
       if (code !== 0 && !stdout.trim()) {
         console.error(`[Router] Gemini CLI exited ${code}: ${stderr.substring(0, 200)}`);
