@@ -9,6 +9,9 @@
 // Chỉ bắt ProviderTimeoutError — lỗi khác (abort do khách nhắn mới, exit≠0…) giữ nguyên hành vi cũ.
 // Fallback gọi thẳng runViaX (KHÔNG qua dispatch) ⇒ tối đa 1 bước nhảy, không vòng claude⇄gemini.
 
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
 export class ProviderTimeoutError extends Error {
   readonly provider: string;
   constructor(provider: string, label: string, slug: string) {
@@ -97,10 +100,34 @@ export function resolveAgyFallback(env: NodeJS.ProcessEnv = process.env): Timeou
  * cho ĐÚNG 1 lượt thử primary (single-flight, các lượt khác vẫn đi fallback); thành công → đóng, timeout → mở lại.
  * Chỉ đếm ProviderTimeoutError (abort do khách nhắn mới / exit≠0 không phải dấu hiệu provider chậm).
  */
+/** Trạng thái quan sát được của 1 breaker (GEM-1094: lộ ra /api/health + lưu đĩa qua restart). */
+export interface BreakerSnapshot {
+  provider: string;
+  state: 'closed' | 'open' | 'half_open';
+  consecutiveTimeouts: number;
+  threshold: number;
+  cooldownMs: number;
+  openUntil: string | null;
+  lastOpenedAt: string | null;
+  lastClosedAt: string | null;
+  fallbackTo: string | null;
+}
+
+/** Phần trạng thái cần sống qua restart (đọc/ghi file). */
+export interface PersistedBreakerState {
+  consecutive: number;
+  openUntil: number;
+  lastOpenedAt: number | null;
+}
+
 export class TimeoutCircuitBreaker {
   private consecutive = 0;
   private openUntil = 0;
   private probing = false;
+  private lastOpenedAt: number | null = null;
+  private lastClosedAt: number | null = null;
+  /** Gọi khi mạch chuyển trạng thái mở↔đóng (KHÔNG gọi mỗi lượt) — dùng để log 1 lần + lưu đĩa. */
+  onTransition: ((to: 'open' | 'closed') => void) | null = null;
   constructor(
     private readonly threshold: number,
     private readonly cooldownMs: number,
@@ -116,14 +143,24 @@ export class TimeoutCircuitBreaker {
     return true;
   }
   recordSuccess(): void {
+    const wasOpen = this.isOpen;
     this.consecutive = 0;
     this.openUntil = 0;
     this.probing = false;
+    if (wasOpen) {
+      this.lastClosedAt = this.now();
+      this.onTransition?.('closed');
+    }
   }
   recordTimeout(): void {
     this.consecutive += 1;
     this.probing = false;
-    if (this.threshold > 0 && this.consecutive >= this.threshold) this.openUntil = this.now() + this.cooldownMs;
+    if (this.threshold > 0 && this.consecutive >= this.threshold) {
+      this.openUntil = this.now() + this.cooldownMs;
+      this.lastOpenedAt = this.now();
+      // Mở lần đầu HOẶC probe half-open lại timeout → mở lại: cả hai đều là 1 chuyển trạng thái đáng ghi.
+      this.onTransition?.('open');
+    }
   }
   /** Lượt thử half-open kết thúc bằng lỗi KHÔNG phải timeout → nhả cờ để lượt sau thử lại (không kẹt probing). */
   releaseProbe(): void {
@@ -132,9 +169,70 @@ export class TimeoutCircuitBreaker {
   get isOpen(): boolean {
     return this.threshold > 0 && this.consecutive >= this.threshold;
   }
+  snapshot(provider: string, fallbackTo: string | null = null): BreakerSnapshot {
+    const iso = (ms: number | null) => (ms ? new Date(ms).toISOString() : null);
+    const state = !this.isOpen ? 'closed' : this.now() < this.openUntil ? 'open' : 'half_open';
+    return {
+      provider,
+      state,
+      consecutiveTimeouts: this.consecutive,
+      threshold: this.threshold,
+      cooldownMs: this.cooldownMs,
+      openUntil: this.isOpen ? iso(this.openUntil) : null,
+      lastOpenedAt: iso(this.lastOpenedAt),
+      lastClosedAt: iso(this.lastClosedAt),
+      fallbackTo,
+    };
+  }
+  toPersisted(): PersistedBreakerState {
+    return { consecutive: this.consecutive, openUntil: this.openUntil, lastOpenedAt: this.lastOpenedAt };
+  }
+  /** Khôi phục sau restart — chỉ khi cooldown CHƯA hết (hết rồi thì bắt đầu đóng, primary tự được thử lại). */
+  restore(s: PersistedBreakerState): void {
+    if (!Number.isFinite(s.openUntil) || s.openUntil <= this.now()) return;
+    if (!Number.isFinite(s.consecutive) || s.consecutive < 1) return;
+    this.consecutive = Math.trunc(s.consecutive);
+    this.openUntil = s.openUntil;
+    this.lastOpenedAt = typeof s.lastOpenedAt === 'number' ? s.lastOpenedAt : null;
+  }
 }
 
 const breakers = new Map<string, TimeoutCircuitBreaker>();
+
+// Lưu trạng thái breaker xuống đĩa (GEM-1094): restart lúc agy đang 429 KHÔNG được xoá mạch — nếu xoá,
+// `threshold` tin đầu sau restart lại chờ đủ 5' mỗi tin. Đường dẫn do composition root (index.ts) cấp;
+// null (mặc định — test/CLI) = không đụng đĩa. Ghi chỉ khi chuyển trạng thái (hiếm), lỗi ghi KHÔNG chặn tin.
+let persistPath: string | null = null;
+
+export function configureBreakerPersistence(filePath: string | null): void {
+  persistPath = filePath;
+}
+
+function readPersistedBreakers(): Record<string, PersistedBreakerState> {
+  if (!persistPath || !existsSync(persistPath)) return {};
+  try {
+    const raw = JSON.parse(readFileSync(persistPath, 'utf8'));
+    return raw && typeof raw === 'object' ? (raw as Record<string, PersistedBreakerState>) : {};
+  } catch (err) {
+    console.warn(`[Breaker] đọc ${persistPath} lỗi, bắt đầu mạch đóng: ${(err as Error).message}`);
+    return {};
+  }
+}
+
+function writePersistedBreakers(): void {
+  if (!persistPath) return;
+  try {
+    // Giữ entry của provider chưa được tạo lại sau restart (breaker tạo lười) — không ghi đè mất mạch đang mở của nó.
+    const out: Record<string, PersistedBreakerState> = { ...readPersistedBreakers() };
+    for (const [p, b] of breakers) out[p] = b.toPersisted();
+    mkdirSync(dirname(persistPath), { recursive: true });
+    const tmp = `${persistPath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(out, null, 2), 'utf8');
+    renameSync(tmp, persistPath); // atomic: không để file nửa vời nếu crash giữa chừng
+  } catch (err) {
+    console.warn(`[Breaker] ghi ${persistPath} lỗi (trạng thái chỉ còn trong RAM): ${(err as Error).message}`);
+  }
+}
 
 /** `<AGY|CLAUDE|GEMINI>_BREAKER_THRESHOLD` (mặc định 2, 0 = tắt) · `<…>_BREAKER_COOLDOWN_MS` (mặc định 600000 = 10'). */
 export function getTimeoutBreaker(primary: string, env: NodeJS.ProcessEnv = process.env): TimeoutCircuitBreaker | null {
@@ -145,9 +243,28 @@ export function getTimeoutBreaker(primary: string, env: NodeJS.ProcessEnv = proc
     const thr = Number.parseInt(env[`${entry.envPrefix}_BREAKER_THRESHOLD`] ?? '', 10);
     const cd = Number.parseInt(env[`${entry.envPrefix}_BREAKER_COOLDOWN_MS`] ?? '', 10);
     b = new TimeoutCircuitBreaker(Number.isFinite(thr) && thr >= 0 ? thr : 2, Number.isFinite(cd) && cd > 0 ? cd : 600_000);
-    breakers.set(primary, b);
+    const saved = readPersistedBreakers()[primary];
+    if (saved) b.restore(saved);
+    const created = b;
+    created.onTransition = (to) => {
+      // 1 dòng/chuyển trạng thái (không phải mỗi tin) → ops grep được mốc mạch mở/đóng trong log pm2.
+      if (to === 'open') console.warn(`[Breaker/${primary}] MẠCH MỞ → mọi tin đi thẳng ${entry.provider} tới ${created.snapshot(primary).openUntil}`);
+      else console.info(`[Breaker/${primary}] mạch ĐÓNG lại — ${primary} trả lời bình thường`);
+      writePersistedBreakers();
+    };
+    breakers.set(primary, created);
   }
   return b;
+}
+
+/** Trạng thái MỌI provider có breaker — cho /api/health (GEM-1094). */
+export function getTimeoutBreakerSnapshot(env: NodeJS.ProcessEnv = process.env): BreakerSnapshot[] {
+  const out: BreakerSnapshot[] = [];
+  for (const primary of Object.keys(FALLBACK_MAP)) {
+    const b = getTimeoutBreaker(primary, env);
+    if (b) out.push(b.snapshot(primary, resolveTimeoutFallback(primary, env)?.provider ?? null));
+  }
+  return out;
 }
 
 /** Chỉ cho test: xoá trạng thái breaker toàn cục. */

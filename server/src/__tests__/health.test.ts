@@ -25,8 +25,10 @@ describe("GET /health", () => {
   });
 
   it("returns 200 when the database probe succeeds", async () => {
+    // Liveness chạy trong transaction (SET LOCAL statement_timeout + SELECT 1) từ BUG-082 16/08.
+    const execute = vi.fn().mockResolvedValue([{ "?column?": 1 }]);
     const db = {
-      execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+      transaction: (cb: (tx: { execute: typeof execute }) => Promise<unknown>) => cb({ execute }),
     } as unknown as Db;
     const app = express();
     app.use("/health", healthRoutes(db));
@@ -39,7 +41,7 @@ describe("GET /health", () => {
 
   it("returns 503 when the database probe fails", async () => {
     const db = {
-      execute: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
+      transaction: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
     } as unknown as Db;
     const app = express();
     app.use("/health", healthRoutes(db));

@@ -1,10 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ProviderTimeoutError,
   TimeoutCircuitBreaker,
+  configureBreakerPersistence,
   getTimeoutBreaker,
+  getTimeoutBreakerSnapshot,
   resetTimeoutBreakers,
   resolveAgyFallback,
   resolveTimeoutFallback,
@@ -277,5 +281,87 @@ describe('TimeoutCircuitBreaker (GEM-1068: agy chậm/429 → khỏi chờ 5 ph�
     const src = readFileSync(fileURLToPath(new URL('../channels/router.ts', import.meta.url)), 'utf-8');
     const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
     expect(helper).toContain('getTimeoutBreaker(config.provider)');
+  });
+});
+
+describe('Breaker quan sát được + sống qua restart (GEM-1094)', () => {
+  const env = (o: Record<string, string> = {}) => o as unknown as NodeJS.ProcessEnv;
+  const withTmp = (fn: (file: string) => void) => {
+    const dir = mkdtempSync(join(tmpdir(), 'breaker-'));
+    const file = join(dir, 'provider-breakers.json');
+    try {
+      resetTimeoutBreakers();
+      configureBreakerPersistence(file);
+      fn(file);
+    } finally {
+      configureBreakerPersistence(null);
+      resetTimeoutBreakers();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('snapshot: closed → open → half_open → closed, có mốc thời gian + đích fallback', () => {
+    let t = 1_000_000;
+    const b = new TimeoutCircuitBreaker(1, 1000, () => t);
+    expect(b.snapshot('antigravity', 'claude')).toMatchObject({ state: 'closed', openUntil: null, fallbackTo: 'claude' });
+    b.recordTimeout();
+    const open = b.snapshot('antigravity');
+    expect(open.state).toBe('open');
+    expect(open.openUntil).toBe(new Date(1_001_000).toISOString());
+    expect(open.lastOpenedAt).toBe(new Date(1_000_000).toISOString());
+    t += 1001;
+    expect(b.snapshot('antigravity').state).toBe('half_open');
+    b.recordSuccess();
+    expect(b.snapshot('antigravity')).toMatchObject({ state: 'closed', consecutiveTimeouts: 0, lastClosedAt: new Date(t).toISOString() });
+  });
+
+  it('onTransition chỉ bắn khi đổi trạng thái, KHÔNG mỗi lượt', () => {
+    const b = new TimeoutCircuitBreaker(2, 1000);
+    const seen: string[] = [];
+    b.onTransition = (to) => seen.push(to);
+    b.recordTimeout(); // dưới ngưỡng
+    b.recordSuccess(); // đang đóng → không phải chuyển
+    b.recordTimeout();
+    b.recordTimeout(); // mở
+    b.recordSuccess(); // đóng
+    expect(seen).toEqual(['open', 'closed']);
+  });
+
+  it('mạch mở sống qua restart: map RAM bị xoá nhưng breaker mới đọc lại file vẫn MỞ', () =>
+    withTmp((file) => {
+      const a = getTimeoutBreaker('antigravity', env({ AGY_BREAKER_THRESHOLD: '1' }))!;
+      a.recordTimeout();
+      expect(JSON.parse(readFileSync(file, 'utf8')).antigravity.consecutive).toBe(1);
+      resetTimeoutBreakers(); // = restart: RAM sạch
+      const after = getTimeoutBreaker('antigravity', env({ AGY_BREAKER_THRESHOLD: '1' }))!;
+      expect(after).not.toBe(a);
+      expect(after.allowPrimary()).toBe(false); // khách KHÔNG phải chờ 5' lại từ đầu
+    }));
+
+  it('cooldown đã hết lúc restart → bắt đầu đóng; file hỏng → đóng, không ném', () =>
+    withTmp((file) => {
+      writeFileSync(file, JSON.stringify({ antigravity: { consecutive: 3, openUntil: Date.now() - 1, lastOpenedAt: 1 } }));
+      expect(getTimeoutBreaker('antigravity', env())!.isOpen).toBe(false);
+      resetTimeoutBreakers();
+      writeFileSync(file, '{not json');
+      expect(getTimeoutBreaker('claude', env())!.isOpen).toBe(false);
+    }));
+
+  it('ghi file giữ entry của provider chưa được tạo lại (breaker tạo lười)', () =>
+    withTmp((file) => {
+      const until = Date.now() + 60_000;
+      writeFileSync(file, JSON.stringify({ gemini: { consecutive: 2, openUntil: until, lastOpenedAt: 1 } }));
+      getTimeoutBreaker('antigravity', env({ AGY_BREAKER_THRESHOLD: '1' }))!.recordTimeout();
+      const saved = JSON.parse(readFileSync(file, 'utf8'));
+      expect(saved.gemini.openUntil).toBe(until);
+      expect(saved.antigravity.consecutive).toBe(1);
+    }));
+
+  it('getTimeoutBreakerSnapshot liệt kê đủ provider có fallback, kèm đích', () => {
+    resetTimeoutBreakers();
+    const snap = getTimeoutBreakerSnapshot(env());
+    expect(snap.map((s) => s.provider).sort()).toEqual(['antigravity', 'claude', 'gemini', 'nvidia_nim', 'openrouter']);
+    expect(snap.find((s) => s.provider === 'antigravity')!.fallbackTo).toBe('claude');
+    resetTimeoutBreakers();
   });
 });

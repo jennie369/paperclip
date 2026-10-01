@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import express from "express";
 import request from "supertest";
 import { healthRoutes } from "../routes/health.js";
+import { getTimeoutBreaker, resetTimeoutBreakers } from "../channels/agy-timeout-fallback.js";
 
 // Resilience trước Supabase pooler stall (plan 2026-08-16). Verify-by-effect:
 // (1) DB khỏe → 200 ok; (2) DB lỗi → 503 nhanh; (3) DB TREO → handler KHÔNG treo,
@@ -37,6 +38,24 @@ const hangingDb = {
   // Không bao giờ resolve — mô phỏng pooler stall giữ connection.
   transaction: () => new Promise<void>(() => {}),
 };
+
+// Đặt TRƯỚC ca "DB treo": probe liveness là single-flight cấp module, ca treo để lại promise
+// in-flight ~0.5s sau khi trả 503 → test chạy ngay sau sẽ dùng chung probe treo đó.
+describe("GET /api/health — circuit-breaker provider (GEM-1094)", () => {
+  it("lộ trạng thái breaker; mạch MỞ vẫn status ok (không kích watcher restart)", async () => {
+    resetTimeoutBreakers();
+    const agy = getTimeoutBreaker("antigravity")!;
+    for (let i = 0; i < 5; i++) agy.recordTimeout();
+    const res = await request(makeApp(healthyDb)).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ok");
+    const row = res.body.providerBreakers.find((b: { provider: string }) => b.provider === "antigravity");
+    expect(row.state).toBe("open");
+    expect(row.fallbackTo).toBe("claude");
+    expect(typeof row.openUntil).toBe("string");
+    resetTimeoutBreakers();
+  });
+});
 
 describe("GET /api/health resilience (pooler stall)", () => {
   it("trả 200 ok khi DB khỏe", async () => {
