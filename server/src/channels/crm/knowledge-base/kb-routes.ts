@@ -33,7 +33,8 @@ router.post('/collections', async (req, res) => {
 
 router.delete('/collections/:id', async (req, res) => {
   try {
-    await supabase.from('kb_collections').delete().eq('id', req.params.id);
+    const { error } = await supabase.from('kb_collections').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
@@ -79,7 +80,7 @@ router.post('/faq', async (req, res) => {
 
     const content = `Câu hỏi: ${question}\nCâu trả lời: ${answer}`;
     const { createHash } = await import('crypto');
-    const { data: doc } = await supabase.from('kb_documents')
+    const { data: doc, error } = await supabase.from('kb_documents')
       .insert({
         collection_id, title: question.slice(0, 100), source_type: 'manual',
         raw_content: content, content_hash: createHash('md5').update(content).digest('hex'),
@@ -87,7 +88,9 @@ router.post('/faq', async (req, res) => {
       })
       .select('*').single();
 
-    if (doc) processor.processDocument(doc.id).catch(() => {});
+    // Insert lỗi phải trả lỗi thật — trước đây trả 201 success dù không lưu được FAQ nào.
+    if (error || !doc) return res.status(400).json({ error: error?.message || 'Không lưu được FAQ' });
+    processor.processDocument(doc.id).catch(() => {});
     res.status(201).json({ success: true, document: doc });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
