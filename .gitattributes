@@ -1,0 +1,10 @@
+# Script chạy trực tiếp (shebang) PHẢI là LF trong working tree.
+# Windows có core.autocrlf=true → checkout ra CRLF → dòng `#!/usr/bin/env node\r`
+# làm vite-node/vitest ném SyntaxError khi import file .mjs (GEM-1086), và
+# bash/env báo `'sh\r': No such file` với .sh / git hook.
+*.sh  text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.py  text eol=lf
+server/scripts/git-hooks/* text eol=lf
+docker/untrusted-review/bin/* text eol=lf
