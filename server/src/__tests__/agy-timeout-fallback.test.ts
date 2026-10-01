@@ -9,6 +9,7 @@ import {
   resolveAgyFallback,
   resolveTimeoutFallback,
   runWithTimeoutFallback,
+  withApiTimeout,
 } from '../channels/agy-timeout-fallback.js';
 
 const timeout = () => new ProviderTimeoutError('antigravity', 'Antigravity', 'sales-closer');
@@ -78,8 +79,16 @@ describe('resolveTimeoutFallback (GEM-1067: claude/gemini cùng lớp lỗi vớ
     expect(resolveTimeoutFallback('gemini', env({ GEMINI_TIMEOUT_FALLBACK_MODEL: ' claude-opus-4-8 ' }))?.model).toBe('claude-opus-4-8');
     expect(resolveTimeoutFallback('claude', env({ CLAUDE_TIMEOUT_FALLBACK_MODEL: 'gemini-2.5-pro' }))?.model).toBe('gemini-2.5-pro');
   });
-  it('provider API (nvidia_nim/openrouter) hoặc lạ → null (hành vi cũ)', () => {
-    for (const p of ['nvidia_nim', 'openrouter', 'whatever']) expect(resolveTimeoutFallback(p, env({}))).toBeNull();
+  it('provider lạ → null (hành vi cũ)', () => {
+    expect(resolveTimeoutFallback('whatever', env({}))).toBeNull();
+  });
+  it('GEM-1085: nvidia_nim/openrouter → claude sonnet, tắt/đổi model bằng env riêng', () => {
+    for (const p of ['nvidia_nim', 'openrouter']) {
+      expect(resolveTimeoutFallback(p, env({}))).toEqual({ provider: 'claude', model: 'claude-sonnet-4-6' });
+    }
+    expect(resolveTimeoutFallback('nvidia_nim', env({ NVIDIA_NIM_TIMEOUT_FALLBACK: 'off' }))).toBeNull();
+    expect(resolveTimeoutFallback('openrouter', env({ NVIDIA_NIM_TIMEOUT_FALLBACK: 'off' }))).not.toBeNull();
+    expect(resolveTimeoutFallback('openrouter', env({ OPENROUTER_TIMEOUT_FALLBACK_MODEL: 'claude-opus-4-8' }))?.model).toBe('claude-opus-4-8');
   });
   it('claude/gemini timeout: message giữ định dạng cũ để grep log/probe', () => {
     expect(new ProviderTimeoutError('claude', 'Claude', 'sales-closer').message).toBe('Claude CLI timed out for sales-closer');
@@ -90,8 +99,8 @@ describe('resolveTimeoutFallback (GEM-1067: claude/gemini cùng lớp lỗi vớ
 describe('router wiring (guard chống revert)', () => {
   const src = readFileSync(fileURLToPath(new URL('../channels/router.ts', import.meta.url)), 'utf-8');
   it('dispatch claude/gemini/antigravity đều đi qua withTimeoutFallback → runWithTimeoutFallback', () => {
-    const dispatch = src.slice(src.indexOf('const dispatch = async'), src.indexOf("case 'nvidia_nim':"));
-    for (const p of ['claude', 'gemini', 'antigravity']) {
+    const dispatch = src.slice(src.indexOf('const dispatch = async'), src.indexOf('default:\n        console.warn(`[Router] Unknown provider'));
+    for (const p of ['claude', 'gemini', 'antigravity', 'nvidia_nim', 'openrouter']) {
       expect(dispatch).toMatch(new RegExp(`case '${p}':\\s*return withTimeoutFallback\\(`));
     }
     const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
@@ -116,6 +125,60 @@ describe('router wiring (guard chống revert)', () => {
   });
   it('không còn Error trần "CLI timed out" trong router.ts', () => {
     expect(src).not.toMatch(/new Error\(`(Claude|Gemini|Antigravity) CLI timed out/);
+  });
+  it('GEM-1085: runner API đi qua withApiTimeout, KHÔNG tự setTimeout(controller.abort) trần', () => {
+    const api = src.slice(src.indexOf('async function runViaOpenRouter('), src.indexOf('async function resolveMediaToBase64('));
+    expect(api).toContain("withApiTimeout('openrouter'");
+    const nim = src.slice(src.indexOf('async function runViaNvidiaNim('), src.indexOf('// ─── Helpers ───'));
+    expect(nim).toContain("withApiTimeout('nvidia_nim'");
+    expect(`${api}${nim}`).not.toMatch(/setTimeout\(\(\) => controller\.abort\(\)/);
+  });
+});
+
+describe('withApiTimeout (GEM-1085: provider API timeout → ProviderTimeoutError, không AbortError trần)', () => {
+  const abortErr = () => new Error('agent run aborted (cancel-in-flight)');
+  // fetch giả: treo tới khi signal abort, rồi ném AbortError như fetch thật.
+  const hang = (s: AbortSignal) => new Promise<string>((_, rej) => {
+    s.addEventListener('abort', () => rej(new DOMException('This operation was aborted', 'AbortError')));
+  });
+
+  it('quá hạn → ProviderTimeoutError(provider) và message đúng định dạng', async () => {
+    const p = withApiTimeout('openrouter', 'OpenRouter', 'sales-closer', 20, undefined, abortErr, hang);
+    await expect(p).rejects.toBeInstanceOf(ProviderTimeoutError);
+    await expect(withApiTimeout('nvidia_nim', 'NVIDIA NIM', 'x', 20, undefined, abortErr, hang))
+      .rejects.toMatchObject({ provider: 'nvidia_nim', message: 'NVIDIA NIM CLI timed out for x' });
+  });
+
+  it('timeout openrouter → runWithTimeoutFallback chạy fallback đúng 1 lần, khách có reply', async () => {
+    const fb = vi.fn().mockResolvedValue('claude reply');
+    const out = await runWithTimeoutFallback(
+      () => withApiTimeout('openrouter', 'OpenRouter', 's', 20, undefined, abortErr, hang), fb);
+    expect(out).toBe('claude reply');
+    expect(fb).toHaveBeenCalledTimes(1);
+  });
+
+  it('abort từ signal ngoài (khách nhắn mới) → makeAbortError, KHÔNG phải timeout, KHÔNG fallback', async () => {
+    const ext = new AbortController();
+    const fb = vi.fn();
+    const run = runWithTimeoutFallback(
+      () => withApiTimeout('openrouter', 'OpenRouter', 's', 5_000, ext.signal, abortErr, hang), fb);
+    setTimeout(() => ext.abort(), 10);
+    await expect(run).rejects.toThrow('cancel-in-flight');
+    expect(fb).not.toHaveBeenCalled();
+  });
+
+  it('thành công trả giá trị; lỗi khác (vd HTTP 500) ném nguyên, không bị đổi thành timeout', async () => {
+    await expect(withApiTimeout('openrouter', 'O', 's', 1_000, undefined, abortErr, async () => 'ok')).resolves.toBe('ok');
+    const boom = new Error('OpenRouter API error 500');
+    await expect(withApiTimeout('openrouter', 'O', 's', 1_000, undefined, abortErr, async () => { throw boom; })).rejects.toBe(boom);
+  });
+
+  it('timeout cũng cắt phần đọc body (run nhận signal, treo ở res.json() vẫn bị cắt)', async () => {
+    const p = withApiTimeout('nvidia_nim', 'NVIDIA NIM', 's', 20, undefined, abortErr, async (s) => {
+      await Promise.resolve(); // "fetch" đã xong
+      return hang(s); // đọc body treo
+    });
+    await expect(p).rejects.toBeInstanceOf(ProviderTimeoutError);
   });
 });
 
@@ -197,10 +260,11 @@ describe('TimeoutCircuitBreaker (GEM-1068: agy chậm/429 → khỏi chờ 5 ph�
     await expect(runWithTimeoutFallback(() => Promise.reject(err), null, undefined, open)).rejects.toBe(err);
   });
 
-  it('getTimeoutBreaker: per-provider, đọc env, provider API → null', () => {
+  it('getTimeoutBreaker: per-provider, đọc env, provider lạ → null', () => {
     resetTimeoutBreakers();
     const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
-    expect(getTimeoutBreaker('openrouter', env({}))).toBeNull();
+    expect(getTimeoutBreaker('whatever', env({}))).toBeNull();
+    expect(getTimeoutBreaker('openrouter', env({}))).not.toBeNull(); // GEM-1085: API provider có breaker riêng
     const a = getTimeoutBreaker('antigravity', env({ AGY_BREAKER_THRESHOLD: '1', AGY_BREAKER_COOLDOWN_MS: '50' }))!;
     expect(getTimeoutBreaker('antigravity', env({}))).toBe(a); // cache
     expect(getTimeoutBreaker('claude', env({}))).not.toBe(a);

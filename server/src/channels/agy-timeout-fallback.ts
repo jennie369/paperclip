@@ -1,5 +1,5 @@
 // CLI timeout → fallback 1 lần sang provider khác: agy→claude (GEM-1050, ENG-0929-F1037-01),
-// claude→gemini · gemini→claude (GEM-1067, ENG-0930-F1050-01). (Tên file giữ nguyên để không vỡ import/test.)
+// claude→gemini · gemini→claude (GEM-1067, ENG-0930-F1050-01), nvidia_nim/openrouter→claude (GEM-1085). (Tên file giữ nguyên để không vỡ import/test.)
 //
 // Gốc: runViaAntigravity quá AGENT_TIMEOUT_MS (5') → reject → runAgentWithConfig nuốt lỗi → '' →
 // khách không nhận được gì (sales-closer, homyhue 28/09). Rút prompt 710k→178k chưa đủ: agy còn
@@ -24,16 +24,54 @@ export interface TimeoutFallback {
 }
 export type AgyFallback = TimeoutFallback;
 
+/**
+ * Provider API (fetch) quá hạn: `controller.abort()` chỉ ném DOMException AbortError trần — không phân biệt được
+ * với abort do khách nhắn mới, nên runWithTimeoutFallback không thể bắt. Bọc cả fetch + đọc body trong 1 hàm:
+ * hết hạn ⇒ ProviderTimeoutError (kích hoạt fallback/breaker); abort từ `signal` ngoài ⇒ `makeAbortError()`
+ * (AgentAbortedError của router — truyền vào để khỏi import vòng). GEM-1085 (ENG-0930-F1067-01).
+ */
+export async function withApiTimeout<T>(
+  provider: string,
+  label: string,
+  slug: string,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  makeAbortError: () => Error,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await run(controller.signal);
+  } catch (err) {
+    if (signal?.aborted) throw makeAbortError(); // khách nhắn mới thắng: không phải lỗi provider
+    if (timedOut) throw new ProviderTimeoutError(provider, label, slug);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
 /** Provider chính → (provider đích mặc định, model đích mặc định, tiền tố biến môi trường). */
 const FALLBACK_MAP = {
   antigravity: { provider: 'claude', model: 'claude-sonnet-4-6', envPrefix: 'AGY' },
   claude: { provider: 'gemini', model: 'gemini-2.5-flash', envPrefix: 'CLAUDE' },
   gemini: { provider: 'claude', model: 'claude-sonnet-4-6', envPrefix: 'GEMINI' },
+  // API provider (GEM-1085): timeout 5' → claude CLI (quota độc lập với OpenRouter/NIM).
+  nvidia_nim: { provider: 'claude', model: 'claude-sonnet-4-6', envPrefix: 'NVIDIA_NIM' },
+  openrouter: { provider: 'claude', model: 'claude-sonnet-4-6', envPrefix: 'OPENROUTER' },
 } as const;
 
 /**
  * `<AGY|CLAUDE|GEMINI>_TIMEOUT_FALLBACK` = `on` (mặc định) | `off`; `<…>_TIMEOUT_FALLBACK_MODEL` đổi model đích.
- * Trả null khi tắt hoặc provider không thuộc CLI (nvidia_nim/openrouter) → hành vi cũ (timeout ⇒ '' im lặng).
+ * Trả null khi tắt hoặc provider không có trong FALLBACK_MAP → hành vi cũ (timeout ⇒ '' im lặng).
  */
 export function resolveTimeoutFallback(
   primary: string,

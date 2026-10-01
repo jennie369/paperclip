@@ -36,7 +36,7 @@ import { renderHistoryForPrompt, stripInjectedContext } from './session-history-
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
 import { selectInlineJson } from './inline-ssot-select.js';
-import { ProviderTimeoutError, getTimeoutBreaker, resolveTimeoutFallback, runWithTimeoutFallback } from './agy-timeout-fallback.js';
+import { ProviderTimeoutError, getTimeoutBreaker, resolveTimeoutFallback, runWithTimeoutFallback, withApiTimeout } from './agy-timeout-fallback.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -397,9 +397,9 @@ export async function runAgentWithConfig(
       case 'antigravity':
         return withTimeoutFallback(() => runViaAntigravity(config, systemPrompt, chatHistory, msg, sessionKey, signal), msg);
       case 'nvidia_nim':
-        return runViaNvidiaNim(config, systemPrompt, chatHistory, msg, signal);
+        return withTimeoutFallback(() => runViaNvidiaNim(config, systemPrompt, chatHistory, msg, signal), msg);
       case 'openrouter':
-        return runViaOpenRouter(config, systemPrompt, chatHistory, msg, signal);
+        return withTimeoutFallback(() => runViaOpenRouter(config, systemPrompt, chatHistory, msg, signal), msg);
       default:
         console.warn(`[Router] Unknown provider: ${config.provider}, falling back to Claude`);
         return runViaClaude(config, systemPrompt, chatHistory, msg, sessionKey, signal);
@@ -1535,10 +1535,8 @@ async function runViaOpenRouter(
   // Add current message
   messages.push({ role: 'user', content: message });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
-
-  try {
+  // Timeout ⇒ ProviderTimeoutError (không phải AbortError trần) để withTimeoutFallback chuyển provider (GEM-1085).
+  return withApiTimeout('openrouter', 'OpenRouter', config.slug, AGENT_TIMEOUT_MS, signal, () => new AgentAbortedError(), async (fetchSignal) => {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -1553,7 +1551,7 @@ async function runViaOpenRouter(
         temperature: config.temperature,
         max_tokens: config.max_tokens,
       }),
-      signal: controller.signal,
+      signal: fetchSignal,
     });
 
     if (!res.ok) {
@@ -1566,9 +1564,7 @@ async function runViaOpenRouter(
     };
 
     return data.choices?.[0]?.message?.content?.trim() || '';
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 }
 
 /**
@@ -2960,10 +2956,7 @@ async function runViaNvidiaNim(
   }
   messages.push({ role: 'user', content: message });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
-
-  try {
+  return withApiTimeout('nvidia_nim', 'NVIDIA NIM', config.slug, AGENT_TIMEOUT_MS, signal, () => new AgentAbortedError(), async (fetchSignal) => {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -2979,7 +2972,7 @@ async function runViaNvidiaNim(
         top_p: 0.95,
         stream: false,
       }),
-      signal: controller.signal,
+      signal: fetchSignal,
     });
 
     if (!res.ok) {
@@ -3014,9 +3007,7 @@ async function runViaNvidiaNim(
     }
 
     return content;
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 }
 
 // ─── Helpers ───
