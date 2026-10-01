@@ -354,9 +354,27 @@ router.get('/campaigns', async (_req, res) => {
 // POST /api/channels/crm/campaigns
 router.post('/campaigns', async (req, res) => {
   try {
-    const { name, subject, template, segment } = req.body;
+    const { name, subject, template, segment, body, sendTime, scheduledAt } = req.body ?? {};
+    if (!String(name ?? '').trim() || !String(subject ?? '').trim() || !String(template ?? '').trim()) {
+      return res.status(400).json({ error: 'Thiếu tên, tiêu đề hoặc template' });
+    }
+    if (body != null && typeof body !== 'string') return res.status(400).json({ error: 'Nội dung email không hợp lệ' });
+    // Hẹn giờ: lưu scheduled_at + status 'scheduled'; giờ phải hợp lệ và ở tương lai.
+    let scheduled_at: string | null = null;
+    if (sendTime === 'schedule') {
+      const t = new Date(scheduledAt ?? '');
+      if (!scheduledAt || Number.isNaN(t.getTime())) return res.status(400).json({ error: 'Thời gian hẹn gửi không hợp lệ' });
+      if (t.getTime() <= Date.now()) return res.status(400).json({ error: 'Thời gian hẹn gửi phải ở tương lai' });
+      scheduled_at = t.toISOString();
+    }
     const { data, error } = await supabase.from('crm_email_campaigns')
-      .insert({ name, subject, template, segment_query: { segment }, status: 'draft' })
+      .insert({
+        name: name.trim(), subject: subject.trim(), template,
+        template_data: { body: body ?? '' },
+        segment_query: { segment },
+        scheduled_at,
+        status: scheduled_at ? 'scheduled' : 'draft',
+      })
       .select().single();
     if (error) return res.status(400).json({ error: error.message });
     res.status(201).json(data);
