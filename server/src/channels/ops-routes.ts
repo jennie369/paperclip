@@ -1167,20 +1167,86 @@ router.get('/scanner/stats', async (_req, res) => {
 
 router.get('/scanner/recent-patterns', async (_req, res) => { res.json([]); });
 
-router.post('/scanner/scan', async (req, res) => {
-  const { coin, timeframes } = req.body;
-  res.json({ success: true, message: `Scan triggered: ${coin || 'all'} [${(timeframes || []).join(',')}]` });
+// Chưa nối engine quét (engine sống ở gemral/gem-mobile). Trước 01/10 route trả success "Scan triggered"
+// mà không quét gì — cùng lớp lỗi stub với PUT /scanner/config (GEM-1107). Báo thật 501 để modal hiện lỗi.
+router.post('/scanner/scan', async (_req, res) => {
+  res.status(501).json({ error: 'Quét tay từ Paperclip chưa được nối với engine scanner — hãy quét trên gemral.com/scanner.' });
 });
 
 router.get('/scanner/win-rates', async (_req, res) => {
   res.json({ overall: 0.678, by_pattern: { DPD: 0.68, UPU: 0.71, UPD: 0.65, DPU: 0.69, 'H&S': 0.70, QM: 0.73, FL: 0.66, FTR: 0.64 } });
 });
 
+// Cấu hình scanner lưu ở system_config (key-value, value jsonb). Trước 01/10 PUT là stub trả success
+// mà không lưu gì → nút "Lưu cấu hình" giả vờ thành công (GEM-1107). Chỉ các trường chỉnh được mới ghi;
+// coins_active/timeframes là thông tin hiển thị, không nhận từ client.
+const SCANNER_CONFIG_KEY = 'ops.scanner.config';
+const SCANNER_CONFIG_DEFAULTS = {
+  coins_active: 437, timeframes: ['1H', '4H', 'Daily', 'Weekly'], push_enabled: true,
+  auto_scan_interval: '4h', alert_threshold: 70, daily_quota: 50, alert_channels: ['Telegram', 'Push'],
+};
+const SCANNER_INTERVALS = ['1h', '4h', '8h', 'daily'];
+const SCANNER_THRESHOLDS = [60, 70, 80];
+const SCANNER_CHANNELS = ['Telegram', 'Email', 'Push', 'War Room'];
+
+function validateScannerConfig(body: any): { value?: Record<string, any>; error?: string } {
+  const value: Record<string, any> = {};
+  if (body.auto_scan_interval !== undefined) {
+    if (!SCANNER_INTERVALS.includes(body.auto_scan_interval)) return { error: `auto_scan_interval phải là một trong: ${SCANNER_INTERVALS.join(', ')}` };
+    value.auto_scan_interval = body.auto_scan_interval;
+  }
+  if (body.alert_threshold !== undefined) {
+    const t = Number(body.alert_threshold);
+    if (!SCANNER_THRESHOLDS.includes(t)) return { error: `alert_threshold phải là một trong: ${SCANNER_THRESHOLDS.join(', ')}` };
+    value.alert_threshold = t;
+  }
+  if (body.daily_quota !== undefined) {
+    const q = Number(body.daily_quota);
+    if (!Number.isInteger(q) || q < 1 || q > 10000) return { error: 'daily_quota phải là số nguyên từ 1 đến 10000' };
+    value.daily_quota = q;
+  }
+  if (body.alert_channels !== undefined) {
+    if (!Array.isArray(body.alert_channels) || body.alert_channels.some((c: any) => !SCANNER_CHANNELS.includes(c))) {
+      return { error: `alert_channels chỉ nhận: ${SCANNER_CHANNELS.join(', ')}` };
+    }
+    value.alert_channels = [...new Set(body.alert_channels as string[])];
+  }
+  if (body.push_enabled !== undefined) {
+    if (typeof body.push_enabled !== 'boolean') return { error: 'push_enabled phải là true/false' };
+    value.push_enabled = body.push_enabled;
+  }
+  if (Object.keys(value).length === 0) return { error: 'Không có trường cấu hình hợp lệ nào để lưu' };
+  return { value };
+}
+
+async function readScannerConfig(): Promise<Record<string, any>> {
+  const { data, error } = await supabase.from('system_config').select('value').eq('key', SCANNER_CONFIG_KEY).maybeSingle();
+  if (error) throw error;
+  const saved = data?.value && typeof data.value === 'object' && !Array.isArray(data.value) ? data.value : {};
+  return { ...SCANNER_CONFIG_DEFAULTS, ...saved };
+}
+
 router.get('/scanner/config', async (_req, res) => {
-  res.json({ coins_active: 437, timeframes: ['1H', '4H', 'Daily', 'Weekly'], auto_scan_interval: '4h', alert_threshold: 70, push_enabled: true });
+  try { res.json(await readScannerConfig()); }
+  catch (err: any) { res.status(500).json({ error: `Không đọc được cấu hình scanner: ${err.message}` }); }
 });
 
-router.put('/scanner/config', async (req, res) => { res.json({ success: true }); });
+router.put('/scanner/config', async (req, res) => {
+  const { value, error: invalid } = validateScannerConfig(req.body || {});
+  if (invalid) return res.status(400).json({ error: invalid });
+  try {
+    // Gộp với bản đang lưu để lưu một phần không xoá các trường khác.
+    const current = await readScannerConfig();
+    const next: Record<string, any> = {};
+    for (const k of ['auto_scan_interval', 'alert_threshold', 'daily_quota', 'alert_channels', 'push_enabled']) next[k] = { ...current, ...value }[k];
+    const { error } = await supabase.from('system_config').upsert(
+      { key: SCANNER_CONFIG_KEY, value: next, category: 'scanner', description: 'Cấu hình Scanner (Paperclip ops)', updated_at: new Date().toISOString(), updated_by: 'board' },
+      { onConflict: 'key' },
+    );
+    if (error) throw error;
+    res.json({ success: true, config: { ...SCANNER_CONFIG_DEFAULTS, ...next } });
+  } catch (err: any) { res.status(500).json({ error: `Không lưu được cấu hình scanner: ${err.message}` }); }
+});
 
 // ═══ WORKFLOWS ═══
 
