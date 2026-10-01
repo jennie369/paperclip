@@ -25,6 +25,7 @@ import {
   getDefaultValues,
   type JsonSchemaNode,
 } from "@/components/JsonSchemaForm";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 /**
  * PluginSettings page component.
@@ -610,6 +611,10 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
       setSaveMessage({ type: "error", text: err.message || "Failed to save configuration." });
     },
   });
+
+  // Dirty-guard: cảnh báo đóng/reload tab khi đã chỉnh cấu hình plugin mà chưa Lưu.
+  // isDirty suy từ state thật (so với giá trị đã lưu); tắt khi đang gửi Lưu.
+  useUnsavedChangesGuard(isDirty, saveMutation.isPending);
 
   // Test configuration mutation
   const testMutation = useMutation({

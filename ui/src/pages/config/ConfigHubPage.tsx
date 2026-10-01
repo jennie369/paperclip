@@ -179,6 +179,12 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
+/** Bản nháp khác giá trị server? So từng field theo chuỗi — sau Lưu + refetch hai bên bằng nhau thì hết dirty. */
+function draftDiffersFromServer(draft: Record<string, any> | undefined, server: Record<string, any> | undefined): boolean {
+  if (!draft) return false;
+  return Object.entries(draft).some(([k, v]) => String(v ?? "") !== String(server?.[k] ?? ""));
+}
+
 function SectionHeader({ icon: Icon, title, right }: { icon: React.ComponentType<any>; title: string; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between mb-3">
@@ -348,6 +354,8 @@ function ChannelsAgentsTab() {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [agentEdits, setAgentEdits] = useState<Record<string, any>>({});
   const [loadingSoul, setLoadingSoul] = useState<string | null>(null);
+  // Nội dung SOUL.md đã tải/đã lưu — mốc để biết soul trong agentEdits có phải người dùng đã sửa hay chỉ là bản tải về.
+  const [soulBaseline, setSoulBaseline] = useState<Record<string, string>>({});
 
   const patchAgent = useMutation({
     mutationFn: async ({ slug, data }: { slug: string; data: Record<string, any> }) => {
@@ -396,6 +404,7 @@ function ChannelsAgentsTab() {
           ...prev,
           [slug]: { ...prev[slug], soul: data.content || "" },
         }));
+        setSoulBaseline((prev) => ({ ...prev, [slug]: data.content || "" }));
       }
     } finally {
       setLoadingSoul(null);
@@ -409,11 +418,13 @@ function ChannelsAgentsTab() {
       await patchAgent.mutateAsync({ slug, data: rest });
     }
     if (soul !== undefined) {
-      await fetch(`/api/channels/agent-configs/${slug}/files/SOUL.md`, {
+      const soulRes = await fetch(`/api/channels/agent-configs/${slug}/files/SOUL.md`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: soul }),
       });
+      // Chỉ coi SOUL.md là đã lưu khi server nhận — lỗi thì mốc giữ nguyên nên dirty-guard vẫn bật.
+      if (soulRes.ok) setSoulBaseline((prev) => ({ ...prev, [slug]: soul }));
     }
     qc.invalidateQueries({ queryKey: ["config-agents"] });
   }, [agentEdits, patchAgent, qc]);
@@ -428,6 +439,18 @@ function ChannelsAgentsTab() {
       [slug]: { ...prev[slug], [field]: value },
     }));
   };
+
+  // Dirty-guard cho cấu hình kênh + agent: đã chỉnh khác server mà chưa Lưu thì cảnh báo trước khi đóng/reload tab.
+  // channelEdits/agentEdits không bị xoá sau Lưu nên phải so với server (không dùng "có key" làm dirty).
+  const isDirty =
+    Object.entries(channelEdits).some(([name, edit]) =>
+      draftDiffersFromServer(edit, (channels || []).find((c: any) => c.name === name)))
+    || Object.entries(agentEdits).some(([slug, edit]) => {
+      const { soul, ...rest } = edit || {};
+      return draftDiffersFromServer(rest, (agents || []).find((a: any) => a.slug === slug))
+        || (soul !== undefined && soul !== (soulBaseline[slug] ?? ""));
+    });
+  useUnsavedChangesGuard(isDirty, saveChannel.isPending || patchAgent.isPending);
 
   return (
     <div className="space-y-4">
@@ -898,6 +921,12 @@ function APIIntegrationTab() {
       qc.invalidateQueries({ queryKey: ["config-hub"] });
     },
   });
+
+  // Dirty-guard: đang gõ dở API key khác giá trị đã lưu (bấm "Sửa" chưa gõ gì thì chưa dirty).
+  const isDirty = API_KEY_FIELDS.some(
+    (f) => f.id in editing && editing[f.id] !== (config?.[f.configKey] || ""),
+  );
+  useUnsavedChangesGuard(isDirty, saveKey.isPending);
 
   const testKey = async (field: ApiKeyField) => {
     setTesting(field.id);
