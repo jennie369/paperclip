@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimpleModal } from "./components/SimpleModal";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
+import { readJsonOrThrow } from "./components/readJsonOrThrow";
 
 function timeAgo(d?: string): string {
   if (!d) return '—';
@@ -69,9 +70,11 @@ export function EmailCampaignsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(d),
       });
-      return res.json();
+      return readJsonOrThrow(res, 'Lỗi tạo campaign');
     },
-    onSettled: () => { qc.invalidateQueries({ queryKey: ['crm', 'campaigns'] }); setShowCreate(false); setForm(defaultForm); },
+    // Chỉ đóng modal + xoá form khi API thành công; lỗi → giữ nguyên dữ liệu nhập, báo lỗi trong modal.
+    onSuccess: () => { setShowCreate(false); setForm(defaultForm); },
+    onSettled: () => { qc.invalidateQueries({ queryKey: ['crm', 'campaigns'] }); },
   });
 
   const sendMut = useMutation({
@@ -101,10 +104,12 @@ export function EmailCampaignsPage() {
     <div className="space-y-4 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Email Campaigns</h1>
-        <Button size="sm" onClick={() => { setForm(defaultForm); setShowCreate(true); }}>
+        <Button size="sm" onClick={() => { createMut.reset(); setForm(defaultForm); setShowCreate(true); }}>
           <Plus className="mr-1.5 h-4 w-4" /> Tạo Campaign
         </Button>
       </div>
+
+      {sendMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{sendMut.error.message}</p>}
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -165,6 +170,7 @@ export function EmailCampaignsPage() {
         </Button>
       </>}>
         <div className="space-y-4">
+          {createMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{createMut.error.message}</p>}
           <div><label className="text-sm font-medium">Tên campaign *</label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="VD: Welcome Q1 2026" /></div>
           <div><label className="text-sm font-medium">Tiêu đề email *</label><Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="VD: Chào mừng bạn đến Gemral!" /></div>
           <div><label className="text-sm font-medium">Template</label>

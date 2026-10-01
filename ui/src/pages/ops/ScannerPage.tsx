@@ -30,33 +30,54 @@ export function ScannerPage() {
   const { data: stats } = useQuery({ queryKey: ['ops', 'scanner', 'stats'], queryFn: () => opsApi.getScannerStats(), staleTime: 30_000 });
   const { data: patterns, isLoading } = useQuery({ queryKey: ['ops', 'scanner', 'patterns'], queryFn: () => opsApi.getRecentPatterns(20), staleTime: 15_000 });
   const { data: winRates } = useQuery({ queryKey: ['ops', 'scanner', 'win-rates'], queryFn: () => opsApi.getWinRates(), staleTime: 60_000 });
-  const { data: config } = useQuery({ queryKey: ['ops', 'scanner', 'config'], queryFn: () => opsApi.getScannerConfig(), staleTime: 60_000, enabled: showConfigModal });
+  const { data: config, isError: configLoadFailed, error: configLoadError } = useQuery({ queryKey: ['ops', 'scanner', 'config'], queryFn: () => opsApi.getScannerConfig(), staleTime: 60_000, enabled: showConfigModal });
 
+  // Modal cấu hình là CONTROLLED: giá trị hiển thị = mặc định ← config từ server ← phần người dùng đã chỉnh.
+  // Nút Lưu gửi đúng giá trị đang hiển thị (không phải config gốc chưa chỉnh).
+  const [configEdits, setConfigEdits] = useState<Record<string, any>>({});
+  const configView: Record<string, any> = {
+    auto_scan_interval: '4h', alert_threshold: 70, daily_quota: 50, alert_channels: ['Telegram', 'Push'],
+    ...config, ...configEdits,
+  };
+  const editConfig = (patch: Record<string, any>) => setConfigEdits(prev => ({ ...prev, ...patch }));
+  const toggleChannel = (ch: string) => editConfig({
+    alert_channels: configView.alert_channels.includes(ch)
+      ? configView.alert_channels.filter((c: string) => c !== ch)
+      : [...configView.alert_channels, ch],
+  });
+
+  // Chỉ đóng modal khi API thành công (onSuccess); lỗi → giữ nguyên lựa chọn, báo lỗi trong modal.
   const scanMut = useMutation({
     mutationFn: (d: any) => opsApi.triggerScan(d),
-    onSettled: () => { qc.invalidateQueries({ queryKey: ['ops', 'scanner'] }); setShowScanModal(false); },
+    onSuccess: () => setShowScanModal(false),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ['ops', 'scanner'] }); },
   });
 
   const configMut = useMutation({
     mutationFn: (d: any) => opsApi.updateScannerConfig(d),
-    onSettled: () => { qc.invalidateQueries({ queryKey: ['ops', 'scanner'] }); setShowConfigModal(false); },
+    onSuccess: () => { setShowConfigModal(false); setConfigEdits({}); },
+    onSettled: () => { qc.invalidateQueries({ queryKey: ['ops', 'scanner'] }); },
   });
 
   const alertMut = useMutation({
-    mutationFn: (pattern: any) => fetch('/api/ops/scanner/send-alert', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        symbol: pattern.symbol || pattern.coin,
-        pattern: pattern.pattern_name || pattern.pattern,
-        direction: pattern.direction,
-        timeframe: pattern.timeframe || pattern.tf,
-        entry: pattern.entry,
-        stop_loss: pattern.stop_loss,
-        take_profit: pattern.take_profit,
-        score: pattern.score,
-      }),
-    }),
+    mutationFn: async (pattern: any) => {
+      const res = await fetch('/api/ops/scanner/send-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: pattern.symbol || pattern.coin,
+          pattern: pattern.pattern_name || pattern.pattern,
+          direction: pattern.direction,
+          timeframe: pattern.timeframe || pattern.tf,
+          entry: pattern.entry,
+          stop_loss: pattern.stop_loss,
+          take_profit: pattern.take_profit,
+          score: pattern.score,
+        }),
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any).error || `Gửi alert thất bại (${res.status})`); }
+      return res;
+    },
     onSettled: () => { setAlertTarget(null); qc.invalidateQueries({ queryKey: ['ops', 'scanner'] }); },
   });
 
@@ -70,10 +91,12 @@ export function ScannerPage() {
           <p className="text-sm text-muted-foreground mt-0.5">24 patterns · 437+ coins · Quét thủ công · Alerts</p>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setShowConfigModal(true)}><Settings className="h-4 w-4 mr-1" /> Cấu hình</Button>
-          <Button size="sm" onClick={() => setShowScanModal(true)}><Play className="h-4 w-4 mr-1" /> Quét ngay</Button>
+          <Button size="sm" variant="outline" onClick={() => { configMut.reset(); setConfigEdits({}); setShowConfigModal(true); }}><Settings className="h-4 w-4 mr-1" /> Cấu hình</Button>
+          <Button size="sm" onClick={() => { scanMut.reset(); setShowScanModal(true); }}><Play className="h-4 w-4 mr-1" /> Quét ngay</Button>
         </div>
       </div>
+
+      {alertMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{alertMut.error.message}</p>}
 
       {/* Stats */}
       {stats && (
@@ -195,6 +218,7 @@ export function ScannerPage() {
         </Button>
       </>}>
         <div className="space-y-4">
+          {scanMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{scanMut.error.message}</p>}
           <div>
             <label className="text-sm font-medium">Coin</label>
             <Input value={scanCoin} onChange={e => setScanCoin(e.target.value)} placeholder="BTC/USDT hoặc để trống = tất cả" />
@@ -215,13 +239,17 @@ export function ScannerPage() {
       {/* Config modal */}
       <SimpleModal open={showConfigModal} onClose={() => setShowConfigModal(false)} title="Cấu hình Scanner" footer={<>
         <Button variant="outline" onClick={() => setShowConfigModal(false)}>Đóng</Button>
-        <Button onClick={() => configMut.mutate(config)}>Lưu cấu hình</Button>
+        <Button disabled={!config || configMut.isPending || !(Number(configView.daily_quota) >= 1)} onClick={() => configMut.mutate(configView)}>
+          {configMut.isPending ? 'Đang lưu...' : 'Lưu cấu hình'}
+        </Button>
       </>}>
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">Cấu hình scanner sẽ được cập nhật từ system_config.</p>
+          {configLoadFailed && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">Không tải được cấu hình: {(configLoadError as Error).message}</p>}
+          {configMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{configMut.error.message}</p>}
           <div>
             <label className="text-sm font-medium">Auto-scan interval</label>
-            <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+            <select value={configView.auto_scan_interval} onChange={e => editConfig({ auto_scan_interval: e.target.value })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
               <option value="1h">Mỗi 1 giờ</option>
               <option value="4h">Mỗi 4 giờ</option>
               <option value="8h">Mỗi 8 giờ</option>
@@ -230,7 +258,7 @@ export function ScannerPage() {
           </div>
           <div>
             <label className="text-sm font-medium">Alert threshold</label>
-            <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+            <select value={String(configView.alert_threshold)} onChange={e => editConfig({ alert_threshold: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
               <option value="60">Score &ge; 60%</option>
               <option value="70">Score &ge; 70%</option>
               <option value="80">Score &ge; 80%</option>
@@ -238,7 +266,7 @@ export function ScannerPage() {
           </div>
           <div>
             <label className="text-sm font-medium">Quota hàng ngày</label>
-            <Input type="number" defaultValue={config?.daily_quota || 50} placeholder="Số lần quét tối đa/ngày" />
+            <Input type="number" min={1} value={configView.daily_quota} onChange={e => editConfig({ daily_quota: e.target.value === '' ? '' : Number(e.target.value) })} placeholder="Số lần quét tối đa/ngày" />
             <p className="text-xs text-muted-foreground mt-1">Giới hạn số lần quét mỗi ngày cho mỗi tier</p>
           </div>
           <div>
@@ -246,7 +274,7 @@ export function ScannerPage() {
             <div className="flex gap-3 mt-1">
               {['Telegram', 'Email', 'Push', 'War Room'].map(ch => (
                 <label key={ch} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input type="checkbox" defaultChecked={ch === 'Telegram' || ch === 'Push'} className="rounded" />
+                  <input type="checkbox" checked={configView.alert_channels.includes(ch)} onChange={() => toggleChannel(ch)} className="rounded" />
                   {ch}
                 </label>
               ))}

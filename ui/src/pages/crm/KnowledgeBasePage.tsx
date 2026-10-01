@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimpleModal } from "./components/SimpleModal";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
+import { readJsonOrThrow } from "./components/readJsonOrThrow";
 
 const collectionTypes = [
   { value: 'document', label: 'Tài liệu' },
@@ -55,42 +56,48 @@ export function KnowledgeBasePage() {
   const createColMut = useMutation({
     mutationFn: async (d: any) => {
       const r = await fetch('/api/channels/crm/kb/collections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
-      return r.json();
+      return readJsonOrThrow(r, 'Lỗi tạo bộ sưu tập');
     },
-    onSettled: () => { inv(); setShowCreate(false); setColForm({ name: '', description: '', collection_type: 'document' }); },
+    // Chỉ đóng modal + xoá form khi API thành công; lỗi → giữ nguyên dữ liệu nhập, báo lỗi trong modal.
+    onSuccess: () => { setShowCreate(false); setColForm({ name: '', description: '', collection_type: 'document' }); },
+    onSettled: inv,
   });
 
   const deleteColMut = useMutation({
-    mutationFn: async (id: string) => { await fetch(`/api/channels/crm/kb/collections/${id}`, { method: 'DELETE' }); },
+    mutationFn: async (id: string) => {
+      const r = await fetch(`/api/channels/crm/kb/collections/${id}`, { method: 'DELETE' });
+      await readJsonOrThrow(r, 'Lỗi xóa bộ sưu tập');
+    },
     onSettled: inv,
   });
 
   const addFAQMut = useMutation({
     mutationFn: async (d: any) => {
       const r = await fetch('/api/channels/crm/kb/faq', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
-      return r.json();
+      return readJsonOrThrow(r, 'Lỗi thêm FAQ');
     },
-    onSettled: () => { inv(); setShowFAQ(false); setFaqForm({ question: '', answer: '', collection_id: '' }); },
+    onSuccess: () => { setShowFAQ(false); setFaqForm({ question: '', answer: '', collection_id: '' }); },
+    onSettled: inv,
   });
 
   const syncShopify = async () => {
     setSyncMsg('Đang sync sản phẩm Shopify...');
     try {
       const r = await fetch('/api/channels/crm/kb/sync/shopify', { method: 'POST' });
-      const d = await r.json();
+      const d = await readJsonOrThrow(r, 'Lỗi sync Shopify');
       setSyncMsg(d.message || 'Đã bắt đầu sync');
       setTimeout(() => { inv(); setSyncMsg(''); }, 5000);
-    } catch { setSyncMsg('Lỗi sync Shopify'); }
+    } catch (e) { setSyncMsg((e as Error).message || 'Lỗi sync Shopify'); }
   };
 
   const syncCourses = async () => {
     setSyncMsg('Đang sync khóa học...');
     try {
       const r = await fetch('/api/channels/crm/kb/sync/courses', { method: 'POST' });
-      const d = await r.json();
+      const d = await readJsonOrThrow(r, 'Lỗi sync khóa học');
       setSyncMsg(d.message || 'Đã bắt đầu sync');
       setTimeout(() => { inv(); setSyncMsg(''); }, 5000);
-    } catch { setSyncMsg('Lỗi sync khóa học'); }
+    } catch (e) { setSyncMsg((e as Error).message || 'Lỗi sync khóa học'); }
   };
 
   const addDocMut = useMutation({
@@ -99,9 +106,10 @@ export function KnowledgeBasePage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ collection_id: collectionId, title, content }),
       });
-      return r.json();
+      return readJsonOrThrow(r, 'Lỗi thêm tài liệu');
     },
-    onSettled: () => { inv(); setShowAddDoc(null); setDocForm({ title: '', content: '' }); },
+    onSuccess: () => { setShowAddDoc(null); setDocForm({ title: '', content: '' }); },
+    onSettled: inv,
   });
 
   // Dirty-guard: một trong 3 modal (tạo bộ sưu tập / FAQ / tài liệu) đang mở và đã nhập nội dung
@@ -129,7 +137,7 @@ export function KnowledgeBasePage() {
     <div className="space-y-4 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Knowledge Base</h1>
-        <Button size="sm" onClick={() => setShowCreate(true)}>
+        <Button size="sm" onClick={() => { createColMut.reset(); setShowCreate(true); }}>
           <Plus className="mr-1.5 h-4 w-4" /> Tạo bộ sưu tập
         </Button>
       </div>
@@ -145,7 +153,7 @@ export function KnowledgeBasePage() {
 
       {/* Quick Actions */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={() => setShowFAQ(true)}>
+        <Button variant="outline" size="sm" onClick={() => { addFAQMut.reset(); setShowFAQ(true); }}>
           <Plus className="mr-1.5 h-4 w-4" /> Thêm FAQ
         </Button>
         <Button variant="outline" size="sm" onClick={syncShopify}>
@@ -155,6 +163,7 @@ export function KnowledgeBasePage() {
           Sync Khóa học
         </Button>
         {syncMsg && <span className="text-sm text-blue-600 self-center">{syncMsg}</span>}
+        {deleteColMut.isError && <span role="alert" className="text-sm text-red-600 self-center">{deleteColMut.error.message}</span>}
       </div>
 
       {/* Search Test */}
@@ -210,7 +219,7 @@ export function KnowledgeBasePage() {
                 <td className="px-4 py-3 text-right tabular-nums">{c.chunk_count}</td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
-                    <button onClick={() => { setShowAddDoc(c.id); setDocForm({ title: '', content: '' }); }} className="p-1 rounded hover:bg-blue-500/10 text-blue-600" title="Thêm tài liệu">
+                    <button onClick={() => { addDocMut.reset(); setShowAddDoc(c.id); setDocForm({ title: '', content: '' }); }} className="p-1 rounded hover:bg-blue-500/10 text-blue-600" title="Thêm tài liệu">
                       <FileText className="h-4 w-4" />
                     </button>
                     <button onClick={() => deleteColMut.mutate(c.id)} className="p-1 rounded hover:bg-red-500/10 text-red-600" title="Xóa">
@@ -230,6 +239,7 @@ export function KnowledgeBasePage() {
         <Button disabled={!colForm.name.trim() || createColMut.isPending} onClick={() => createColMut.mutate(colForm)}>Tạo</Button>
       </>}>
         <div className="space-y-3">
+          {createColMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{createColMut.error.message}</p>}
           <div><label className="text-sm font-medium">Tên *</label><Input value={colForm.name} onChange={e => setColForm(f => ({ ...f, name: e.target.value }))} placeholder="VD: Sản phẩm đá phong thủy" /></div>
           <div><label className="text-sm font-medium">Mô tả</label><Input value={colForm.description} onChange={e => setColForm(f => ({ ...f, description: e.target.value }))} /></div>
           <div><label className="text-sm font-medium">Loại</label>
@@ -247,6 +257,7 @@ export function KnowledgeBasePage() {
         </Button>
       </>}>
         <div className="space-y-3">
+          {addFAQMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{addFAQMut.error.message}</p>}
           <div><label className="text-sm font-medium">Bộ sưu tập</label>
             <select value={faqForm.collection_id} onChange={e => setFaqForm(f => ({ ...f, collection_id: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
               <option value="">— Chọn bộ sưu tập —</option>
@@ -267,6 +278,7 @@ export function KnowledgeBasePage() {
         </Button>
       </>}>
         <div className="space-y-3">
+          {addDocMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{addDocMut.error.message}</p>}
           <div><label className="text-sm font-medium">Tiêu đề</label><Input value={docForm.title} onChange={e => setDocForm(f => ({ ...f, title: e.target.value }))} placeholder="VD: Catalog Q1 2026" /></div>
           <div><label className="text-sm font-medium">Nội dung *</label>
             <textarea value={docForm.content} onChange={e => setDocForm(f => ({ ...f, content: e.target.value }))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[150px]" placeholder="Dán nội dung tài liệu vào đây..." /></div>
