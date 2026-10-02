@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/context/ToastContext";
+import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 
 // ─── Constants ────────────────────────────────────────────────────
 const ACCOUNTS = [
@@ -235,9 +236,10 @@ function ScriptExpandPanel({ script, onUpdate }: { script: any; onUpdate?: (id: 
   const approveMut = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/ops/content-pipeline/scripts/${script.id}/approve`, { method: "POST" });
-      return res.json();
+      return readJsonOrThrow(res, "Lỗi duyệt bài");
     },
     onSuccess: () => { pushToast({ title: "Đã duyệt bài", tone: "success" }); qc.invalidateQueries({ queryKey: ["planner"] }); },
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   const genMut = useMutation({
@@ -246,9 +248,10 @@ function ScriptExpandPanel({ script, onUpdate }: { script: any; onUpdate?: (id: 
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ script_ids: [script.id] }),
       });
-      return res.json();
+      return readJsonOrThrow(res, "Lỗi tạo nội dung");
     },
     onSuccess: (d) => { pushToast({ title: d.message, tone: "success" }); qc.invalidateQueries({ queryKey: ["planner"] }); },
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   return (
@@ -530,10 +533,10 @@ export function PlannerBoard() {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ script_id: scriptId, date, time, account }),
       });
-      return res.json();
+      return readJsonOrThrow(res, "Lỗi gán bài");
     },
     onSuccess: invalidate,
-    onError: () => pushToast({ title: "Lỗi gán bài", tone: "error" }),
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   const unassignMut = useMutation({
@@ -542,9 +545,10 @@ export function PlannerBoard() {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ script_id: scriptId }),
       });
-      return res.json();
+      return readJsonOrThrow(res, "Lỗi bỏ gán bài");
     },
     onSuccess: invalidate,
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   const parseMut = useMutation({

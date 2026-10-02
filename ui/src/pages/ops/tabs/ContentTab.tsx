@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { opsApi } from "@/api/ops";
 import { SimpleModal } from "../../crm/components/SimpleModal";
 import { useToast } from "@/context/ToastContext";
+import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 import { useNavigate, Link } from "@/lib/router";
 import { supabase } from "@/lib/supabaseClient";
 // BatchJobsView moved to ContentPipelinePage aigen tab (2026-04-18).
@@ -1831,12 +1832,13 @@ export function ContentTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
       });
-      return res.json();
+      return readJsonOrThrow(res, 'Lỗi kiểm tra compliance');
     },
     onSuccess: (data) => pushToast({
       title: data?.pass ? '✅ Compliance OK' : `❌ Vi phạm: ${(data?.violations || []).join(', ')}`,
       tone: data?.pass ? 'success' : 'error',
     }),
+    onError: (e: any) => pushToast({ title: e.message, tone: 'error' }),
   });
 
   // Sort state (multi-sort)

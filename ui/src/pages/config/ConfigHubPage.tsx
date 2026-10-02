@@ -42,6 +42,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
+import { useToast } from "@/context/ToastContext";
+import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 import {
   Tooltip,
   TooltipTrigger,
@@ -1128,6 +1130,7 @@ function APIIntegrationTab() {
 
 function EmailTemplatesTab() {
   const qc = useQueryClient();
+  const { pushToast } = useToast();
 
   const { data: config } = useQuery({
     queryKey: ["config-hub"],
@@ -1160,14 +1163,16 @@ function EmailTemplatesTab() {
   const saveConfig = useMutation({
     mutationFn: async (pairs: Record<string, string>) => {
       for (const [key, value] of Object.entries(pairs)) {
-        await fetch("/api/system/config", {
+        const res = await fetch("/api/system/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ key, value }),
         });
+        await readJsonOrThrow(res, `Lỗi lưu cấu hình ${key}`);
       }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-hub"] }),
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   const handleSendTest = async (templateKey: string) => {

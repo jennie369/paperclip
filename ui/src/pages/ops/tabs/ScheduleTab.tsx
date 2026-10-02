@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/context/ToastContext";
+import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 
 // ─── Constants ───────────────────────────────────────────────────
 const ACCOUNTS = [
@@ -167,10 +168,10 @@ export function ScheduleTab() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ script_id: scriptId, date, time, account }),
       });
-      return res.json();
+      return readJsonOrThrow(res, 'Lỗi gán bài');
     },
     onSuccess: invalidate,
-    onError: () => pushToast({ title: 'Lỗi gán bài', tone: 'error' }),
+    onError: (e: any) => pushToast({ title: e.message, tone: 'error' }),
   });
 
   const unassignMut = useMutation({
@@ -179,9 +180,10 @@ export function ScheduleTab() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ script_id: scriptId }),
       });
-      return res.json();
+      return readJsonOrThrow(res, 'Lỗi bỏ gán bài');
     },
     onSuccess: invalidate,
+    onError: (e: any) => pushToast({ title: e.message, tone: 'error' }),
   });
 
   const parseMut = useMutation({

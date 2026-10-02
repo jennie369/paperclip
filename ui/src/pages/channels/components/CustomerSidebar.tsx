@@ -16,6 +16,8 @@ import { getChannelVisual } from "./channelConfig";
 import type { CommandCrmProfile } from "@/components/crm-messaging/command-center/types";
 import { CommandCustomer360 } from "@/components/crm-messaging/command-center/CommandCustomer360";
 import { mapCrm } from "@/components/crm-messaging/command-center/adapters";
+import { useToast } from "@/context/ToastContext";
+import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 
 const defaultTicketForm = { title: "", description: "", category: "general", priority: "medium", status: "open", assigned_to_agent: "" };
 
@@ -314,6 +316,7 @@ function InteractionItem({
 export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
   const customer = conv.customer;
   const channelCfg = getChannelVisual(conv.channel_name);
   const displayName = customer?.display_name || conv.sender_name || "Không rõ";
@@ -448,13 +451,14 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const syncMutation = useMutation({
     mutationFn: () =>
       customer?.id
-        ? fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).then((r) => r.json())
+        ? fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).then((r) => readJsonOrThrow(r, "Lỗi đồng bộ Gemral"))
         : Promise.resolve(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       // Panel Gemral/khối đọc từ full record → phải refetch để hiện data vừa sync.
       if (customer?.id) queryClient.invalidateQueries({ queryKey: ["crm", "customer", customer.id] });
     },
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   // ── Tra & liên kết user từ DB theo phone/email (link Gemral + sync) ──
@@ -539,11 +543,12 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customer_id: customerId }),
-      }).then((r) => r.json()),
+      }).then((r) => readJsonOrThrow(r, "Lỗi liên kết khách hàng")),
     onSuccess: () => {
       setCustSearch("");
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   // Đọc từ full record (getCustomer) — list /conversations KHÔNG select gemral_data → customer.gemral_data luôn undefined.

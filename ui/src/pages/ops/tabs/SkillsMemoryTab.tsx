@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SimpleModal } from "../../crm/components/SimpleModal";
 import { useToast } from "@/context/ToastContext";
+import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 
 const SKILL_FILES = [
   { name: "SKILL-FACEBOOK-POSTING-PLAYWRIGHT.md", desc: "Quy trình đăng Facebook qua Playwright" },
@@ -53,9 +54,10 @@ export function SkillsMemoryTab() {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: fileContent }),
       });
-      return res.json();
+      return readJsonOrThrow(res, "Lỗi lưu skill");
     },
     onSuccess: () => { pushToast({ title: "Đã lưu", tone: "success" }); setEditing(false); },
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   const complianceMut = useMutation({
@@ -64,12 +66,13 @@ export function SkillsMemoryTab() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: text }),
       });
-      return res.json();
+      return readJsonOrThrow(res, "Lỗi kiểm tra compliance");
     },
     onSuccess: (data) => pushToast({
       title: data?.pass ? "✅ Compliance OK" : `❌ Vi phạm: ${(data?.violations || []).join(", ")}`,
       tone: data?.pass ? "success" : "error",
     }),
+    onError: (e: any) => pushToast({ title: e.message, tone: "error" }),
   });
 
   return (
