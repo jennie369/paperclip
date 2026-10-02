@@ -112,9 +112,19 @@ describe('router wiring (guard chống revert)', () => {
     expect(helper).toContain('runViaGemini(fbConfig');
     expect(helper).toContain('runViaClaude(fbConfig');
   });
-  it("fallback claude⇄gemini dùng phiên trắng (sessionKey '') — id phiên provider kia không resume được", () => {
+  it("MỌI fallback (kể cả agy→claude) dùng phiên trắng (sessionKey '') — không resume phiên lẻ tẻ thiếu lượt, phình token", () => {
     const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
-    expect(helper).toContain("config.provider === 'antigravity' ? sessionKey : ''");
+    expect(helper).toContain("const fbSessionKey = '';");
+    expect(helper).not.toContain("config.provider === 'antigravity' ? sessionKey");
+  });
+  it('runViaClaude cách ly môi trường dev: không nạp settings user/project/local + chỉ MCP của agent (02/10, 235k token/lượt)', () => {
+    const claude = src.slice(src.indexOf('async function runViaClaude('), src.indexOf('async function runViaGemini('));
+    expect(claude).toContain("'--setting-sources=',");
+    expect(claude).toContain("'--strict-mcp-config',");
+    // Không được tách thành 2 đối số ('--setting-sources', '') — nhánh shell:true làm rơi chuỗi rỗng.
+    expect(claude).not.toMatch(/'--setting-sources',\s*''/);
+    // Timeout phải để lại dấu vết (stdout/stderr cuối) để chẩn được treo ở đâu.
+    expect(claude).toContain('Claude CLI timeout ${config.slug}');
   });
   it('3 runner CLI ném ProviderTimeoutError khi quá hạn (không phải Error trần) + guard timedOut ở close', () => {
     const claude = src.slice(src.indexOf('async function runViaClaude('), src.indexOf('async function runViaGemini('));

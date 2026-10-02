@@ -372,7 +372,10 @@ export async function runAgentWithConfig(
             // agy không lưu phiên CLI nên claude fallback được resume phiên claude của thread (như cũ).
             // claude⇄gemini: id phiên của provider kia KHÔNG resume được ở CLI này → phiên trắng ('' = không
             // đọc/ghi channel_sessions); lịch sử vẫn đủ vì phiên mới nhận buildFullPrompt(history).
-            const fbSessionKey = config.provider === 'antigravity' ? sessionKey : '';
+            // 02/10: agy→claude cũng KHÔNG resume nữa — phiên claude chỉ sinh ở các lần fallback lẻ tẻ nên
+            // thiếu các lượt agy trả lời xen giữa, lại tích token (235k/lượt) → resume treo tới timeout.
+            // Phiên mới nhận buildFullPrompt(history) = lịch sử đủ + nhẹ.
+            const fbSessionKey = '';
             const out = fb.provider === 'gemini'
               ? await runViaGemini(fbConfig, systemPrompt, chatHistory, msg, fbSessionKey, signal)
               : await runViaClaude(fbConfig, systemPrompt, chatHistory, msg, fbSessionKey, signal);
@@ -577,6 +580,13 @@ async function runViaClaude(
     // 2026-06-10: scrub then collapsed them to a lone backtick). CLI --settings
     // overrides project-local settings, so this neutralizes it at the source.
     '--settings', '{"outputStyle":"default"}',
+    // Cách ly môi trường dev (02/10, khách Thúy #4848 bị bỏ rơi 14'): cwd=PROJECT_ROOT kéo theo
+    // hook SessionStart + 27 plugin user + mọi MCP dự án (.mcp.json) → 1 lượt CSKH tốn 235k token
+    // input, resume nhân đôi → treo tới AGENT_TIMEOUT. Không nạp settings user/project/local
+    // (chỉ --settings trên) + chỉ MCP của agent: đo prompt thử 133k → 43k token.
+    // 1 token '=' (KHÔNG tách '', ''): nhánh dự phòng shell:true của spawnHidden làm rơi đối số rỗng.
+    '--setting-sources=',
+    '--strict-mcp-config',
   ];
 
   if (sessionId) {
@@ -671,6 +681,9 @@ async function runViaClaude(
     const timeout = setTimeout(() => {
       settled = true;
       child.kill('SIGTERM');
+      // Dấu vết treo ở đâu (trước đây bỏ trống → không chẩn được): sự kiện stream cuối + stderr cuối.
+      const lastEvent = stdout.trim().split('\n').pop()?.slice(0, 200) || '(chưa có stdout)';
+      console.error(`[Router] Claude CLI timeout ${config.slug} (resume=${sessionId ? 'yes' : 'no'}) last_stdout=${lastEvent} stderr=${stderr.slice(-300) || '(trống)'}`);
       reject(new ProviderTimeoutError('claude', 'Claude', config.slug));
     }, AGENT_TIMEOUT_MS);
     const onAbort = () => {
