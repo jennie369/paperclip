@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { EmailCampaignsPage } from "../crm/EmailCampaignsPage";
 import { KnowledgeBasePage } from "../crm/KnowledgeBasePage";
 import { ScannerPage } from "../ops/ScannerPage";
+import { TicketListPage } from "../crm/TicketListPage";
+import { MemoryRouter } from "react-router-dom";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -23,6 +25,7 @@ let container: HTMLDivElement;
 let root: Root;
 let calls: Call[];
 let writeStatus: number;
+const TICKET = { id: "t1", ticket_number: "TK-001", title: "Phiếu cũ", description: "", category: "general", priority: "medium", status: "open" };
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -32,11 +35,13 @@ beforeEach(() => {
   writeStatus = 500;
   container = document.createElement("div");
   document.body.appendChild(container);
+  vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined); // TicketListPage báo chuông khi tạo xong
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = (init?.method || "GET").toUpperCase();
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (method === "GET") {
       if (url.endsWith("/scanner/config")) return json(200, { auto_scan_interval: "4h", alert_threshold: 70 });
+      if (url.includes("/crm/tickets") && !url.includes("/stats")) return json(200, { data: [TICKET], total: 1 });
       if (url.includes("/kb/stats")) return json(200, { collections: 0, documents: 0, chunks: 0 });
       if (url.includes("/scanner/") && !url.includes("/recent-patterns")) return json(200, {});
       return json(200, []);
@@ -49,6 +54,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 async function flush() {
@@ -158,6 +164,73 @@ describe("ScannerPage — modal cấu hình", () => {
   });
 });
 
+describe("TicketListPage — modal tạo / sửa / xoá phiếu (GEM-1113)", () => {
+  const buttonByText = (text: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>("button")).filter((b) => b.textContent?.includes(text)).pop();
+  const titleInput = () => inputByPlaceholder("Nhập tiêu đề");
+
+  async function fillCreate() {
+    await mount(<MemoryRouter><TicketListPage /></MemoryRouter>);
+    await click(byText("button", "Tạo phiếu mới"));
+    await setValue(titleInput(), "Khách chưa nhận hàng");
+    await click(buttonByText("Tạo phiếu"));
+  }
+
+  it("tạo: API lỗi → modal còn mở, giữ nguyên dữ liệu nhập, hiện lỗi", async () => {
+    await fillCreate();
+    expect(calls.some((c) => c.method === "POST")).toBe(true);
+    expect(document.body.textContent).toContain("Tạo phiếu hỗ trợ mới");
+    expect(titleInput()?.value).toBe("Khách chưa nhận hàng");
+    expect(document.querySelector("[role=alert]")?.textContent).toContain("boom");
+  });
+
+  it("tạo: API thành công → modal đóng", async () => {
+    writeStatus = 201;
+    await fillCreate();
+    expect(document.body.textContent).not.toContain("Tạo phiếu hỗ trợ mới");
+  });
+
+  async function fillEdit() {
+    await mount(<MemoryRouter><TicketListPage /></MemoryRouter>);
+    await click(document.querySelector<HTMLElement>("button[title^='Sửa']") ?? undefined);
+    await setValue(titleInput(), "Phiếu đã sửa");
+    await click(buttonByText("Lưu thay đổi"));
+  }
+
+  it("sửa: API lỗi → modal còn mở, giữ nguyên chỉnh sửa, hiện lỗi", async () => {
+    await fillEdit();
+    expect(calls.some((c) => c.method === "PUT")).toBe(true);
+    expect(document.body.textContent).toContain("Sửa phiếu TK-001");
+    expect(titleInput()?.value).toBe("Phiếu đã sửa");
+    expect(document.querySelector("[role=alert]")?.textContent).toContain("boom");
+  });
+
+  it("sửa: API thành công → modal đóng", async () => {
+    writeStatus = 200;
+    await fillEdit();
+    expect(document.body.textContent).not.toContain("Sửa phiếu TK-001");
+  });
+
+  async function confirmDelete() {
+    await mount(<MemoryRouter><TicketListPage /></MemoryRouter>);
+    await click(document.querySelector<HTMLElement>("button[title='Xóa']") ?? undefined);
+    await click(buttonByText("Xóa phiếu"));
+  }
+
+  it("xoá: API lỗi → modal còn mở, hiện lỗi (không báo xoá thành công)", async () => {
+    await confirmDelete();
+    expect(calls.some((c) => c.method === "DELETE")).toBe(true);
+    expect(document.body.textContent).toContain("Xác nhận xóa phiếu");
+    expect(document.querySelector("[role=alert]")?.textContent).toContain("boom");
+  });
+
+  it("xoá: API thành công → modal đóng", async () => {
+    writeStatus = 200;
+    await confirmDelete();
+    expect(document.body.textContent).not.toContain("Xác nhận xóa phiếu");
+  });
+});
+
 // Hàng rào hồi quy (GEM-1090): cấm đóng modal / xoá form trong onSettled — onSettled chạy cả khi API LỖI.
 // Đóng modal + xoá form phải nằm trong onSuccess.
 describe("lớp lỗi: onSettled đóng modal / xoá form", () => {
@@ -167,8 +240,8 @@ describe("lớp lỗi: onSettled đóng modal / xoá form", () => {
       e.isDirectory() ? (e.name === "__tests__" ? [] : walk(path.join(dir, e.name))) : e.name.endsWith(".tsx") ? [path.join(dir, e.name)] : []);
   const BAD = /onSettled:[^\n]*(set\w*(Show|Open|Modal)\w*\(\s*(false|null)\s*\)|set\w*Form\()/;
 
-  // Nợ đã đăng ký ledger (xoá dòng khi sửa xong): TicketListPage → ENG-1001-F1090-03-e70e7a
-  const KNOWN_DEBT = new Set(["crm/TicketListPage.tsx"]);
+  // Nợ đã đăng ký ledger (thêm tên file + mã ENG khi còn nợ). Trống từ GEM-1113 (TicketListPage đã sửa).
+  const KNOWN_DEBT = new Set<string>();
 
   it("không trang nào gọi setShow*/setOpen*/set*Form trong onSettled", () => {
     const offenders = walk(pagesDir)

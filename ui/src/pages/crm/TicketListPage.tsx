@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimpleModal } from "./components/SimpleModal";
 import { crmApi } from "@/api/crm";
+import { readJsonOrThrow } from "./components/readJsonOrThrow";
 import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 import { useNavigate } from "react-router-dom";
 // SSOT: shared ticket overlay + status/priority maps + timeAgo (also used by inbox).
@@ -132,22 +133,17 @@ export function TicketListPage() {
       setForm(defaultForm);
       fireNotification('✅ Phiếu mới đã tạo', `${ticket.ticket_number} — ${ticket.title}`);
     },
-    onError: () => {
-      inv();
-      setModal(null);
-      setForm(defaultForm);
-    }
   });
   const updateMut = useMutation({
     mutationFn: ({ id, d }: { id: string; d: any }) => crmApi.updateTicket(id, d),
-    onSettled: () => { inv(); setModal(null); },
+    onSuccess: () => { inv(); setModal(null); },
   });
   const resolveMut = useMutation({
     mutationFn: (id: string) => crmApi.resolveTicket(id),
     onSuccess: inv,
   });
   const deleteMut = useMutation({
-    mutationFn: (id: string) => fetch(`/api/channels/crm/tickets/${id}`, { method: 'DELETE' }),
+    mutationFn: async (id: string) => readJsonOrThrow(await fetch(`/api/channels/crm/tickets/${id}`, { method: 'DELETE' }), 'Xóa phiếu thất bại'),
     onSuccess: () => { inv(); setModal(null); },
   });
 
@@ -168,12 +164,15 @@ export function TicketListPage() {
       created_by_agent: t.created_by_agent || 'board',
     });
     setDetailTicket(null);
+    updateMut.reset();
     setModal('edit');
   };
 
   return (
     <div className="space-y-4 p-6">
       {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
+      {resolveMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{(resolveMut.error as Error).message}</p>}
+      {updateMut.isError && modal !== 'edit' && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{(updateMut.error as Error).message}</p>}
 
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Phiếu hỗ trợ</h1>
@@ -186,7 +185,7 @@ export function TicketListPage() {
               <Kanban className="h-4 w-4" />
             </button>
           </div>
-          <Button size="sm" onClick={() => { setForm(defaultForm); setModal('create'); }}>
+          <Button size="sm" onClick={() => { createMut.reset(); setForm(defaultForm); setModal('create'); }}>
             <Plus className="mr-1.5 h-4 w-4" /> Tạo phiếu mới
           </Button>
         </div>
@@ -324,7 +323,7 @@ export function TicketListPage() {
                       <button onClick={() => openEdit(t)} className="p-1 rounded hover:bg-blue-500/10 text-blue-600" title="Sửa / Gán agent">
                         <Pencil className="h-4 w-4" />
                       </button>
-                      <button onClick={() => { setActiveTicket(t); setModal('delete'); }} className="p-1 rounded hover:bg-red-500/10 text-red-600" title="Xóa">
+                      <button onClick={() => { setActiveTicket(t); deleteMut.reset(); setModal('delete'); }} className="p-1 rounded hover:bg-red-500/10 text-red-600" title="Xóa">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
@@ -356,6 +355,7 @@ export function TicketListPage() {
         </Button>
       </>}>
         <TicketForm form={form} setForm={setForm} agents={agentList} customers={customerList} />
+        {createMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{(createMut.error as Error).message}</p>}
       </SimpleModal>
 
       {/* ═══ EDIT ═══ */}
@@ -366,6 +366,7 @@ export function TicketListPage() {
         </Button>
       </>}>
         <TicketForm form={form} setForm={setForm} agents={agentList} customers={customerList} showStatus />
+        {updateMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{(updateMut.error as Error).message}</p>}
       </SimpleModal>
 
       {/* ═══ DELETE ═══ */}
@@ -381,6 +382,7 @@ export function TicketListPage() {
             Bạn có chắc muốn xóa phiếu <strong>{activeTicket?.ticket_number}</strong> — "{activeTicket?.title}"?
           </p>
         </div>
+        {deleteMut.isError && <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-600">{(deleteMut.error as Error).message}</p>}
       </SimpleModal>
     </div>
   );
