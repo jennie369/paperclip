@@ -9,6 +9,7 @@ import * as quota from './quota.js';
 import * as session from './session.js';
 import * as router from './router.js';
 import { buildBatchId, buildReplyDedupeKey } from './reply-contract.js';
+import { buildGreetingFallback, isShortGreeting } from './greeting-fallback.js';
 import { parseSessionKey } from './transcript.js';
 import { supabase } from './zalo-personal/supabase.js';
 import { CustomerResolver } from './crm/customer-resolver.js';
@@ -995,6 +996,7 @@ async function processResolved(
       // The router returns '' when the agent is disabled / unknown / errors / the
       // provider fails. We NEVER send a canned fallback message — leave the
       // customer message in the inbox for a human, publish nothing.
+      // ONLY exception (GEM-1126): a pure short greeting ("Hi Em") gets a fixed greeting, see below.
       const hasChunks = Array.isArray((merged as any)._messageChunks) && (merged as any)._messageChunks.length > 0;
       const hasMedia = Array.isArray(outboundMedia) && outboundMedia.length > 0;
       if ((!replyText || !replyText.trim()) && !hasChunks && !hasMedia) {
@@ -1006,6 +1008,34 @@ async function processResolved(
         // Chỉ DM khách thật (group/comment không có người đang chờ trả lời). noPause: sự cố hạ tầng,
         // không khoá phiên (tin sau của khách vẫn được bot thử lại). Ticket dedup + ping phanh 30'/session.
         if (merged.peerKind !== 'group' && merged.peerKind !== 'comment') {
+          // GEM-1126: ngoại lệ HẸP của "không canned fallback" — tin khách CHỈ là lời chào ngắn ("Hi Em")
+          // thì gửi 1 câu chào cố định (không giá/cam kết) để khách không treo >20h; mọi tin khác vẫn im lặng.
+          // Ticket/ping VẪN tạo (người còn phải vào trả lời phần thật). Fail-soft: lỗi publish → coi như chưa gửi.
+          let greetingSent = false;
+          if (isShortGreeting(merged.content) && !hasMedia && !(await isSessionPaused(sessionKey))) {
+            try {
+              bus.publishOutbound({
+                channel: merged.channel,
+                chatId: merged.chatId,
+                content: buildGreetingFallback(merged.content),
+                contentType: 'text',
+                replyToMessageId: merged.id,
+                sessionKey,
+                dedupeKey: buildReplyDedupeKey(sessionKey, buildBatchId(claimedIds)),
+                metadata: {
+                  agentSlug,
+                  sessionKey,
+                  processingTime: Date.now() - merged.timestamp.getTime(),
+                  peerKind: merged.peerKind,
+                  fallback: 'greeting',
+                },
+              });
+              greetingSent = true;
+              console.log(`${logPrefix} Agent empty + short greeting → sent greeting fallback (GEM-1126)`);
+            } catch (err: any) {
+              console.error(`${logPrefix} greeting fallback publish failed: ${err?.message}`);
+            }
+          }
           handleEscalation({
             agentSlug,
             sessionKey,
@@ -1015,9 +1045,13 @@ async function processResolved(
             customerName: ((merged as any)._customerContext?.name as string) || merged.senderName || null,
             reason: 'agent_silent',
             priority: 'high',
-            summary: `Agent ${agentSlug} trả lời RỖNG (provider timeout/lỗi) — khách chưa nhận được phản hồi nào. Vào Hộp thư trả lời tay.`,
+            summary: greetingSent
+              ? `Agent ${agentSlug} trả lời RỖNG (provider timeout/lỗi) với tin chào hỏi — bot đã gửi lời chào dự phòng. Vào Hộp thư xem khách có nhắn tiếp không.`
+              : `Agent ${agentSlug} trả lời RỖNG (provider timeout/lỗi) — khách chưa nhận được phản hồi nào. Vào Hộp thư trả lời tay.`,
             triggerMessage: merged.content,
-            agentReply: '(agent trả rỗng — KHÔNG có gì được gửi cho khách)',
+            agentReply: greetingSent
+              ? '(agent trả rỗng — bot đã gửi lời chào dự phòng cố định)'
+              : '(agent trả rỗng — KHÔNG có gì được gửi cho khách)',
             noPause: true,
             statusLine: 'Bot KHÔNG bị tắt (tin kế tiếp của khách sẽ được bot thử lại). Cần người trả lời tay tin này.',
           }).catch((err) => {
