@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 
 // ── Stage → SOP mapping ──
 const STAGE_SOP_MAP: Record<string, string> = {
@@ -58,6 +60,7 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const guard = useGuardedAction();
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set(["Hoàn thành", "Đã hủy"]));
@@ -69,10 +72,9 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
   const execSop = useCallback(async (sopId: string) => {
     setRunningSopId(sopId);
     try {
-      const res = await fetch(`/api/ops/sop-engine/sops/${sopId}/run`, { method: "POST" });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); pushToast({ title: (err as any).error || `Lỗi chạy SOP ${sopId}`, tone: "error" }); return; }
+      await fetchOk(`/api/ops/sop-engine/sops/${sopId}/run`, { method: "POST" }, `Lỗi chạy SOP ${sopId}`);
       pushToast({ title: `Đã trigger SOP ${sopId}`, tone: "success" });
-    } catch { pushToast({ title: "Lỗi kết nối", tone: "error" }); }
+    } catch (e: any) { pushToast({ title: e?.message || "Lỗi kết nối", tone: "error" }); }
     finally { setRunningSopId(null); }
   }, [pushToast]);
 
@@ -92,15 +94,15 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
         ? `Thứ ${["CN","2","3","4","5","6","7"][Number(scheduleDay)]} ${scheduleHour}:${scheduleMin}`
         : `${scheduleHour}:${scheduleMin} hàng ngày`;
     try {
-      await fetch(`/api/ops/content-pipeline/scripts/${key}/schedule`, {
+      await fetchOk(`/api/ops/content-pipeline/scripts/${key}/schedule`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ schedule: scheduleText, hour: scheduleHour, minute: scheduleMin, frequency: scheduleFreq, weekday: scheduleDay }),
-      });
+      }, "Lỗi lưu lịch");
       pushToast({ title: `Đã lưu lịch: ${scheduleText}`, tone: "success" });
       setEditingSchedule(null);
-    } catch {
-      pushToast({ title: "Lỗi lưu lịch", tone: "error" });
+    } catch (e: any) {
+      pushToast({ title: e?.message || "Lỗi lưu lịch", tone: "error" });
     } finally {
       setSavingSchedule(false);
     }
@@ -114,8 +116,7 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
   const executeScript = useCallback(async (scriptKey: string) => {
     setRunningScript(scriptKey); setScriptOutput(""); setShowOutput(true);
     try {
-      const response = await fetch(`/api/ops/content-pipeline/execute/${scriptKey}`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!response.ok) { const err = await response.json().catch(() => ({})); pushToast({ title: (err as any).error || `Lỗi ${scriptKey}`, tone: "error" }); setRunningScript(null); return; }
+      const response = await fetchOk(`/api/ops/content-pipeline/execute/${scriptKey}`, { method: "POST", headers: { "Content-Type": "application/json" } }, `Lỗi ${scriptKey}`);
       const reader = response.body?.getReader();
       if (!reader) { setRunningScript(null); return; }
       const decoder = new TextDecoder(); let buffer = "";
@@ -136,10 +137,9 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
   const handleDelegate = useCallback(async (agentSlug: string, task: string) => {
     pushToast({ title: `Đang giao việc cho ${agentSlug}...`, tone: "info" });
     try {
-      const res = await fetch("/api/ops/content-pipeline/delegate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_slug: agentSlug, task }) });
-      if (!res.ok) { pushToast({ title: "Lỗi giao việc", tone: "error" }); return; }
+      await fetchOk("/api/ops/content-pipeline/delegate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_slug: agentSlug, task }) }, "Lỗi giao việc");
       pushToast({ title: `Đã giao việc cho ${agentSlug}`, tone: "success" });
-    } catch { pushToast({ title: "Lỗi kết nối", tone: "error" }); }
+    } catch (e: any) { pushToast({ title: e?.message || "Lỗi kết nối", tone: "error" }); }
   }, [pushToast]);
 
   const jobIcon = (s: string) => s === "processing" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" /> : s === "completed" ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : s === "failed" ? <AlertCircle className="h-3.5 w-3.5 text-red-500" /> : <Circle className="h-3.5 w-3.5 text-yellow-500" />;
@@ -196,7 +196,7 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
               </div>
               {stage.script && <Button size="sm" disabled={!!runningScript} onClick={() => executeScript(stage.script!)}>{runningScript === stage.script ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Đang chạy...</> : <><Play className="h-3 w-3 mr-1" /> Chạy {stage.name}</>}</Button>}
               {stage.id === "generate" && (jobsSummary?.failed || 0) > 0 && (
-                <Button size="sm" variant="outline" className="text-red-600" onClick={async () => { await fetch("/api/ops/content-pipeline/jobs/retry-failed", { method: "POST" }); qc.invalidateQueries({ queryKey: ["ops"] }); pushToast({ title: `Retry ${jobsSummary.failed} failed jobs`, tone: "success" }); }}>
+                <Button size="sm" variant="outline" className="text-red-600" onClick={() => guard(async () => { await fetchOk("/api/ops/content-pipeline/jobs/retry-failed", { method: "POST" }, "Lỗi retry job lỗi"); qc.invalidateQueries({ queryKey: ["ops"] }); pushToast({ title: `Retry ${jobsSummary.failed} failed jobs`, tone: "success" }); }, "Không retry được job lỗi")}>
                   <RefreshCw className="h-3 w-3 mr-1" /> Retry {jobsSummary.failed} failed
                 </Button>
               )}
@@ -211,14 +211,14 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
                       const passIds: string[] = [];
                       let failCount = 0;
                       for (const s of drafts) {
-                        const cr = await fetch("/api/ops/content-pipeline/compliance-check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: s.body || s.caption || "" }) });
+                        const cr = await fetchOk("/api/ops/content-pipeline/compliance-check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: s.body || s.caption || "" }) }, "Lỗi kiểm tra compliance");
                         const check = await cr.json();
                         if (check.pass) passIds.push(s.id); else failCount++;
                       }
-                      if (passIds.length) await fetch("/api/ops/content-pipeline/scripts/bulk-approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ script_ids: passIds }) });
+                      if (passIds.length) await fetchOk("/api/ops/content-pipeline/scripts/bulk-approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ script_ids: passIds }) }, "Lỗi duyệt hàng loạt");
                       pushToast({ title: `Đã duyệt ${passIds.length} bài. ${failCount} cần review.`, tone: "success" });
                       qc.invalidateQueries({ queryKey: ["ops"] });
-                    } catch { pushToast({ title: "Lỗi bulk approve", tone: "error" }); }
+                    } catch (e: any) { pushToast({ title: e?.message || "Lỗi bulk approve", tone: "error" }); }
                   }}>✅ Duyệt đạt compliance</Button>
                   <Button size="sm" variant="outline" onClick={() => onSwitchTab?.("content")}>📋 Xem chờ duyệt</Button>
                 </div>
@@ -251,16 +251,20 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
         const completed = jobs.filter(j => j.status === 'completed');
 
         const cancelJob = async (id: string) => {
-          await fetch(`/api/ops/content-pipeline/jobs/${id}/cancel`, { method: "POST" });
-          qc.invalidateQueries({ queryKey: ["ops", "jobs"] });
-          qc.invalidateQueries({ queryKey: ["ops", "jobs-summary"] });
+          await guard(async () => {
+            await fetchOk(`/api/ops/content-pipeline/jobs/${id}/cancel`, { method: "POST" }, "Lỗi hủy job");
+            qc.invalidateQueries({ queryKey: ["ops", "jobs"] });
+            qc.invalidateQueries({ queryKey: ["ops", "jobs-summary"] });
+          }, "Không hủy được job");
         };
 
         const cancelAll = async (ids: string[]) => {
-          await Promise.all(ids.map(id => fetch(`/api/ops/content-pipeline/jobs/${id}/cancel`, { method: "POST" })));
-          qc.invalidateQueries({ queryKey: ["ops", "jobs"] });
-          qc.invalidateQueries({ queryKey: ["ops", "jobs-summary"] });
-          pushToast({ title: `Đã hủy ${ids.length} job`, tone: "success" });
+          await guard(async () => {
+            await Promise.all(ids.map(id => fetchOk(`/api/ops/content-pipeline/jobs/${id}/cancel`, { method: "POST" }, "Lỗi hủy job")));
+            qc.invalidateQueries({ queryKey: ["ops", "jobs"] });
+            qc.invalidateQueries({ queryKey: ["ops", "jobs-summary"] });
+            pushToast({ title: `Đã hủy ${ids.length} job`, tone: "success" });
+          }, "Không hủy được hết job");
         };
 
         const getModel = (j: any) => {
@@ -363,7 +367,7 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
                             {/* Retry for failed */}
                             {j.status === 'failed' && (
                               <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 shrink-0"
-                                onClick={async e => { e.stopPropagation(); await fetch(`/api/ops/content-pipeline/jobs/${j.id}/retry`, { method: "POST" }); qc.refetchQueries({ queryKey: ["ops", "jobs"] }); pushToast({ title: "Đã retry", tone: "success" }); }}>
+                                onClick={e => { e.stopPropagation(); return guard(async () => { await fetchOk(`/api/ops/content-pipeline/jobs/${j.id}/retry`, { method: "POST" }, "Lỗi retry job"); qc.refetchQueries({ queryKey: ["ops", "jobs"] }); pushToast({ title: "Đã retry", tone: "success" }); }, "Không retry được job"); }}>
                                 <RefreshCw className="h-2.5 w-2.5 mr-0.5" /> Thử lại
                               </Button>
                             )}
@@ -414,9 +418,12 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
                                       className="w-full p-2 bg-background border rounded text-sm max-h-48 min-h-[60px] resize-y font-mono"
                                       onBlur={async (e) => {
                                         if (e.target.readOnly) return;
-                                        await fetch(`/api/ops/content-pipeline/jobs/${j.id}/output`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ output_text: e.target.value }) });
-                                        pushToast({ title: "Đã lưu nội dung", tone: "success" });
-                                        e.target.readOnly = true;
+                                        const target = e.target;
+                                        await guard(async () => {
+                                          await fetchOk(`/api/ops/content-pipeline/jobs/${j.id}/output`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ output_text: target.value }) }, "Lỗi lưu nội dung");
+                                          pushToast({ title: "Đã lưu nội dung", tone: "success" });
+                                          target.readOnly = true;
+                                        }, "Không lưu được nội dung");
                                       }}
                                     />
                                   </div>
@@ -443,22 +450,22 @@ export function PipelineTab({ onSwitchTab }: { onSwitchTab?: (tab: string) => vo
                                       : <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => onSwitchTab?.("content")}><ExternalLink className="h-3 w-3 mr-0.5" /> Xem nội dung</Button>
                                     }
                                   </>}
-                                  {j.status === "failed" && <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={async () => { await fetch(`/api/ops/content-pipeline/jobs/${j.id}/retry`, { method: "POST" }); qc.refetchQueries({ queryKey: ["ops", "jobs"] }); pushToast({ title: "Đã retry", tone: "success" }); }}><RefreshCw className="h-3 w-3 mr-0.5" /> Thử lại</Button>}
+                                  {j.status === "failed" && <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => guard(async () => { await fetchOk(`/api/ops/content-pipeline/jobs/${j.id}/retry`, { method: "POST" }, "Lỗi retry job"); qc.refetchQueries({ queryKey: ["ops", "jobs"] }); pushToast({ title: "Đã retry", tone: "success" }); }, "Không retry được job")}><RefreshCw className="h-3 w-3 mr-0.5" /> Thử lại</Button>}
                                   {(j.status === "queued" || j.status === "processing") && <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => cancelJob(j.id)}><Circle className="h-3 w-3 mr-0.5" /> Hủy</Button>}
-                                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={async () => {
-                                    await fetch("/api/ops/content-pipeline/jobs", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ content_type: j.content_type, job_type: j.job_type, pillar: j.pillar, topic: j.topic, brand_voice: j.brand_voice, input_params: j.input_params }) });
+                                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => guard(async () => {
+                                    await fetchOk("/api/ops/content-pipeline/jobs", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ content_type: j.content_type, job_type: j.job_type, pillar: j.pillar, topic: j.topic, brand_voice: j.brand_voice, input_params: j.input_params }) }, "Lỗi tạo lại job");
                                     qc.refetchQueries({ queryKey: ["ops", "jobs"] }); pushToast({ title: "Đã tạo lại job", tone: "success" });
-                                  }}><Plus className="h-3 w-3 mr-0.5" /> Tạo lại</Button>
-                                  <Button size="sm" variant="ghost" className="h-6 text-[10px] text-orange-600" onClick={async () => {
-                                    await fetch(`/api/ops/content-pipeline/jobs/${j.id}/cancel`, { method: "POST" });
+                                  }, "Không tạo lại được job")}><Plus className="h-3 w-3 mr-0.5" /> Tạo lại</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 text-[10px] text-orange-600" onClick={() => guard(async () => {
+                                    await fetchOk(`/api/ops/content-pipeline/jobs/${j.id}/cancel`, { method: "POST" }, "Lỗi tắt job");
                                     pushToast({ title: `Đã tắt job ${j.content_type || j.job_type}`, tone: "info" });
                                     qc.refetchQueries({ queryKey: ["ops", "jobs"] });
-                                  }}><Pause className="h-3 w-3 mr-0.5" /> Tắt vĩnh viễn</Button>
-                                  <Button size="sm" variant="ghost" className="h-6 text-[10px] text-red-500" onClick={async () => {
-                                    await fetch(`/api/ops/content-pipeline/jobs/${j.id}`, { method: "DELETE" });
+                                  }, "Không tắt được job")}><Pause className="h-3 w-3 mr-0.5" /> Tắt vĩnh viễn</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 text-[10px] text-red-500" onClick={() => guard(async () => {
+                                    await fetchOk(`/api/ops/content-pipeline/jobs/${j.id}`, { method: "DELETE" }, "Lỗi xóa job");
                                     qc.refetchQueries({ queryKey: ["ops", "jobs"] });
                                     pushToast({ title: "Đã xóa job", tone: "success" });
-                                  }}><Trash2 className="h-3 w-3 mr-0.5" /> Xóa</Button>
+                                  }, "Không xóa được job")}><Trash2 className="h-3 w-3 mr-0.5" /> Xóa</Button>
                                   {j.paperclip_issue_id && <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => navigate(`/issues/${j.paperclip_issue_id}`)}><ExternalLink className="h-3 w-3 mr-0.5" /> Xem issue</Button>}
                                 </div>
                                 {/* Agent delegate */}

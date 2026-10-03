@@ -8,6 +8,8 @@ import { Play, CheckCircle, RefreshCw, Loader2, Calendar as CalIcon } from "luci
 import { Card } from "@/components/ui/card";
 import { opsApi } from "@/api/ops";
 import { useToast } from "@/context/ToastContext";
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
 import { PipelineTab } from "./tabs/PipelineTab";
 import { ContentTab } from "./tabs/ContentTab";
@@ -132,6 +134,7 @@ export function ContentPipelinePage() {
   const [bulkApproving, setBulkApproving] = useState(false);
   const qc = useQueryClient();
   const { pushToast } = useToast();
+  const guard = useGuardedAction();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -161,10 +164,9 @@ export function ContentPipelinePage() {
 
   const execScript = useCallback(async (key: string) => {
     try {
-      const res = await fetch(`/api/ops/content-pipeline/execute/${key}`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); pushToast({ title: (err as any).error || "Lỗi", tone: "error" }); return; }
+      await fetchOk(`/api/ops/content-pipeline/execute/${key}`, { method: "POST", headers: { "Content-Type": "application/json" } }, "Lỗi");
       pushToast({ title: `Đã trigger ${key}`, tone: "success" });
-    } catch { pushToast({ title: "Lỗi kết nối", tone: "error" }); }
+    } catch (e: any) { pushToast({ title: e?.message || "Lỗi kết nối", tone: "error" }); }
   }, [pushToast]);
 
   const handleBulkApprove = useCallback(async () => {
@@ -178,25 +180,25 @@ export function ContentPipelinePage() {
       const passIds: string[] = [];
       const failCount = { value: 0 };
       for (const s of drafts) {
-        const checkRes = await fetch("/api/ops/content-pipeline/compliance-check", {
+        const checkRes = await fetchOk("/api/ops/content-pipeline/compliance-check", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ content: s.body || s.caption || "" }),
-        });
+        }, "Lỗi kiểm tra compliance");
         const check = await checkRes.json();
         if (check.pass) passIds.push(s.id);
         else failCount.value++;
       }
 
       if (passIds.length) {
-        await fetch("/api/ops/content-pipeline/scripts/bulk-approve", {
+        await fetchOk("/api/ops/content-pipeline/scripts/bulk-approve", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ script_ids: passIds }),
-        });
+        }, "Lỗi duyệt hàng loạt");
       }
 
       pushToast({ title: `Đã duyệt ${passIds.length} bài. ${failCount.value} cần review.`, tone: "success" });
       qc.invalidateQueries({ queryKey: ["ops"] });
-    } catch { pushToast({ title: "Lỗi bulk approve", tone: "error" }); }
+    } catch (e: any) { pushToast({ title: e?.message || "Lỗi bulk approve", tone: "error" }); }
     finally { setBulkApproving(false); }
   }, [pushToast, qc]);
 
@@ -255,11 +257,11 @@ export function ContentPipelinePage() {
                   onClick={async () => {
                     if (!confirm("Publish batch TẤT CẢ bài approved có publish_mode=threshold_5 ngay bây giờ?")) return;
                     try {
-                      const r = await fetch("/api/ops/content-pipeline/publish-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+                      const r = await fetchOk("/api/ops/content-pipeline/publish-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }, "Lỗi publish-batch");
                       const data = await r.json();
                       pushToast({ title: data.message || `Đã enqueue ${data.count || 0} bài`, tone: "success" });
                       qc.invalidateQueries({ queryKey: ["ops"] });
-                    } catch { pushToast({ title: "Lỗi publish-batch", tone: "error" }); }
+                    } catch (e: any) { pushToast({ title: e?.message || "Lỗi publish-batch", tone: "error" }); }
                   }}
                   className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1.5"
                 >
@@ -269,11 +271,11 @@ export function ContentPipelinePage() {
                   onClick={async () => {
                     if (!confirm("Publish TẤT CẢ bài approved chưa published (bỏ qua publish_mode)?")) return;
                     try {
-                      const r = await fetch("/api/ops/content-pipeline/publish-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force_all: true }) });
+                      const r = await fetchOk("/api/ops/content-pipeline/publish-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force_all: true }) }, "Lỗi publish-batch force");
                       const data = await r.json();
                       pushToast({ title: data.message || `Đã enqueue ${data.count || 0} bài`, tone: "success" });
                       qc.invalidateQueries({ queryKey: ["ops"] });
-                    } catch { pushToast({ title: "Lỗi publish-batch force", tone: "error" }); }
+                    } catch (e: any) { pushToast({ title: e?.message || "Lỗi publish-batch force", tone: "error" }); }
                   }}
                   className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent/30 flex items-center gap-1.5"
                 >
@@ -308,7 +310,7 @@ export function ContentPipelinePage() {
                   <button onClick={handleBulkApprove} disabled={bulkApproving} className="text-[10px] px-2 py-0.5 bg-green-500/10 text-green-600 rounded-full hover:bg-green-500/20 disabled:opacity-50">
                     {bulkApproving ? <Loader2 className="h-2.5 w-2.5 inline animate-spin mr-0.5" /> : <CheckCircle className="h-2.5 w-2.5 inline mr-0.5" />}Duyệt tất cả
                   </button>
-                  <button onClick={async () => { const res = await fetch("/api/ops/content-pipeline/compliance-check-all", { method: "POST" }); const data = await res.json().catch(() => ({})); pushToast({ title: data?.message || "Compliance check done", tone: data?.violations ? "error" : "success" }); }} className="text-[10px] px-2 py-0.5 bg-blue-500/10 text-blue-600 rounded-full hover:bg-blue-500/20">Compliance</button>
+                  <button onClick={() => guard(async () => { const res = await fetchOk("/api/ops/content-pipeline/compliance-check-all", { method: "POST" }, "Lỗi compliance check"); const data = await res.json().catch(() => ({})); pushToast({ title: data?.message || "Compliance check done", tone: data?.violations ? "error" : "success" }); }, "Không chạy được compliance check")} className="text-[10px] px-2 py-0.5 bg-blue-500/10 text-blue-600 rounded-full hover:bg-blue-500/20">Compliance</button>
                 </div>
               </Card>
               <Card className="p-3 cursor-pointer hover:ring-2 hover:ring-blue-500/30 transition-all" onClick={() => { setActiveTab("pipeline"); setTimeout(() => document.getElementById("generation-jobs")?.scrollIntoView({ behavior: "smooth" }), 100); }}>
@@ -316,7 +318,7 @@ export function ContentPipelinePage() {
                 <div className="text-[10px] text-muted-foreground text-center">Đang tạo</div>
                 <div className="flex gap-1 mt-2 justify-center" onClick={e => e.stopPropagation()}>
                   <button onClick={() => execScript("batch_generate")} className="text-[10px] px-2 py-0.5 bg-violet-500/10 text-violet-600 rounded-full hover:bg-violet-500/20"><Play className="h-2.5 w-2.5 inline mr-0.5" />Generate</button>
-                  <button onClick={async () => { await fetch("/api/ops/content-pipeline/jobs/retry-failed", { method: "POST" }); qc.invalidateQueries({ queryKey: ["ops"] }); pushToast({ title: "Retry failed jobs", tone: "success" }); }} className="text-[10px] px-2 py-0.5 bg-red-500/10 text-red-600 rounded-full hover:bg-red-500/20"><RefreshCw className="h-2.5 w-2.5 inline mr-0.5" />Retry</button>
+                  <button onClick={() => guard(async () => { await fetchOk("/api/ops/content-pipeline/jobs/retry-failed", { method: "POST" }, "Lỗi retry job lỗi"); qc.invalidateQueries({ queryKey: ["ops"] }); pushToast({ title: "Retry failed jobs", tone: "success" }); }, "Không retry được job lỗi")} className="text-[10px] px-2 py-0.5 bg-red-500/10 text-red-600 rounded-full hover:bg-red-500/20"><RefreshCw className="h-2.5 w-2.5 inline mr-0.5" />Retry</button>
                 </div>
               </Card>
               <Card className="p-3 cursor-pointer hover:ring-2 hover:ring-foreground/10 transition-all" onClick={() => setActiveTab("content")}>

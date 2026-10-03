@@ -29,6 +29,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 import { ClipboardList, FileText } from "lucide-react";
 import { AgentLogDrawer } from "./AgentLogDrawer";
 import { CustomerChatDrawer } from "./CustomerChatDrawer";
@@ -162,6 +164,7 @@ export function AgentSessionsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { pushToast } = useToast();
+  const guard = useGuardedAction();
   const [filter, setFilter] = useState<StatusFilter>("all");
 
   // ── Hidden rows (UI-only, not destructive) ──
@@ -340,79 +343,88 @@ export function AgentSessionsPage() {
     },
   });
 
-  const deleteIgnored = async (id: string) => {
-    await fetch(`/api/channels/routing/ignored/${id}`, { method: "DELETE" });
-    refetchIgnored();
-  };
+  const deleteIgnored = (id: string) =>
+    guard(async () => {
+      await fetchOk(`/api/channels/routing/ignored/${id}`, { method: "DELETE" }, "Không xóa được chat khỏi danh sách bỏ qua");
+      refetchIgnored();
+    }, "Xóa thất bại");
 
-  const deleteOverride = async (id: string) => {
-    await fetch(`/api/channels/routing/overrides/${id}`, { method: "DELETE" });
-    refetchOverrides();
-  };
+  const deleteOverride = (id: string) =>
+    guard(async () => {
+      await fetchOk(`/api/channels/routing/overrides/${id}`, { method: "DELETE" }, "Không xóa được quy tắc điều hướng");
+      refetchOverrides();
+    }, "Xóa thất bại");
 
   const submitAddIgnore = async () => {
     if (!newIgnoreChatId.trim()) return;
-    await fetch("/api/channels/routing/ignored", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: newIgnoreChatId.trim(),
-        display_name: newIgnoreDisplayName.trim() || null,
-        reason: newIgnoreReason.trim() || null,
-        channel_name: newIgnoreChannel.trim() || null,
-      }),
-    });
-    refetchIgnored();
-    setShowAddIgnore(false);
-    setNewIgnoreChatId("");
-    setNewIgnoreDisplayName("");
-    setNewIgnoreReason("");
-    setNewIgnoreChannel("");
+    await guard(async () => {
+      await fetchOk("/api/channels/routing/ignored", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: newIgnoreChatId.trim(),
+          display_name: newIgnoreDisplayName.trim() || null,
+          reason: newIgnoreReason.trim() || null,
+          channel_name: newIgnoreChannel.trim() || null,
+        }),
+      }, "Không thêm được chat bỏ qua");
+      refetchIgnored();
+      setShowAddIgnore(false);
+      setNewIgnoreChatId("");
+      setNewIgnoreDisplayName("");
+      setNewIgnoreReason("");
+      setNewIgnoreChannel("");
+    }, "Thêm thất bại");
   };
 
-  const deleteKeyword = async (id: string) => {
-    await fetch(`/api/channels/routing/keywords/${id}`, { method: "DELETE" });
-    refetchKeywords();
-  };
+  const deleteKeyword = (id: string) =>
+    guard(async () => {
+      await fetchOk(`/api/channels/routing/keywords/${id}`, { method: "DELETE" }, "Không xóa được quy tắc từ khóa");
+      refetchKeywords();
+    }, "Xóa thất bại");
 
   const submitAddKeyword = async () => {
     if (!newKwKeywords.trim() || !newKwAgentSlug.trim()) return;
-    await fetch("/api/channels/routing/keywords", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        keywords: newKwKeywords.trim(),
-        agent_slug: newKwAgentSlug.trim(),
-        reason: newKwReason.trim() || null,
-      }),
-    });
-    refetchKeywords();
-    setShowAddKeyword(false);
-    setNewKwKeywords("");
-    setNewKwAgentSlug("");
-    setNewKwReason("");
+    await guard(async () => {
+      await fetchOk("/api/channels/routing/keywords", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          keywords: newKwKeywords.trim(),
+          agent_slug: newKwAgentSlug.trim(),
+          reason: newKwReason.trim() || null,
+        }),
+      }, "Không thêm được quy tắc từ khóa");
+      refetchKeywords();
+      setShowAddKeyword(false);
+      setNewKwKeywords("");
+      setNewKwAgentSlug("");
+      setNewKwReason("");
+    }, "Thêm thất bại");
   };
 
   const submitAddOverride = async () => {
     if (!newOvMatchValue.trim()) return;
-    await fetch("/api/channels/routing/overrides", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        match_type: newOvMatchType,
-        match_value: newOvMatchValue.trim(),
-        agent_slug: newOvAgentSlug.trim() || null,
-        action: newOvAction,
-        reason: newOvReason.trim() || null,
-      }),
-    });
-    refetchOverrides();
-    setShowAddOverride(false);
-    setNewOvMatchType("sender_id");
-    setNewOvMatchValue("");
-    setNewOvAgentSlug("");
-    setNewOvAction("route");
-    setNewOvReason("");
+    await guard(async () => {
+      await fetchOk("/api/channels/routing/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          match_type: newOvMatchType,
+          match_value: newOvMatchValue.trim(),
+          agent_slug: newOvAgentSlug.trim() || null,
+          action: newOvAction,
+          reason: newOvReason.trim() || null,
+        }),
+      }, "Không thêm được quy tắc điều hướng");
+      refetchOverrides();
+      setShowAddOverride(false);
+      setNewOvMatchType("sender_id");
+      setNewOvMatchValue("");
+      setNewOvAgentSlug("");
+      setNewOvAction("route");
+      setNewOvReason("");
+    }, "Thêm thất bại");
   };
 
   const visibleSessions = sessions.filter((s) => !hiddenIds.has(s.id));
@@ -1326,25 +1338,26 @@ function SessionRow({
             title="Dừng agent — tắt auto-reply + xóa khỏi tất cả kênh + xóa session"
             onClick={async () => {
               try {
-                await fetch(`/api/channels/agent-configs/${session.agent_slug}`, {
+                await fetchOk(`/api/channels/agent-configs/${session.agent_slug}`, {
                   method: "PATCH",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ enabled: false }),
-                });
+                }, "Không tắt được agent");
                 const instRes = await fetch("/api/channels/instances");
                 const instances = await instRes.json();
                 for (const ch of Array.isArray(instances) ? instances : []) {
                   if (ch.agent_slug === session.agent_slug) {
-                    await fetch(`/api/channels/settings/${ch.name}`, {
+                    await fetchOk(`/api/channels/settings/${ch.name}`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ agent_slug: null }),
-                    });
+                    }, `Không gỡ được agent khỏi kênh ${ch.name}`);
                   }
                 }
-                await fetch(
+                await fetchOk(
                   `/api/channels/agent-configs/${session.agent_slug}/sessions/clear`,
-                  { method: "POST" }
+                  { method: "POST" },
+                  "Không xóa được session"
                 );
                 pushToast({
                   title: "Đã dừng hoàn toàn",
@@ -1352,10 +1365,10 @@ function SessionRow({
                   tone: "success",
                   ttlMs: 4000,
                 });
-              } catch {
+              } catch (e) {
                 pushToast({
                   title: "Lỗi",
-                  body: "Không thể dừng agent",
+                  body: e instanceof Error ? e.message : "Không thể dừng agent",
                   tone: "error",
                   ttlMs: 3000,
                 });

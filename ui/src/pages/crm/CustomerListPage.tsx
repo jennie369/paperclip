@@ -11,6 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LeadScoreBadge } from "./components/LeadScoreBadge";
 import { SimpleModal } from "./components/SimpleModal";
 import { crmApi, type CRMCustomer } from "@/api/crm";
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 
 const statusOptions = [
   { value: '', label: 'Tất cả' },
@@ -67,6 +69,7 @@ export function CustomerListPage() {
 
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const guard = useGuardedAction();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
@@ -162,20 +165,23 @@ export function CustomerListPage() {
       {selected.size > 0 && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20">
           <span className="text-sm font-medium">{selected.size} đã chọn</span>
-          <Button size="sm" variant="outline" onClick={() => {
-            selected.forEach(id => fetch(`/api/channels/crm/customers/${id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status:'da_mua'}) }));
+          <Button size="sm" variant="outline" onClick={() => guard(async () => {
+            await Promise.all(Array.from(selected).map(id => fetchOk(`/api/channels/crm/customers/${id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status:'da_mua'}) }, 'Không đổi được trạng thái khách hàng')));
             setSelected(new Set());
-          }}>Đổi trạng thái</Button>
+            qc.invalidateQueries({ queryKey: ['crm', 'customers'] });
+          }, 'Đổi trạng thái thất bại')}>Đổi trạng thái</Button>
           <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>Bỏ chọn</Button>
           <Button size="sm" variant="destructive" onClick={async () => {
             if (!confirm('Xóa ' + selected.size + ' khách hàng đã chọn?')) return;
-            await fetch('/api/channels/crm/customers/bulk-delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ids: Array.from(selected) }),
-            });
-            setSelected(new Set());
-            qc.invalidateQueries({ queryKey: ['crm', 'customers'] });
+            await guard(async () => {
+              await fetchOk('/api/channels/crm/customers/bulk-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: Array.from(selected) }),
+              }, 'Không xóa được khách hàng');
+              setSelected(new Set());
+              qc.invalidateQueries({ queryKey: ['crm', 'customers'] });
+            }, 'Xóa thất bại');
           }}>Xóa</Button>
         </div>
       )}

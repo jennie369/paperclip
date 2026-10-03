@@ -1,12 +1,13 @@
 // GEM-1131 (ENG-1002-F1113-01): mutationFn gọi fetch() mà KHÔNG kiểm res.ok → lỗi 4xx/5xx thành "thành công" câm,
 // onSuccess đóng modal / báo thành công giả. Guard tĩnh: mọi mutationFn có fetch( phải có .ok / readJsonOrThrow / throw.
 import { describe, it, expect } from "vitest";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
-const CHECK = /\.ok\b|OrThrow\(|\bthrow\b/;
+const CHECK = /\.ok\b|OrThrow\(|\bfetchOk\(|\bthrow\b/;
 
 /** Lấy đúng phần giá trị của mutationFn: quét ngoặc cân bằng đến dấu phẩy cấp 0 hoặc dấu đóng của object useMutation. */
 function mutationFnBody(rest: string): string {
@@ -32,6 +33,42 @@ export function findUncheckedFetchMutations(source: string): number[] {
   return bad;
 }
 
+/** Các file đã dọn (GEM-1152). Thêm file vào đây khi dọn xong để guard giữ sạch. */
+const HARDENED_FILES = [
+  "pages/agents/AgentSessionsPage.tsx",
+  "pages/ops/components/GenerationJobsBlock.tsx",
+  "pages/ops/tabs/PipelineTab.tsx",
+  "pages/config/ConfigHubPage.tsx",
+  "pages/channels/ChannelSettingsPage.tsx",
+  "pages/channels/components/CustomerSidebar.tsx",
+  "pages/ops/ContentPipelinePage.tsx",
+  "pages/crm/CustomerListPage.tsx",
+  "pages/ops/tabs/EmailPushTab.tsx",
+];
+const WRITE_VERB = /method\s*:\s*["'`](POST|PUT|PATCH|DELETE)["'`]/;
+
+/** Toàn bộ đối số của 1 lời gọi (từ sau dấu `(` mở) — dừng ở ngoặc đóng cân bằng, KHÔNG dừng ở dấu phẩy. */
+function callArgs(rest: string): string {
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest[i];
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c) && --depth < 0) return rest.slice(0, i);
+  }
+  return rest;
+}
+
+/** Dòng của các lời gọi `fetch(` thô có method ghi (args quét ngoặc cân bằng nên bắt được object nhiều dòng). */
+export function findRawWriteFetches(source: string): number[] {
+  const bad: number[] = [];
+  const re = /\bfetch\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source))) {
+    if (WRITE_VERB.test(callArgs(source.slice(m.index + m[0].length)))) bad.push(source.slice(0, m.index).split("\n").length);
+  }
+  return bad;
+}
+
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
@@ -52,6 +89,36 @@ describe("mutationFn + fetch() phải kiểm res.ok (GEM-1131)", () => {
   it("không còn mutationFn nào nuốt lỗi HTTP trong ui/src", () => {
     const offenders = walk(SRC).flatMap((f) =>
       findUncheckedFetchMutations(readFileSync(f, "utf8")).map((l) => `${relative(SRC, f)}:${l}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  // GEM-1152 (ENG-1003-F1131-01): handler onClick/submit gọi `await fetch(..., {method: POST|PUT|PATCH|DELETE})` trần → 4xx/5xx im lặng.
+  // Các file đã chuyển sang fetchOk/readJsonOrThrow KHÔNG được quay lại fetch ghi trần (mở rộng danh sách khi dọn thêm file).
+  it("đối chứng: findRawWriteFetches bắt fetch ghi trần (kể cả object nhiều dòng), thả fetchOk/GET", () => {
+    expect(findRawWriteFetches('await fetch(`/a/${id}`, { method: "DELETE" });')).toHaveLength(1);
+    expect(findRawWriteFetches('await fetch("/a", {\n headers: {},\n method: "POST",\n});')).toHaveLength(1);
+    expect(findRawWriteFetches('await fetchOk(`/a`, { method: "DELETE" });')).toHaveLength(0);
+    expect(findRawWriteFetches('const r = await fetch("/api/x");')).toHaveLength(0);
+  });
+
+  it("fetchOk: 2xx trả Response; 4xx/5xx ném Error mang thông điệp server, không có body thì dùng fallback + status", async () => {
+    const real = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as typeof fetch;
+      expect((await fetchOk("/x", { method: "POST" })).status).toBe(200);
+      globalThis.fetch = (async () => new Response(JSON.stringify({ error: "Thiếu quyền" }), { status: 403 })) as typeof fetch;
+      await expect(fetchOk("/x", { method: "DELETE" }, "Lỗi xoá")).rejects.toThrow("Thiếu quyền");
+      globalThis.fetch = (async () => new Response("<html>", { status: 502 })) as typeof fetch;
+      await expect(fetchOk("/x", { method: "PUT" }, "Lỗi lưu")).rejects.toThrow("Lỗi lưu (502)");
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it("file đã dọn không còn fetch ghi trần", () => {
+    const offenders = HARDENED_FILES.flatMap((f) =>
+      findRawWriteFetches(readFileSync(join(SRC, f), "utf8")).map((l) => `${f}:${l}`),
     );
     expect(offenders).toEqual([]);
   });

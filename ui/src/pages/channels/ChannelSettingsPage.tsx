@@ -30,6 +30,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getChannelColor } from "./components/channelConfig";
+import { useToast } from "@/context/ToastContext";
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 
 type DmPolicy = "open" | "allowlist" | "pairing" | "disabled";
 type GroupPolicy = "open" | "allowlist" | "pairing" | "disabled";
@@ -401,6 +404,8 @@ export function ChannelSettingsPage() {
 function ChannelSettingsList() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { pushToast } = useToast();
+  const guard = useGuardedAction();
   const [showQR, setShowQR] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -408,14 +413,14 @@ function ChannelSettingsList() {
 
   const renameMut = useMutation({
     mutationFn: async ({ name, displayName }: { name: string; displayName: string }) => {
-      const r = await fetch(`/api/channels/settings/${name}`, {
+      await fetchOk(`/api/channels/settings/${name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ display_name: displayName }),
-      });
-      if (!r.ok) throw new Error("Lỗi đổi tên");
+      }, "Lỗi đổi tên kênh");
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["channels"] }); setEditingName(null); },
+    onError: (e: any) => pushToast({ title: "Lỗi đổi tên kênh", body: e.message, tone: "error" }),
   });
 
   const { data: instances = [], isLoading } = useQuery({
@@ -661,20 +666,24 @@ function ChannelSettingsList() {
                   {inst.status === "connected" ? (
                     <Button size="sm" variant="outline" onClick={async (e) => {
                       e.stopPropagation();
-                      await channelsApi.stopChannel(inst.name);
-                      await fetch(`/api/channels/settings/${inst.name}`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ enabled: false }) });
-                      qc.invalidateQueries({ queryKey: ["channels"] });
-                      qc.invalidateQueries({ queryKey: ["config-channels"] });
+                      await guard(async () => {
+                        await channelsApi.stopChannel(inst.name);
+                        await fetchOk(`/api/channels/settings/${inst.name}`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ enabled: false }) }, "Lỗi dừng kênh");
+                        qc.invalidateQueries({ queryKey: ["channels"] });
+                        qc.invalidateQueries({ queryKey: ["config-channels"] });
+                      }, "Lỗi dừng kênh");
                     }}>
                       Dừng
                     </Button>
                   ) : (
                     <Button size="sm" variant="outline" onClick={async (e) => {
                       e.stopPropagation();
-                      await fetch(`/api/channels/settings/${inst.name}`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ enabled: true }) });
-                      await channelsApi.startChannel(inst.name);
-                      qc.invalidateQueries({ queryKey: ["channels"] });
-                      qc.invalidateQueries({ queryKey: ["config-channels"] });
+                      await guard(async () => {
+                        await fetchOk(`/api/channels/settings/${inst.name}`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ enabled: true }) }, "Lỗi bật kênh");
+                        await channelsApi.startChannel(inst.name);
+                        qc.invalidateQueries({ queryKey: ["channels"] });
+                        qc.invalidateQueries({ queryKey: ["config-channels"] });
+                      }, "Lỗi bắt đầu kênh");
                     }}>
                       Bắt đầu
                     </Button>
@@ -682,7 +691,7 @@ function ChannelSettingsList() {
                   <Button size="sm" variant="outline" onClick={async (e) => {
                     e.stopPropagation();
                     try {
-                      const res = await fetch(`/api/channels/zalo-personal/${encodeURIComponent(inst.name)}/refresh-key`, { method: "POST" });
+                      const res = await fetchOk(`/api/channels/zalo-personal/${encodeURIComponent(inst.name)}/refresh-key`, { method: "POST" }, "Lỗi refresh key");
                       const data = await res.json();
                       if (data.success) {
                         alert(`Đã refresh key thành công!\n${data.message}`);

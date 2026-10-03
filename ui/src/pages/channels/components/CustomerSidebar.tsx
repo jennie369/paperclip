@@ -17,7 +17,7 @@ import type { CommandCrmProfile } from "@/components/crm-messaging/command-cente
 import { CommandCustomer360 } from "@/components/crm-messaging/command-center/CommandCustomer360";
 import { mapCrm } from "@/components/crm-messaging/command-center/adapters";
 import { useToast } from "@/context/ToastContext";
-import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 
 const defaultTicketForm = { title: "", description: "", category: "general", priority: "medium", status: "open", assigned_to_agent: "" };
 
@@ -451,7 +451,7 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   const syncMutation = useMutation({
     mutationFn: () =>
       customer?.id
-        ? fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).then((r) => readJsonOrThrow(r, "Lỗi đồng bộ Gemral"))
+        ? fetchOk(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }, "Lỗi đồng bộ Gemral").then((r) => r.json())
         : Promise.resolve(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
@@ -482,29 +482,33 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
         // 2a) GỘP record hiện tại (lead) vào record có sẵn (người mua) — di chuyển interactions/
         //     notes/tags/đơn + relink hội thoại + backfill field trống (KHÔNG mất timeline như re-link trơ;
         //     KHÔNG ghi email gây đụng unique-constraint).
-        const r = await fetch(`/api/channels/conversations/${conv.session_key}/merge-customer`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customer_id: match.id }),
-        });
-        const jr = await r.json().catch(() => null);
-        return r.ok && !jr?.error
-          ? { ok: true, msg: `Đã gộp sang khách "${match.display_name || v}" (giữ đủ lịch sử + đơn)` }
-          : { ok: false, msg: `Lỗi gộp: ${jr?.error || r.status}` };
+        try {
+          const r = await fetchOk(`/api/channels/conversations/${conv.session_key}/merge-customer`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ customer_id: match.id }),
+          }, "Máy chủ từ chối");
+          const jr = await r.json().catch(() => null);
+          return !jr?.error
+            ? { ok: true, msg: `Đã gộp sang khách "${match.display_name || v}" (giữ đủ lịch sử + đơn)` }
+            : { ok: false, msg: `Lỗi gộp: ${jr.error}` };
+        } catch (e) {
+          return { ok: false, msg: `Lỗi gộp: ${e instanceof Error ? e.message : String(e)}` };
+        }
       }
       // 2b) Không có record khác → lưu vào record hiện tại + link Gemral + sync.
-      const ures = await fetch(`/api/channels/crm/customers/${customer.id}`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(isEmail ? { email: v } : { phone: v }),
-      });
-      if (!ures.ok) {
-        const ej = await ures.json().catch(() => null);
-        return { ok: false, msg: `Không lưu được: ${ej?.error || ures.status}` };
+      try {
+        await fetchOk(`/api/channels/crm/customers/${customer.id}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(isEmail ? { email: v } : { phone: v }),
+        }, "Máy chủ từ chối");
+      } catch (e) {
+        return { ok: false, msg: `Không lưu được: ${e instanceof Error ? e.message : String(e)}` };
       }
-      await fetch(`/api/channels/crm/customers/${customer.id}/link-gemral`, {
+      await fetchOk(`/api/channels/crm/customers/${customer.id}/link-gemral`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(isEmail ? { email: v } : { phone: v }),
-      }).catch(() => {});
-      await fetch(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }).catch(() => {});
+      }, "Không liên kết được tài khoản Gemral").catch(() => {});
+      await fetchOk(`/api/channels/crm/customers/${customer.id}/sync-gemral`, { method: "POST" }, "Lỗi đồng bộ Gemral").catch(() => {});
       return { ok: true, msg: "Đã lưu liên hệ & đồng bộ Gemral ✓" };
     },
     onSuccess: () => {
@@ -539,11 +543,11 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
   });
   const linkCustomerMut = useMutation({
     mutationFn: (customerId: string) =>
-      fetch(`/api/channels/conversations/${conv.session_key}/link-customer`, {
+      fetchOk(`/api/channels/conversations/${conv.session_key}/link-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customer_id: customerId }),
-      }).then((r) => readJsonOrThrow(r, "Lỗi liên kết khách hàng")),
+      }, "Lỗi liên kết khách hàng").then((r) => r.json()),
     onSuccess: () => {
       setCustSearch("");
       queryClient.invalidateQueries({ queryKey: ["conversations"] });

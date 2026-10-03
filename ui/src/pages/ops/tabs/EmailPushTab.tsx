@@ -6,6 +6,7 @@ import { Eye, Pencil, Play, Loader2, AlertTriangle, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/context/ToastContext";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 import { useNavigate } from "@/lib/router";
 
 const SEGMENTS = [
@@ -36,8 +37,7 @@ export function EmailPushTab() {
 
   const execMut = useMutation({
     mutationFn: async (script: string) => {
-      const res = await fetch(`/api/ops/content-pipeline/execute/${script}`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any).error || "Lỗi"); }
+      const res = await fetchOk(`/api/ops/content-pipeline/execute/${script}`, { method: "POST", headers: { "Content-Type": "application/json" } }, "Lỗi");
       return res.json();
     },
     onSuccess: () => pushToast({ title: "Đã trigger script", tone: "success" }),
@@ -152,9 +152,9 @@ export function EmailPushTab() {
             </Button>
             <Button size="sm" variant="ghost" onClick={async () => {
               try {
-                await fetch("/api/ops/content-pipeline/delegate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_slug: "email-crm-manager", task: "Gửi push notification cho hôm nay" }) });
+                await fetchOk("/api/ops/content-pipeline/delegate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_slug: "email-crm-manager", task: "Gửi push notification cho hôm nay" }) }, "Lỗi giao việc");
                 pushToast({ title: "Đã giao cho Email CRM Manager", tone: "success" });
-              } catch { pushToast({ title: "Lỗi giao việc", tone: "error" }); }
+              } catch (e: any) { pushToast({ title: e?.message || "Lỗi giao việc", tone: "error" }); }
             }}><Bot className="h-3 w-3 mr-1" /> Giao agent</Button>
           </div>
         </div>

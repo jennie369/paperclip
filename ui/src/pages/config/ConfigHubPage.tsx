@@ -43,7 +43,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { useToast } from "@/context/ToastContext";
-import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 import {
   Tooltip,
   TooltipTrigger,
@@ -254,6 +255,8 @@ export function ConfigHubPage() {
 function ChannelsAgentsTab() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { pushToast } = useToast();
+  const guard = useGuardedAction();
 
   // ── Section 1: Cài đặt chung ──
   const { data: config } = useQuery({
@@ -271,14 +274,14 @@ function ChannelsAgentsTab() {
 
   const saveSetting = useMutation({
     mutationFn: async ({ key, value }: { key: string; value: string }) => {
-      const r = await fetch("/api/system/config", {
+      await fetchOk("/api/system/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, value }),
-      });
-      if (!r.ok) throw new Error("Lỗi lưu cấu hình");
+      }, "Lỗi lưu cấu hình");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-hub"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi lưu cấu hình", body: e.message, tone: "error" }),
   });
 
   const globalFields = [
@@ -300,41 +303,40 @@ function ChannelsAgentsTab() {
 
   const saveChannel = useMutation({
     mutationFn: async ({ name, data }: { name: string; data: Record<string, any> }) => {
-      const r = await fetch(`/api/channels/settings/${name}`, {
+      await fetchOk(`/api/channels/settings/${name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      });
-      if (!r.ok) throw new Error("Lỗi lưu cấu hình kênh");
+      }, "Lỗi lưu cấu hình kênh");
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["config-channels"] });
     },
+    onError: (e: any) => pushToast({ title: "Lỗi lưu cấu hình kênh", body: e.message, tone: "error" }),
   });
 
   const reconnectChannel = useMutation({
     mutationFn: async (name: string) => {
-      const r = await fetch(`/api/channels/zalo-personal/${name}/start`, { method: "POST" });
-      if (!r.ok) throw new Error("Lỗi kết nối lại");
+      await fetchOk(`/api/channels/zalo-personal/${name}/start`, { method: "POST" }, "Lỗi kết nối lại");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-channels"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi kết nối lại", body: e.message, tone: "error" }),
   });
 
   const toggleChannel = useMutation({
     mutationFn: async ({ name, enabled, channelType }: { name: string; enabled: boolean; channelType?: string }) => {
       // 1. Set enabled in DB
-      const r = await fetch(`/api/channels/settings/${name}`, {
+      await fetchOk(`/api/channels/settings/${name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
-      });
-      if (!r.ok) throw new Error("Lỗi");
+      }, "Lỗi bật/tắt kênh");
       // 2. Actually stop/start WebSocket for Zalo channels
       if (channelType === "zalo_personal") {
         if (!enabled) {
-          await fetch(`/api/channels/zalo-personal/${name}/stop`, { method: "POST" }).catch(() => {});
+          await fetchOk(`/api/channels/zalo-personal/${name}/stop`, { method: "POST" }).catch(() => {});
         } else {
-          await fetch(`/api/channels/zalo-personal/${name}/start`, { method: "POST" }).catch(() => {});
+          await fetchOk(`/api/channels/zalo-personal/${name}/start`, { method: "POST" }).catch(() => {});
         }
       }
     },
@@ -342,6 +344,7 @@ function ChannelsAgentsTab() {
       qc.invalidateQueries({ queryKey: ["config-channels"] });
       qc.invalidateQueries({ queryKey: ["channels"] });
     },
+    onError: (e: any) => pushToast({ title: "Lỗi bật/tắt kênh", body: e.message, tone: "error" }),
   });
 
   // ── Section 3: Agents ──
@@ -361,30 +364,30 @@ function ChannelsAgentsTab() {
 
   const patchAgent = useMutation({
     mutationFn: async ({ slug, data }: { slug: string; data: Record<string, any> }) => {
-      const r = await fetch(`/api/channels/agent-configs/${slug}`, {
+      await fetchOk(`/api/channels/agent-configs/${slug}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      });
-      if (!r.ok) throw new Error("Lỗi cập nhật agent");
+      }, "Lỗi cập nhật agent");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-agents"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi cập nhật agent", body: e.message, tone: "error" }),
   });
 
   const deleteAgent = useMutation({
     mutationFn: async (slug: string) => {
-      const r = await fetch(`/api/channels/agent-configs/${slug}`, { method: "DELETE" });
-      if (!r.ok) throw new Error("Lỗi xóa agent");
+      await fetchOk(`/api/channels/agent-configs/${slug}`, { method: "DELETE" }, "Lỗi xóa agent");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-agents"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi xóa agent", body: e.message, tone: "error" }),
   });
 
   const cloneAgent = useMutation({
     mutationFn: async (slug: string) => {
-      const r = await fetch(`/api/channels/agent-configs/${slug}/clone`, { method: "POST" });
-      if (!r.ok) throw new Error("Lỗi nhân bản agent");
+      await fetchOk(`/api/channels/agent-configs/${slug}/clone`, { method: "POST" }, "Lỗi nhân bản agent");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-agents"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi nhân bản agent", body: e.message, tone: "error" }),
   });
 
   const filteredAgents = useMemo(() => {
@@ -420,16 +423,18 @@ function ChannelsAgentsTab() {
       await patchAgent.mutateAsync({ slug, data: rest });
     }
     if (soul !== undefined) {
-      const soulRes = await fetch(`/api/channels/agent-configs/${slug}/files/SOUL.md`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: soul }),
-      });
       // Chỉ coi SOUL.md là đã lưu khi server nhận — lỗi thì mốc giữ nguyên nên dirty-guard vẫn bật.
-      if (soulRes.ok) setSoulBaseline((prev) => ({ ...prev, [slug]: soul }));
+      await guard(async () => {
+        await fetchOk(`/api/channels/agent-configs/${slug}/files/SOUL.md`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: soul }),
+        }, "Lỗi lưu SOUL.md");
+        setSoulBaseline((prev) => ({ ...prev, [slug]: soul }));
+      }, "Lỗi lưu SOUL.md");
     }
     qc.invalidateQueries({ queryKey: ["config-agents"] });
-  }, [agentEdits, patchAgent, qc]);
+  }, [agentEdits, patchAgent, qc, guard]);
 
   const getAgentEdit = (slug: string, field: string, fallback: any) => {
     return agentEdits[slug]?.[field] ?? fallback;
@@ -897,6 +902,7 @@ const WEBHOOK_ENDPOINTS = [
 
 function APIIntegrationTab() {
   const qc = useQueryClient();
+  const { pushToast } = useToast();
 
   const { data: config, isLoading } = useQuery({
     queryKey: ["config-hub"],
@@ -911,17 +917,17 @@ function APIIntegrationTab() {
 
   const saveKey = useMutation({
     mutationFn: async ({ key, value }: { key: string; value: string }) => {
-      const r = await fetch("/api/system/config", {
+      await fetchOk("/api/system/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, value }),
-      });
-      if (!r.ok) throw new Error("Lỗi lưu");
+      }, "Lỗi lưu API key");
     },
     onSuccess: () => {
       setEditing({});
       qc.invalidateQueries({ queryKey: ["config-hub"] });
     },
+    onError: (e: any) => pushToast({ title: "Lỗi lưu API key", body: e.message, tone: "error" }),
   });
 
   // Dirty-guard: đang gõ dở API key khác giá trị đã lưu (bấm "Sửa" chưa gõ gì thì chưa dirty).
@@ -966,9 +972,9 @@ function APIIntegrationTab() {
   const [replayResult, setReplayResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const replayWebhook = async (id: string) => {
     try {
-      const r = await fetch(`/api/channels/crm/webhooks/replay/${id}`, { method: "POST" });
+      const r = await fetchOk(`/api/channels/crm/webhooks/replay/${id}`, { method: "POST" }, "Lỗi replay webhook");
       const data = await r.json();
-      setReplayResult((p) => ({ ...p, [id]: { ok: r.ok && data.ok, msg: r.ok && data.ok ? "Đã replay" : data.error || `HTTP ${r.status}` } }));
+      setReplayResult((p) => ({ ...p, [id]: { ok: !!data.ok, msg: data.ok ? "Đã replay" : data.error || `HTTP ${r.status}` } }));
       refetchLogs();
     } catch (err: any) {
       setReplayResult((p) => ({ ...p, [id]: { ok: false, msg: err.message } }));
@@ -1163,12 +1169,11 @@ function EmailTemplatesTab() {
   const saveConfig = useMutation({
     mutationFn: async (pairs: Record<string, string>) => {
       for (const [key, value] of Object.entries(pairs)) {
-        const res = await fetch("/api/system/config", {
+        await fetchOk("/api/system/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ key, value }),
-        });
-        await readJsonOrThrow(res, `Lỗi lưu cấu hình ${key}`);
+        }, `Lỗi lưu cấu hình ${key}`);
       }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-hub"] }),
@@ -1182,16 +1187,16 @@ function EmailTemplatesTab() {
     try {
       // send-email lockdown (2026-07-24): browser KHÔNG cầm secret → qua paperclip-server proxy
       // (giữ SB_SECRET_BACKEND server-side, forward tới send-email). Route sau remoteApiKeyGuard.
-      const r = await fetch("/api/tools/send-test-email", {
+      const r = await fetchOk("/api/tools/send-test-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: testEmail, template: templateKey, data: { name: "Test User", tier: "Tier 1" } }),
-      });
+      }, "Lỗi gửi email test");
       const result = await r.json();
       setTestResult({
         key: templateKey,
-        ok: r.ok && result.success,
-        message: r.ok && result.success ? "Đã gửi!" : result.error || `Lỗi ${r.status}`,
+        ok: !!result.success,
+        message: result.success ? "Đã gửi!" : result.error || `Lỗi ${r.status}`,
       });
     } catch (err: any) {
       setTestResult({ key: templateKey, ok: false, message: err.message });
@@ -1554,6 +1559,8 @@ function EmailTemplatesTab() {
 
 function SystemTab() {
   const qc = useQueryClient();
+  const { pushToast } = useToast();
+  const guard = useGuardedAction();
 
   // Access control
   const { data: channels, isLoading: channelsLoading } = useQuery({
@@ -1575,15 +1582,19 @@ function SystemTab() {
   const pm2Restart = async (name: string) => {
     setPm2Action(`restart:${name}`);
     try {
-      await fetch(`/api/system/pm2/${name}/restart`, { method: "POST" });
-      await refetchPm2();
+      await guard(async () => {
+        await fetchOk(`/api/system/pm2/${name}/restart`, { method: "POST" }, "Lỗi khởi động lại tiến trình");
+        await refetchPm2();
+      }, "Lỗi khởi động lại tiến trình");
     } finally { setPm2Action(null); }
   };
   const pm2Stop = async (name: string) => {
     setPm2Action(`stop:${name}`);
     try {
-      await fetch(`/api/system/pm2/${name}/stop`, { method: "POST" });
-      await refetchPm2();
+      await guard(async () => {
+        await fetchOk(`/api/system/pm2/${name}/stop`, { method: "POST" }, "Lỗi dừng tiến trình");
+        await refetchPm2();
+      }, "Lỗi dừng tiến trình");
     } finally { setPm2Action(null); }
   };
   const pm2FetchLogs = async (name: string) => {
@@ -1605,26 +1616,26 @@ function SystemTab() {
   const [tunnelUrl, setTunnelUrl] = useState("");
   const saveTunnel = useMutation({
     mutationFn: async (url: string) => {
-      const r = await fetch("/api/system/config", {
+      await fetchOk("/api/system/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "cloudflare_tunnel_url", value: url }),
-      });
-      if (!r.ok) throw new Error("Lỗi lưu");
+      }, "Lỗi lưu tunnel URL");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["config-hub"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi lưu tunnel URL", body: e.message, tone: "error" }),
   });
 
   const saveChannelPolicy = useMutation({
     mutationFn: async ({ name, field, value }: { name: string; field: string; value: string }) => {
-      const r = await fetch(`/api/channels/settings/${name}`, {
+      await fetchOk(`/api/channels/settings/${name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [field]: value }),
-      });
-      if (!r.ok) throw new Error("Lỗi cập nhật");
+      }, "Lỗi cập nhật chính sách kênh");
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["system-channels"] }),
+    onError: (e: any) => pushToast({ title: "Lỗi cập nhật chính sách kênh", body: e.message, tone: "error" }),
   });
 
   // System info
@@ -1667,12 +1678,14 @@ function SystemTab() {
       const entries = Object.entries(data);
       let saved = 0;
       for (const [key, value] of entries) {
-        const r = await fetch("/api/system/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key, value: typeof value === "string" ? value : JSON.stringify(value) }),
-        });
-        if (r.ok) saved++;
+        try {
+          await fetchOk("/api/system/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key, value: typeof value === "string" ? value : JSON.stringify(value) }),
+          }, `Lỗi nhập cấu hình ${key}`);
+          saved++;
+        } catch { /* khóa lỗi không đếm — tổng kết "saved/entries" bên dưới */ }
       }
       setImportStatus({ ok: true, message: `Đã nhập ${saved}/${entries.length} cấu hình thành công` });
       qc.invalidateQueries({ queryKey: ["config-hub"] });
