@@ -38,7 +38,12 @@ describe("consumer.ts nối đúng ngoại lệ chào hỏi", () => {
   it("nhánh agent_silent gọi isShortGreeting + dedupeKey + vẫn handleEscalation", () => {
     const i = src.indexOf("markBatch('agent', 'skipped', 'agent_silent')");
     expect(i).toBeGreaterThan(0);
-    const block = src.slice(i, i + 3200);
+    // Cắt đến hết nhánh agent_silent (`return;` đầu tiên sau handleEscalation), không phụ thuộc độ dài cố định —
+    // 03/10 router-escalation chèn thêm ở trên làm cửa sổ 3200 ký tự cũ trượt mất `noPause: true`.
+    const end = src.indexOf("noPause: true", i);
+    expect(end).toBeGreaterThan(i);
+    expect(end - i).toBeLessThan(6000);
+    const block = src.slice(i, end + 40);
     expect(block).toContain("isShortGreeting(merged.content)");
     expect(block).toContain("buildReplyDedupeKey(sessionKey, buildBatchId(claimedIds))");
     expect(block).toContain("isSessionPaused(sessionKey)");
