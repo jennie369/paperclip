@@ -5,6 +5,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Send, Paperclip, Smile, Zap, X, Check, Loader2, CornerUpLeft } from "lucide-react";
 import { channelsApi } from "@/api/channels";
+import { promptDialog } from "@/lib/prompt-dialog";
 
 interface ReplyToInfo {
   id: string;
@@ -343,10 +344,10 @@ export function ChatInput({ onSend, channelName, threadId, threadType, replyTo, 
                 <p className="text-xs font-medium text-muted-foreground">Mẫu trả lời nhanh</p>
                 <button
                   className="text-[11px] text-primary hover:underline"
-                  onClick={() => {
-                    const t = prompt("Nhập mẫu trả lời mới:");
-                    if (t?.trim()) {
-                      const updated = [...customTemplates, t.trim()];
+                  onClick={async () => {
+                    const t = await promptDialog({ title: "Thêm mẫu trả lời", placeholder: "Nhập mẫu trả lời mới", multiline: true, confirmLabel: "Thêm" });
+                    if (t) {
+                      const updated = [...customTemplates, t];
                       setCustomTemplates(updated);
                       saveCustomTemplates(updated);
                     }

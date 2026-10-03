@@ -1,3 +1,4 @@
+import { promptDialog } from "@/lib/prompt-dialog";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1183,10 +1184,10 @@ export function ZaloPersonalChat() {
                 <div className="border-t border-border px-2 py-1.5">
                   <button
                     className="w-full text-left px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors flex items-center gap-1.5"
-                    onClick={() => {
-                      const text = prompt("Nhập mẫu trả lời mới:");
-                      if (text?.trim()) {
-                        const updated = [...customTemplates, text.trim()];
+                    onClick={async () => {
+                      const text = await promptDialog({ title: "Thêm mẫu trả lời", placeholder: "Nhập mẫu trả lời mới", multiline: true, confirmLabel: "Thêm" });
+                      if (text) {
+                        const updated = [...customTemplates, text];
                         setCustomTemplates(updated);
                         saveCustomTemplates(updated);
                       }

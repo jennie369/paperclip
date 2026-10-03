@@ -1,3 +1,5 @@
+import { promptDialog } from "@/lib/prompt-dialog";
+
 const BASE = "/api";
 
 // Khi mở dashboard qua Cloudflare tunnel (gemops.gemcapitalholding.com), server
@@ -40,9 +42,8 @@ let keyPromptInFlight: Promise<string> | null = null;
 function promptRemoteKey(message: string): Promise<string> {
   if (typeof window === "undefined") return Promise.resolve("");
   if (!keyPromptInFlight) {
-    keyPromptInFlight = Promise.resolve().then(() => {
-      const entered = window.prompt(message, "");
-      const k = (entered || "").trim();
+    keyPromptInFlight = Promise.resolve().then(async () => {
+      const k = (await promptDialog({ title: "Paperclip API key", body: message, secret: true, confirmLabel: "Lưu key" })) ?? "";
       if (k) setRemoteApiKey(k);
       keyPromptInFlight = null;
       return k;

@@ -10,6 +10,7 @@ import {
   List, Columns3
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { promptDialog } from "@/lib/prompt-dialog";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -2143,7 +2144,7 @@ export function ContentTab() {
           </button>
         ))}
         <button
-          onClick={() => { const n = prompt('Tên view:'); if (n?.trim()) saveCurrentView(n.trim()); }}
+          onClick={async () => { const n = await promptDialog({ title: "Lưu view hiện tại", placeholder: "Tên view", confirmLabel: "Lưu" }); if (n) saveCurrentView(n); }}
           className="px-2 py-0.5 rounded-full border border-dashed hover:bg-muted transition-colors flex items-center gap-1 text-muted-foreground"
         >
           <Plus className="h-3 w-3" />Lưu view hiện tại

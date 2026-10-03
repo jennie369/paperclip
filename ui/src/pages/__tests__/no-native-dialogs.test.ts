@@ -1,5 +1,5 @@
-// GEM-1153 (ENG-1003-F1132-01): window.alert/confirm chặn luồng JS, không theo theme, bị trình duyệt nhúng/PWA chặn câm
-// (confirm trả false → thao tác tưởng "người dùng huỷ"). Dùng useConfirm() (components/ConfirmDialog) + pushToast.
+// GEM-1153 (ENG-1003-F1132-01) + GEM-1155 (ENG-1003-F1153-01): window.alert/confirm/prompt chặn luồng JS, không theo theme, bị trình duyệt nhúng/PWA chặn câm
+// (confirm trả false → thao tác tưởng "người dùng huỷ"). Dùng useConfirm() (components/ConfirmDialog) / promptDialog() (components/PromptDialog) + pushToast.
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 
 const SRC = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 
-/** Dòng (1-based) có `alert(`/`confirm(` native: `window.`/`globalThis.` tường minh, hoặc lời gọi trần không có `await ` / `.` đứng trước. */
+/** Dòng (1-based) có `alert(`/`confirm(`/`prompt(` native: `window.`/`globalThis.` tường minh, hoặc lời gọi trần không có `await ` / `.` đứng trước. */
 export function findNativeDialogCalls(source: string): number[] {
   const bad: number[] = [];
   source.split("\n").forEach((line, i) => {
     if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) return;
-    if (/\b(window|globalThis|self)\.(alert|confirm)\(/.test(line)) { bad.push(i + 1); return; }
-    const re = /(^|[^\w.$])(alert|confirm)\(/g;
+    if (/\b(window|globalThis|self)\.(alert|confirm|prompt)\(/.test(line)) { bad.push(i + 1); return; }
+    const re = /(^|[^\w.$])(alert|confirm|prompt)\(/g;
     const code = line.replace(/\s\/\/\s.*$/, ""); // bỏ comment cuối dòng
     let m: RegExpExecArray | null;
     while ((m = re.exec(code))) {
@@ -34,11 +34,14 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-describe("không còn window.alert/confirm trong Paperclip UI", () => {
+describe("không còn window.alert/confirm/prompt trong Paperclip UI", () => {
   it("scanner bắt được dạng cũ (đối chứng)", () => {
     expect(findNativeDialogCalls('if (window.confirm("x")) go();')).toEqual([1]);
     expect(findNativeDialogCalls("a;\nif (!confirm(`Xoá ${n}?`)) return;")).toEqual([2]);
     expect(findNativeDialogCalls('alert("lỗi");')).toEqual([1]);
+    expect(findNativeDialogCalls('const n = window.prompt("Tên", "");')).toEqual([1]);
+    expect(findNativeDialogCalls("x;\nconst t = prompt('Tên view:');")).toEqual([2]);
+    expect(findNativeDialogCalls('const v = await promptDialog({ title: "x" });')).toEqual([]);
     expect(findNativeDialogCalls('const ok = await confirm({ title: "x" });')).toEqual([]);
     expect(findNativeDialogCalls("dialog.confirm(x); // alert(1)")).toEqual([]);
   });

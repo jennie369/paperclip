@@ -1,3 +1,4 @@
+import { promptDialog } from "@/lib/prompt-dialog";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT_ADAPTER_TYPES } from "@paperclipai/shared";
@@ -1286,7 +1287,7 @@ function EnvVarEditor({
     if (!key || plain.length === 0) return;
 
     const suggested = defaultSecretName(key) || "secret";
-    const name = window.prompt("Secret name", suggested)?.trim();
+    const name = await promptDialog({ title: "Secret name", defaultValue: suggested, confirmLabel: "Tạo secret" });
     if (!name) return;
 
     try {

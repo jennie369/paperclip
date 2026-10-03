@@ -13,6 +13,7 @@ import { SidebarProvider } from "./context/SidebarContext";
 import { DialogProvider } from "./context/DialogContext";
 import { ToastProvider } from "./context/ToastContext";
 import { ConfirmProvider } from "./components/ConfirmDialog";
+import { PromptHost } from "./components/PromptDialog";
 import { ThemeProvider } from "./context/ThemeContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initPluginBridge } from "./plugins/bridge-init";
@@ -55,6 +56,7 @@ createRoot(document.getElementById("root")!).render(
                         <PluginLauncherProvider>
                           <DialogProvider>
                             <App />
+                            <PromptHost />
                           </DialogProvider>
                         </PluginLauncherProvider>
                       </PanelProvider>
