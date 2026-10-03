@@ -37,6 +37,8 @@ router.get('/', async (req, res) => {
 
   if (channel) query = query.eq('channel_name', String(channel));
   if (label) query = query.eq('label', String(label));
+  // Spam / Đã chặn ẩn khỏi Hộp thư chính; chỉ hiện khi chọn đúng bộ lọc đó (để xem lại + gỡ).
+  else query = query.or('label.is.null,label.not.in.(spam,blocked)');
   if (pinned_only === 'true') query = query.eq('is_pinned', true);
   if (unread_only === 'true') query = query.gt('unread_count', 0);
   if (search) {
@@ -246,8 +248,45 @@ router.post('/:key/mute', async (req, res) => {
 // hot/warm/cold KHÔNG ghi crm_customers: lead_temperature là cột DẪN XUẤT do
 // trigger trg_lead_score tự tính từ lead_score → ghi tay sẽ bị revert ngay.
 // spam + hot/warm/cold = chỉ ở hội thoại. null = gỡ nhãn (giữ CRM nguyên).
+// ── POST /api/channels/conversations/:key/moderation — Đánh dấu spam / Chặn / gỡ ──
+// Body { kind: 'spam' | 'blocked' | null }. 1 RPC ghi CẢ chat_ignored (router Tier 1: bot im)
+// LẪN channel_sessions.label + is_muted (ẩn khỏi Hộp thư, tắt chuông) → không lệch nhau.
+// blocked: consumer bỏ qua hẳn tin mới. null = gỡ (bot + thông báo hoạt động lại).
+const MODERATION_MSG: Record<string, string> = {
+  spam: 'Đã đánh dấu spam — bot sẽ không trả lời, hội thoại chuyển sang mục Spam',
+  blocked: 'Đã chặn — tin mới từ người này sẽ bị bỏ qua hoàn toàn',
+};
+router.post('/:key/moderation', async (req, res) => {
+  const raw = req.body?.kind;
+  const kind = raw === 'spam' || raw === 'blocked' ? raw : null;
+  if (raw != null && kind === null) {
+    res.status(400).json({ error: 'kind phải là spam, blocked hoặc null' });
+    return;
+  }
+  const { error } = await supabase.rpc('channel_set_moderation', { p_session_key: req.params.key, p_kind: kind });
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+  res.json({ kind, message: kind ? MODERATION_MSG[kind] : 'Đã gỡ — bot và thông báo hoạt động lại bình thường' });
+});
+
 router.post('/:key/label', async (req, res) => {
-  const { label } = req.body; // 'hot' | 'warm' | 'cold' | 'vip' | 'spam' | null
+  const { label } = req.body; // 'hot' | 'warm' | 'cold' | 'vip' | 'spam' | 'blocked' | null
+  // spam/blocked là TRẠNG THÁI kiểm duyệt (bot im) — đi qua RPC để chat_ignored + label đồng bộ.
+  // Đổi sang nhãn khác từ spam/blocked → gỡ kiểm duyệt trước (không để bot im mà nhãn đã đổi).
+  if (label === 'spam' || label === 'blocked') {
+    const { error } = await supabase.rpc('channel_set_moderation', { p_session_key: req.params.key, p_kind: label });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ label, message: MODERATION_MSG[label] });
+    return;
+  }
+  const { data: cur } = await supabase.from('channel_sessions')
+    .select('label').eq('session_key', req.params.key).maybeSingle();
+  if (cur?.label === 'spam' || cur?.label === 'blocked') {
+    const { error } = await supabase.rpc('channel_set_moderation', { p_session_key: req.params.key, p_kind: null });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+  }
   await supabase.from('channel_sessions')
     .update({ label: label || null }).eq('session_key', req.params.key);
 

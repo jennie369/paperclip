@@ -650,6 +650,24 @@ async function processResolved(
     try { await supabase.from('channel_pending_messages').update(payload).in('id', claimedIds); } catch { /* best-effort */ }
   };
 
+  // ── Step 5b: CHẶN (03/10) — người/nhóm bị "Chặn" từ Hộp thư: bỏ qua HẲN tin mới ──
+  // (không tạo CRM, không cập nhật hội thoại/unread, không agent). Tin vẫn còn ở
+  // channel_pending_messages (status skipped, skip_reason 'blocked') để tra cứu nếu cần.
+  // 'spam' KHÔNG dừng ở đây: tin vẫn lưu vào hội thoại (mục Spam), router Tier 1 lo bot im.
+  try {
+    const { data: blockedRows } = await supabase
+      .from('chat_ignored')
+      .select('id')
+      .eq('kind', 'blocked')
+      .in('chat_id', Array.from(new Set([merged.chatId, merged.senderId].filter(Boolean))))
+      .limit(1);
+    if (blockedRows && blockedRows.length > 0) {
+      console.log(`${logPrefix} ⛔ người gửi đã bị CHẶN — bỏ qua tin`);
+      await markBatch('consumer', 'skipped', 'blocked');
+      return;
+    }
+  } catch { /* lỗi tra cứu chặn → xử lý như bình thường (không làm câm kênh) */ }
+
   // ── Step 6: Group @mention gating ──
   let suppressAutoReply = false;
   if (merged.peerKind === 'group' && channelConfig.require_mention) {

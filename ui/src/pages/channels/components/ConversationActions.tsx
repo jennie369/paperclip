@@ -5,10 +5,11 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Pin, PinOff, Mail, CheckCheck, Bell, BellOff, Tag, Bot, Download, Trash2,
-  Flame, CloudSun, Snowflake, Star, Ban, ChevronRight, ArrowLeft,
+  Flame, CloudSun, Snowflake, Star, Ban, ChevronRight, ArrowLeft, ShieldBan, RotateCcw,
   type LucideIcon,
 } from "lucide-react";
-import { channelsApi, type ChannelSession, type ConversationLabel } from "@/api/channels";
+import { channelsApi, type ChannelSession, type ConversationLabel, type ModerationKind } from "@/api/channels";
+import { useToast } from "@/context/ToastContext";
 
 interface Props {
   conversation: ChannelSession;
@@ -22,13 +23,18 @@ const LABELS: { key: ConversationLabel; Icon: LucideIcon; text: string; color: s
   { key: "warm", Icon: CloudSun, text: "Ấm", color: "text-amber-500" },
   { key: "cold", Icon: Snowflake, text: "Lạnh", color: "text-sky-500" },
   { key: "vip", Icon: Star, text: "VIP", color: "text-yellow-500" },
-  { key: "spam", Icon: Ban, text: "Spam", color: "text-zinc-500" },
+  // "Spam" KHÔNG còn là nhãn tô màu: dùng mục "Đánh dấu spam" bên dưới (bot im thật). 03/10.
 ];
 
 export function ConversationActions({ conversation: conv, position, onClose, onAction }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [subMenu, setSubMenu] = useState<"label" | "agent" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const { pushToast } = useToast();
+  const moderation: ModerationKind | null =
+    conv.label === "spam" || conv.label === "blocked" ? conv.label : null;
 
   // Fetch agents for "change agent" submenu
   const { data: agents } = useQuery({
@@ -63,11 +69,26 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
     onClose();
   };
 
+  // Spam / Chặn / Gỡ — báo kết quả rõ ràng (thành công lẫn lỗi), chống bấm 2 lần.
+  const setModeration = async (kind: ModerationKind | null) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await channelsApi.setModeration(key, kind);
+      pushToast({ title: res.message, tone: "success" });
+      onAction();
+      onClose();
+    } catch (e: any) {
+      pushToast({ title: "Không đổi được trạng thái hội thoại", body: e?.message || "Lỗi không rõ — thử lại sau ít giây.", tone: "error" });
+      setBusy(false);
+    }
+  };
+
   // Position adjustment to stay in viewport
   const style: React.CSSProperties = {
     position: "fixed",
     left: Math.min(position.x, window.innerWidth - 240),
-    top: Math.min(position.y, window.innerHeight - 400),
+    top: Math.max(8, Math.min(position.y, window.innerHeight - 480)), // menu cao hơn sau khi thêm Spam/Chặn
     zIndex: 9999,
   };
 
@@ -154,6 +175,56 @@ export function ConversationActions({ conversation: conv, position, onClose, onA
           : <BellOff className="h-4 w-4 shrink-0 text-muted-foreground" />}
         {conv.is_muted ? "Bật thông báo" : "Tắt thông báo"}
       </button>
+
+      <div className="border-t my-1" />
+
+      {/* Spam / Chặn (03/10) — bot im thật, ẩn khỏi Hộp thư chính; xem lại ở bộ lọc Spam / Đã chặn */}
+      {moderation ? (
+        <button
+          disabled={busy}
+          onClick={() => setModeration(null)}
+          className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2 disabled:opacity-50"
+        >
+          <RotateCcw className="h-4 w-4 shrink-0 text-muted-foreground" />
+          {moderation === "blocked" ? "Bỏ chặn" : "Bỏ đánh dấu spam"}
+        </button>
+      ) : (
+        <button
+          disabled={busy}
+          onClick={() => setModeration("spam")}
+          title="Bot không trả lời, không nhắn chăm sóc, tắt thông báo. Tin mới vẫn được lưu ở mục Spam."
+          className="w-full px-3 py-1.5 text-left hover:bg-muted/50 flex items-center gap-2 disabled:opacity-50"
+        >
+          <Ban className="h-4 w-4 shrink-0 text-muted-foreground" /> Đánh dấu spam
+        </button>
+      )}
+      {moderation !== "blocked" && (!confirmBlock ? (
+        <button
+          disabled={busy}
+          onClick={() => setConfirmBlock(true)}
+          className="w-full px-3 py-1.5 text-left hover:bg-red-500/10 text-red-500 flex items-center gap-2 disabled:opacity-50"
+        >
+          <ShieldBan className="h-4 w-4 shrink-0" /> Chặn
+        </button>
+      ) : (
+        <div className="px-3 py-1.5 space-y-1.5">
+          <p className="text-xs text-red-500 leading-snug">
+            Chặn người này? Tin mới sẽ bị bỏ qua hoàn toàn: không hiện trong Hộp thư, không thông báo, bot không trả lời. Gỡ được ở bộ lọc "Đã chặn".
+          </p>
+          <div className="flex gap-2">
+            <button
+              disabled={busy}
+              onClick={() => setModeration("blocked")}
+              className="px-2 py-0.5 text-xs bg-red-500 text-white rounded disabled:opacity-50"
+            >
+              Chặn
+            </button>
+            <button onClick={() => setConfirmBlock(false)} className="px-2 py-0.5 text-xs bg-muted rounded">
+              Hủy
+            </button>
+          </div>
+        </div>
+      ))}
 
       <div className="border-t my-1" />
 

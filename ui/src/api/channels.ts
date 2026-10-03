@@ -78,7 +78,7 @@ export interface ChannelSession {
   is_pinned?: boolean;
   is_muted?: boolean;
   is_deleted?: boolean;
-  label?: "hot" | "warm" | "cold" | "vip" | "spam" | null;
+  label?: "hot" | "warm" | "cold" | "vip" | "spam" | "blocked" | null;
   unread_count?: number;
   last_message_preview?: string | null;
   last_message_sender?: string | null;
@@ -130,6 +130,8 @@ export interface ConversationMessage {
 }
 
 export type ConversationLabel = "hot" | "warm" | "cold" | "vip" | "spam";
+/** Trạng thái kiểm duyệt hội thoại: spam (bot im, ẩn khỏi Hộp thư) · blocked (bỏ qua hẳn tin mới) · null = bình thường. */
+export type ModerationKind = "spam" | "blocked";
 
 export interface CostSummary {
   today: { cost: number; tokens_in: number; tokens_out: number; replies: number };
@@ -319,6 +321,11 @@ export const channelsApi = {
   labelConversation: (key: string, label: ConversationLabel | null) =>
     api.post<{ label: string | null; message: string }>(
       `/channels/conversations/${encodeURIComponent(key)}/label`, { label }
+    ),
+
+  setModeration: (key: string, kind: ModerationKind | null) =>
+    api.post<{ kind: ModerationKind | null; message: string }>(
+      `/channels/conversations/${encodeURIComponent(key)}/moderation`, { kind }
     ),
 
   changeAgent: (key: string, agent_slug: string) =>

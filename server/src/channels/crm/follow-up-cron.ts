@@ -140,6 +140,7 @@ async function runScanCycle(): Promise<string> {
       .not('agent_slug', 'is', null)
       // 03/10: hội thoại chị ĐÃ XOÁ không bao giờ được nhắn chăm sóc (spam MISA nhận "em vẫn đang đây").
       .not('is_deleted', 'is', true)
+      .or('label.is.null,label.not.in.(spam,blocked)') // 03/10: không nhắn chăm sóc spam/đã chặn
       .limit(200);
 
     if (error) {
@@ -180,7 +181,8 @@ async function runScanCycle(): Promise<string> {
     .select('session_key, channel_name, chat_id, agent_slug, customer_id, last_message_at, metadata')
     .lte('last_message_at', catchallCutoff)
     .not('agent_slug', 'is', null)
-    .not('is_deleted', 'is', true) // 03/10: bỏ hội thoại đã xoá
+    .not('is_deleted', 'is', true)
+      .or('label.is.null,label.not.in.(spam,blocked)') // 03/10: không nhắn chăm sóc spam/đã chặn // 03/10: bỏ hội thoại đã xoá
     .limit(200);
 
   let catchallQueued = 0;
@@ -387,6 +389,7 @@ async function processQueueCycle(): Promise<string> {
         .eq('channel_name', channelInstance.name)
         // 03/10: lịch đã xếp TRƯỚC khi chị xoá hội thoại cũng không được gửi.
         .not('is_deleted', 'is', true)
+      .or('label.is.null,label.not.in.(spam,blocked)') // 03/10: không nhắn chăm sóc spam/đã chặn
         .order('last_message_at', { ascending: false })
         .limit(1)
         .single();
