@@ -439,8 +439,10 @@ export async function readAntigravityTranscriptUsage(
 
 const AUTH_REQUIRED_RE =
   /(?:not\s+authenticated|please\s+authenticate|authentication\s+required|unauthorized|invalid\s+credentials|not\s+logged\s+in|login\s+required|consent\s+could\s+not\s+be\s+obtained|invalid\s+authorization\s+code|requires\s+authentication)/i;
+// `credits balance is too low` = Gemini 3.8 Flash prepaid-credit wall (GEM-1178: 8 runs of 5
+// agents failed 02:30-03:50 on 03/10, window reopened by itself; no 429/quota word in the line).
 const QUOTA_EXHAUSTED_RE =
-  /(?:resource_exhausted|quota|rate[-\s]?limit|too many requests|\b429\b|billing details|no capacity available|usage limit)/i;
+  /(?:resource_exhausted|quota|rate[-\s]?limit|too many requests|\b429\b|billing details|no capacity available|usage limit|credits? balance (?:is )?too low)/i;
 // agy's streaming link to its agent dropped mid-response ("the connection to the agent
 // was interrupted … subscriber fell behind updates, stalled for 10s"). Same prompt
 // succeeds on a fresh run minutes later (GEM-1017: 11 runs/day by 27/09).

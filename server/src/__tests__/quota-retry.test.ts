@@ -17,6 +17,17 @@ describe("detectAntigravityQuotaExhausted", () => {
     expect(detectAntigravityQuotaExhausted({ stdout: "", stderr: REAL_QUOTA_STDERR }).exhausted).toBe(true);
   });
 
+  it("flags the Gemini 3.8 Flash credits wall (GEM-1178, 8 real runs 03/10 02:30-03:50)", () => {
+    const stderr = "error: Your AI credits balance is too low to continue.";
+    expect(detectAntigravityQuotaExhausted({ stdout: "", stderr }).exhausted).toBe(true);
+    expect(planQuotaRetry({ runId: "r", issueId: null, fromTimer: true, now: new Date(), random: () => 0, errorCode: "antigravity_quota_exhausted", priorAttempts: 0 })).not.toBeNull();
+  });
+
+  it("does not flag the same words when only the agent's stdout says them", () => {
+    const stdout = "Dạ chị, lỗi 'AI credits balance is too low' hôm qua đã tự hồi phục.";
+    expect(detectAntigravityQuotaExhausted({ stdout, stderr: "" }).exhausted).toBe(false);
+  });
+
   it("ignores quota / rate-limit words in the agent's own stdout prose (71/78 false positives)", () => {
     const stdout = [
       "Dạ chị, Reddit đang giãn cách đăng bài (rate limit 285 giây).",
