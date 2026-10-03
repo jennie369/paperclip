@@ -3373,32 +3373,34 @@ async function saveHistory(
     history = history.slice(history.length - limit);
   }
 
-  // Inbox preview: last agent reply text, capped at 200 chars (matches trigger
-  // trg_channel_sent_touch_session cap). Must use exact column names
-  // last_message_preview + last_message_sender — PostgREST silently ignores
-  // unknown columns so a wrong name causes P41 drift (GEM-1028).
-  const last_message_preview = agentReply.substring(0, 200);
-  const last_message_sender = 'Bạn';
-
   // If row exists, UPDATE (preserves real chat_id from channel ingestion).
   // If row missing (training/test sessions), INSERT with synthetic chat_id.
   // Without this insert path, loadHistory always returns [] for training →
   // agent has zero context → repeats the same canned reply every turn
   // (the "robot agent" bug).
   if (session) {
+    // KHÔNG ghi last_message_at / last_message_preview / last_message_sender ở nhánh UPDATE
+    // (P41, GEM-1177): preview Hộp thư chỉ có 2 điểm ghi — consumer (tin VÀO, theo giờ tin) và
+    // trigger DB trg_channel_sent_touch_session (tin RA, theo created_at thật của
+    // channel_sent_messages). saveHistory chạy theo giờ XỬ LÝ và TRƯỚC khi reply thật sự được gửi
+    // (có khi không bao giờ gửi: im lặng/bị chặn) → ghi `now` + nội dung reply ở đây làm
+    // last_message_at vượt created_at của tin ra thật, trigger bị chặn bởi
+    // `last_message_at <= new.created_at` và preview lệch tin cuối thật. Cùng nguyên tắc với
+    // session.ts getOrCreate (27/09).
     await supabase
       .from('channel_sessions')
       .update({
         history,
         history_count: history.length,
         agent_slug: config.slug,
-        last_message_at: now,
-        last_message_preview,
-        last_message_sender,
         updated_at: now,
       })
       .eq('session_key', sessionKey);
   } else {
+    // Phiên training/test chưa có dòng: không có consumer lẫn kênh gửi thật → seed preview 1 lần.
+    // Tên cột PHẢI đúng (PostgREST bỏ qua cột lạ — GEM-1028).
+    const last_message_preview = agentReply.substring(0, 200);
+    const last_message_sender = 'Bạn';
     await supabase
       .from('channel_sessions')
       .insert({
