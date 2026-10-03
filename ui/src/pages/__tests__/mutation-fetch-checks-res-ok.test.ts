@@ -45,6 +45,17 @@ const HARDENED_FILES = [
   "pages/crm/CustomerListPage.tsx",
   "pages/ops/tabs/EmailPushTab.tsx",
 ];
+/** GEM-1190 (ENG-1003-F1152-01): file còn nhiều fetch ghi đã tự kiểm `.ok` thủ công — chỉ bắt lời gọi KHÔNG có dấu hiệu kiểm lỗi. */
+const CHECKED_FILES = [
+  "pages/ops/AffiliatePage.tsx",
+  "pages/ops/sop-engine/BatchGeneratorTab.tsx",
+  "pages/ops/sop-engine/CronLogDrawer.tsx",
+  "pages/ops/sop-engine/RegistryMarketplaceTab.tsx",
+  "pages/ops/sop-engine/PipelinesTab.tsx",
+  "pages/ops/CommandConsolePage.tsx",
+  "components/ops/PlannerBoard.tsx",
+  "pages/ops/tabs/ScheduleTab.tsx",
+];
 const WRITE_VERB = /method\s*:\s*["'`](POST|PUT|PATCH|DELETE)["'`]/;
 
 /** Toàn bộ đối số của 1 lời gọi (từ sau dấu `(` mở) — dừng ở ngoặc đóng cân bằng, KHÔNG dừng ở dấu phẩy. */
@@ -65,6 +76,21 @@ export function findRawWriteFetches(source: string): number[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(source))) {
     if (WRITE_VERB.test(callArgs(source.slice(m.index + m[0].length)))) bad.push(source.slice(0, m.index).split("\n").length);
+  }
+  return bad;
+}
+
+/** Như findRawWriteFetches nhưng bỏ qua lời gọi mà 400 ký tự sau đó (đến fetch kế tiếp) có .ok / OrThrow / fetchOk / throw. */
+export function findUncheckedRawWriteFetches(source: string): number[] {
+  const bad: number[] = [];
+  const re = /\bfetch\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source))) {
+    const rest = source.slice(m.index + m[0].length);
+    if (!WRITE_VERB.test(callArgs(rest))) continue;
+    const next = rest.search(/\bfetch\(/);
+    const tail = rest.slice(0, Math.min(next < 0 ? 400 : next, 400));
+    if (!CHECK.test(tail)) bad.push(source.slice(0, m.index).split("\n").length);
   }
   return bad;
 }
@@ -119,6 +145,18 @@ describe("mutationFn + fetch() phải kiểm res.ok (GEM-1131)", () => {
   it("file đã dọn không còn fetch ghi trần", () => {
     const offenders = HARDENED_FILES.flatMap((f) =>
       findRawWriteFetches(readFileSync(join(SRC, f), "utf8")).map((l) => `${f}:${l}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("GEM-1190: findUncheckedRawWriteFetches bắt fetch ghi không kiểm lỗi, thả khi có .ok", () => {
+    expect(findUncheckedRawWriteFetches('fetch("/a", { method: "POST" }).then(() => close());')).toHaveLength(1);
+    expect(findUncheckedRawWriteFetches('const r = await fetch("/a", { method: "POST" });\nif (!r.ok) throw new Error("x");')).toHaveLength(0);
+  });
+
+  it("file GEM-1190 không còn fetch ghi nào thiếu kiểm res.ok", () => {
+    const offenders = CHECKED_FILES.flatMap((f) =>
+      findUncheckedRawWriteFetches(readFileSync(join(SRC, f), "utf8")).map((l) => `${f}:${l}`),
     );
     expect(offenders).toEqual([]);
   });

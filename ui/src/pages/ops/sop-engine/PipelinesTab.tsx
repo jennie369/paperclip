@@ -56,6 +56,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { SopStepsEditor } from './SopStepsEditor';
+import { fetchOk } from "@/lib/readJsonOrThrow";
+import { useGuardedAction } from "@/lib/useGuardedAction";
 
 // ═══════════════════════════════════════════════════════
 // Tooltip wrapper — saves boilerplate at every call site
@@ -641,6 +643,7 @@ function PipelineCard({
 export default function PipelinesTab() {
   const qc = useQueryClient();
   const { pushToast } = useToast();
+  const guard = useGuardedAction();
 
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   // Nested expand: pipelineId → { blockIdx → bool }
@@ -726,12 +729,14 @@ export default function PipelinesTab() {
   const collapseAll = () => setExpandedMap({});
 
   const handleExecute = (id: string) => {
-    fetch(pipelineApi.executeUrl(id), { method: 'POST' }).catch(() => {});
-    pushToast({
-      title: '⚡ Pipeline started',
-      body: `${id} đang chạy. Xem Phiên Agent để track.`,
-      tone: 'info',
-    });
+    guard(async () => {
+      await fetchOk(pipelineApi.executeUrl(id), { method: 'POST' }, 'Lỗi chạy pipeline');
+      pushToast({
+        title: '⚡ Pipeline started',
+        body: `${id} đang chạy. Xem Phiên Agent để track.`,
+        tone: 'info',
+      });
+    }, `Không chạy được pipeline ${id}`);
   };
 
   const handleClone = (id: string) => {

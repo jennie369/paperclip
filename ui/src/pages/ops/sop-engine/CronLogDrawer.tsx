@@ -30,6 +30,7 @@ import {
 import { useToast } from '@/context/ToastContext';
 
 import { useConfirm } from "@/components/ConfirmDialog";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 // ─────────── Types ───────────
 
 interface Cron {
@@ -253,7 +254,7 @@ export function CronLogDrawer({ cronId, open, onClose, onOpenRelated }: Props) {
     if (!(await confirm({ title: `Chạy cron "${cron.display_name}" NGAY bây giờ?`, confirmLabel: "Chạy ngay" }))) return;
     pushToast({ title: `▶️ Triggering ${cron.display_name}…`, tone: 'info' });
     try {
-      const r = await fetch(`/api/registry/crons/${cron.id}/execute`, { method: 'POST' });
+      const r = await fetchOk(`/api/registry/crons/${cron.id}/execute`, { method: 'POST' }, 'Lỗi chạy cron');
       const j = await r.json();
       pushToast({
         title: j.status === 'success' ? `✅ ${cron.display_name} done` : `❌ ${cron.display_name} failed`,

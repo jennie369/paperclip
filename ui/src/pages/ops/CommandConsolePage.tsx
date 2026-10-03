@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Terminal, Send, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/context/ToastContext";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 
 interface LogEntry {
   id: string;
@@ -191,13 +192,14 @@ export function CommandConsolePage() {
           let passed = 0;
           let failed = 0;
           for (const s of drafts) {
-            const cr = await fetch(
+            const cr = await fetchOk(
               "/api/ops/content-pipeline/compliance-check",
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ content: s.body || s.caption || "" }),
               },
+              "Lỗi compliance-check",
             );
             const check = await cr.json();
             if (check.pass) passed++;

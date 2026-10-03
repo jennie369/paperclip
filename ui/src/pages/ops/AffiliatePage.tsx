@@ -11,6 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { opsApi } from "@/api/ops";
 import { SimpleModal } from "../crm/components/SimpleModal";
 import { useLiveInvalidate } from "@/hooks/useLiveInvalidate";
+import { useGuardedAction } from "@/lib/useGuardedAction";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 
 function formatVND(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'TR';
@@ -29,6 +31,7 @@ const tierColors: Record<string, string> = {
  * @capability-skip dirty-guard: trang quản lý CTV: đổi tier, bật/tắt, thanh toán chạy mutation tức thì; hai modal chỉ có lý do từ chối (1 ô) và lời mời CTV (3 ô ngắn) gửi ngay, không có bản nháp dài
  */
 export function AffiliatePage() {
+  const guard = useGuardedAction();
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -239,7 +242,7 @@ export function AffiliatePage() {
                 <div className="text-xs text-muted-foreground">{cron.schedule} · {cron.desc}</div>
               </div>
               <div className="flex gap-1">
-                <Button size="sm" variant="outline" onClick={() => fetch(`/api/ops/affiliate/cron/${cron.name.toLowerCase().replace(/\s/g, '-')}/run`, { method: 'POST' })}>
+                <Button size="sm" variant="outline" onClick={() => guard(async () => { await fetchOk(`/api/ops/affiliate/cron/${cron.name.toLowerCase().replace(/\s/g, '-')}/run`, { method: 'POST' }, 'Lỗi chạy cron'); }, `Không chạy được cron ${cron.name}`)}>
                   <Play className="h-3 w-3 mr-1" /> Chạy ngay
                 </Button>
               </div>
@@ -262,11 +265,14 @@ export function AffiliatePage() {
       <SimpleModal open={showInviteModal} onClose={() => setShowInviteModal(false)} title="Mời CTV mới" footer={<>
         <Button variant="outline" onClick={() => setShowInviteModal(false)}>Hủy</Button>
         <Button disabled={!inviteEmail.trim()} onClick={() => {
-          fetch('/api/ops/affiliate/invite', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: inviteEmail, role: inviteRole, note: inviteNote }),
-          }).then(() => { setShowInviteModal(false); setInviteEmail(''); setInviteNote(''); inv(); });
+          guard(async () => {
+            await fetchOk('/api/ops/affiliate/invite', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: inviteEmail, role: inviteRole, note: inviteNote }),
+            }, 'Lỗi gửi lời mời');
+            setShowInviteModal(false); setInviteEmail(''); setInviteNote(''); inv();
+          }, 'Không gửi được lời mời CTV');
         }}>
           <Mail className="h-4 w-4 mr-1" /> Gửi lời mời
         </Button>

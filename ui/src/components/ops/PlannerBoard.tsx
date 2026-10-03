@@ -24,6 +24,7 @@ import { useToast } from "@/context/ToastContext";
 import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 
 import { useConfirm } from "@/components/ConfirmDialog";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 // ─── Constants ────────────────────────────────────────────────────
 const ACCOUNTS = [
   { key: "profile_jennie", label: "👤 Profile Jennie", voice: "jennie",
@@ -416,10 +417,10 @@ function DelegateModal({ planId, onClose }: { planId: string; onClose: () => voi
 
   const run = useCallback(async () => {
     try {
-      const res = await fetch("/api/ops/content-pipeline/planner/delegate-ceo", {
+      const res = await fetchOk("/api/ops/content-pipeline/planner/delegate-ceo", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan_id: planId }),
-      });
+      }, "Lỗi delegate CEO");
       const reader = res.body?.getReader();
       if (!reader) return;
       const dec = new TextDecoder();

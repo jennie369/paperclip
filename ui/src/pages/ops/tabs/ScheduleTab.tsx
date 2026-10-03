@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/context/ToastContext";
 import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 
 // ─── Constants ───────────────────────────────────────────────────
 const ACCOUNTS = [
@@ -235,10 +236,10 @@ export function ScheduleTab() {
     setShowDelegateLog(true);
 
     try {
-      const res = await fetch('/api/ops/content-pipeline/planner/delegate-ceo', {
+      const res = await fetchOk('/api/ops/content-pipeline/planner/delegate-ceo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan_id: planId }),
-      });
+      }, 'Lỗi delegate CEO');
       const reader = res.body?.getReader();
       if (!reader) return;
       const dec = new TextDecoder();

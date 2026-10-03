@@ -41,6 +41,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { useNavigate } from '@/lib/router';
+import { fetchOk } from "@/lib/readJsonOrThrow";
 
 interface BatchJob {
   id: string;
@@ -167,11 +168,11 @@ export default function BatchGeneratorTab() {
     pushToast({ title: `⚡ Starting batch (${mode})`, tone: 'info' });
 
     try {
-      const res = await fetch('/api/ops/sop-engine/batch-jobs/trigger', {
+      const res = await fetchOk('/api/ops/sop-engine/batch-jobs/trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
-      });
+      }, 'Lỗi trigger batch');
 
       if (!res.body) {
         setLog((l) => [...l, '[error] Không có response body']);

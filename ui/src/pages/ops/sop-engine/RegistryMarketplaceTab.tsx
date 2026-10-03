@@ -669,6 +669,7 @@ function MCPSubTab() {
     pushToast({ title: `🧪 Test MCP ${row.name}...`, tone: 'info' });
     try {
       const res = await fetch(`/api/registry/mcp/${row.id}/test`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
       const result = await res.json();
       pushToast({
         title: result.ok ? `✅ ${row.name} OK` : `❌ ${row.name} failed`,
@@ -814,6 +815,7 @@ function ScriptsSubTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
       const result = await res.json();
       pushToast({
         title: result.ok ? `✅ ${row.name} done (exit ${result.exit_code})` : `❌ ${row.name} failed (exit ${result.exit_code})`,
@@ -1339,6 +1341,7 @@ function SystemSubTab() {
 import { CronLogDrawer } from './CronLogDrawer';
 
 import { useConfirm } from "@/components/ConfirmDialog";
+import { fetchOk } from "@/lib/readJsonOrThrow";
 type CronRow = {
   id: string;
   display_name: string;
@@ -1450,7 +1453,7 @@ function CronRegistryListView() {
     if (!(await confirm({ title: `Chạy cron "${row.display_name}" NGAY?`, body: `Schedule: ${row.cron_humanized || row.cron_expression}`, confirmLabel: "Chạy ngay" }))) return;
     pushToast({ title: `▶️ ${row.display_name}...`, tone: 'info' });
     try {
-      const r = await fetch(`/api/registry/crons/${row.id}/execute`, { method: 'POST' });
+      const r = await fetchOk(`/api/registry/crons/${row.id}/execute`, { method: 'POST' }, 'Lỗi chạy cron');
       const j = await r.json();
       pushToast({
         title: j.status === 'success' ? `✅ Done` : `❌ Failed`,
