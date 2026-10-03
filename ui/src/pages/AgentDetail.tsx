@@ -80,6 +80,8 @@ import {
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
 
+import { useConfirm } from "@/components/ConfirmDialog";
+import { useToast } from "@/context/ToastContext";
 const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string }> = {
   succeeded: { icon: CheckCircle2, color: "text-green-600 dark:text-green-400" },
   failed: { icon: XCircle, color: "text-red-600 dark:text-red-400" },
@@ -2080,6 +2082,8 @@ function RunsTab({
 /* ---- Run Detail (expanded) ---- */
 
 function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: HeartbeatRun; agentRouteId: string; adapterType: string }) {
+  const { pushToast } = useToast();
+  const confirm = useConfirm();
   const { companyPrefix } = useParams<{ companyPrefix?: string }>();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -2203,8 +2207,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
   const runGeminiLogin = useMutation({
     mutationFn: () => agentsApi.loginWithGemini(run.agentId, run.companyId),
     onSuccess: () => {
-      // Just show a local toast or alert, or it will be self-evident.
-      alert("Please check your browser. Gemini authentication page has been opened.");
+      pushToast({ title: "Please check your browser", body: "Gemini authentication page has been opened.", tone: "info" });
     },
   });
 
@@ -2464,11 +2467,12 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
                       type="button"
                       className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
                       disabled={clearSessionsForTouchedIssues.isPending}
-                      onClick={() => {
+                      onClick={async () => {
                         const issueCount = touchedIssueIds.length;
-                        const confirmed = window.confirm(
-                          `Clear session for ${issueCount} issue${issueCount === 1 ? "" : "s"} touched by this run?`,
-                        );
+                        const confirmed = await confirm({
+                          title: `Clear session for ${issueCount} issue${issueCount === 1 ? "" : "s"} touched by this run?`,
+                          destructive: true,
+                        });
                         if (!confirmed) return;
                         clearSessionsForTouchedIssues.mutate();
                       }}

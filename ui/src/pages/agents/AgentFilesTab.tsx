@@ -4,6 +4,7 @@ import { Save, FileText, AlertCircle, CheckCircle, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button";
 import { api } from "@/api/client";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 interface AgentFile {
   name: string;
   missing: boolean;
@@ -20,6 +21,7 @@ const FILE_DESCRIPTIONS: Record<string, string> = {
 };
 
 export function AgentFilesTab({ slug }: { slug: string }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const [selectedFile, setSelectedFile] = useState("SOUL.md");
   const [editContent, setEditContent] = useState("");
@@ -45,8 +47,8 @@ export function AgentFilesTab({ slug }: { slug: string }) {
     },
   });
 
-  function selectFile(name: string) {
-    if (isDirty && !confirm("Thay đổi chưa lưu sẽ bị mất. Tiếp tục?")) return;
+  async function selectFile(name: string) {
+    if (isDirty && !(await confirm({ title: "Thay đổi chưa lưu sẽ bị mất", body: "Tiếp tục sẽ bỏ các thay đổi chưa lưu.", confirmLabel: "Tiếp tục", destructive: true }))) return;
     setSelectedFile(name);
     const file = files.find((f) => f.name === name);
     setEditContent(file?.content || "");

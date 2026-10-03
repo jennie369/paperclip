@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, Play, Trash2, Loader2, GitBranch, Clock, CheckCircle2, XCircle } from "lucide-react";
 import { useNavigate } from "@/lib/router";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface WorkflowSummary {
@@ -76,6 +77,7 @@ function formatDate(iso?: string) {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function WorkflowListPage() {
+  const confirm = useConfirm();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -177,8 +179,8 @@ export function WorkflowListPage() {
                   variant="ghost"
                   size="icon-xs"
                   title="Xoá workflow"
-                  onClick={() => {
-                    if (window.confirm("Bạn có chắc muốn xoá workflow này?")) {
+                  onClick={async () => {
+                    if (await confirm({ title: "Xoá workflow này?", body: "Hành động không thể hoàn tác.", confirmLabel: "Xoá", destructive: true })) {
                       deleteMutation.mutate(wf.id);
                     }
                   }}

@@ -23,6 +23,7 @@ import { Card } from "@/components/ui/card";
 import { useToast } from "@/context/ToastContext";
 import { readJsonOrThrow } from "@/lib/readJsonOrThrow";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 // ─── Constants ────────────────────────────────────────────────────
 const ACCOUNTS = [
   { key: "profile_jennie", label: "👤 Profile Jennie", voice: "jennie",
@@ -470,6 +471,7 @@ function DelegateModal({ planId, onClose }: { planId: string; onClose: () => voi
 
 // ─── Main PlannerBoard ────────────────────────────────────────────
 export function PlannerBoard() {
+  const confirm = useConfirm();
   const { pushToast } = useToast();
   const qc = useQueryClient();
 
@@ -873,8 +875,8 @@ export function PlannerBoard() {
             <CheckCircle size={10} className="mr-1" /> Duyệt
           </Button>
           <Button size="sm" className="h-6 text-[11px] px-2 bg-red-600 hover:bg-red-700"
-            onClick={() => {
-              if (confirm(`Xoá ${selectedIds.size} bài? Không thể hoàn tác!`)) {
+            onClick={async () => {
+              if (await confirm({ title: `Xoá ${selectedIds.size} bài?`, body: "Không thể hoàn tác!", confirmLabel: "Xoá", destructive: true })) {
                 deleteMut.mutate([...selectedIds]);
               }
             }}>

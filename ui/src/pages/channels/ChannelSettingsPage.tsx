@@ -34,6 +34,7 @@ import { useToast } from "@/context/ToastContext";
 import { fetchOk } from "@/lib/readJsonOrThrow";
 import { useGuardedAction } from "@/lib/useGuardedAction";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 type DmPolicy = "open" | "allowlist" | "pairing" | "disabled";
 type GroupPolicy = "open" | "allowlist" | "pairing" | "disabled";
 
@@ -402,6 +403,7 @@ export function ChannelSettingsPage() {
  * Channel settings list (no specific channel selected)
  */
 function ChannelSettingsList() {
+  const confirm = useConfirm();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { pushToast } = useToast();
@@ -694,16 +696,16 @@ function ChannelSettingsList() {
                       const res = await fetchOk(`/api/channels/zalo-personal/${encodeURIComponent(inst.name)}/refresh-key`, { method: "POST" }, "Lỗi refresh key");
                       const data = await res.json();
                       if (data.success) {
-                        alert(`Đã refresh key thành công!\n${data.message}`);
+                        pushToast({ title: "Đã refresh key thành công", body: data.message, tone: "success" });
                       } else {
-                        const retry = confirm(`Refresh key thất bại: ${data.message}\n\nBạn có muốn đăng nhập lại bằng QR?`);
+                        const retry = await confirm({ title: "Refresh key thất bại", body: `${data.message}\n\nBạn có muốn đăng nhập lại bằng QR?`, confirmLabel: "Đăng nhập lại QR" });
                         if (retry) {
                           await channelsApi.stopChannel(inst.name);
                           navigate(`../channels/zalo-personal?relogin=${encodeURIComponent(inst.name)}`);
                         }
                       }
                     } catch (err: any) {
-                      alert(`Lỗi: ${err.message}`);
+                      pushToast({ title: "Lỗi refresh key", body: err.message, tone: "error" });
                     }
                     qc.invalidateQueries({ queryKey: ["channels"] });
                   }} title="Refresh encryption key (thử trước) hoặc đăng nhập lại QR">

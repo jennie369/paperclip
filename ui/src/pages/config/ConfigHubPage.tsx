@@ -1181,7 +1181,7 @@ function EmailTemplatesTab() {
   });
 
   const handleSendTest = async (templateKey: string) => {
-    if (!testEmail) { alert("Nhập email test trước"); return; }
+    if (!testEmail) { pushToast({ title: "Nhập email test trước", tone: "warn" }); return; }
     setSendingTest(templateKey);
     setTestResult(null);
     try {
@@ -1664,7 +1664,7 @@ function SystemTab() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(`Lỗi export: ${err.message}`);
+      pushToast({ title: "Lỗi export", body: err.message, tone: "error" });
     }
   };
 

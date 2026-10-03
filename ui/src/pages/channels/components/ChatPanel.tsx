@@ -13,6 +13,7 @@ import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
 import { MessageRenderer } from "./MessageRenderer";
 
+import { useToast } from "@/context/ToastContext";
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "😡"];
 
 interface Props {
@@ -96,6 +97,7 @@ function MenuItem({
 }
 
 export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, channelMap, onBack }: Props) {
+  const { pushToast } = useToast();
   const { openImage } = useImageLightbox();
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledSessionRef = useRef<string | null>(null); // Session we've already scrolled to bottom for (only set AFTER messages loaded)
@@ -264,7 +266,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
       if (!r.ok || d?.success === false) throw new Error(d?.error || `HTTP ${r.status}`);
     } catch (e) {
       // Chỉ nổ khi hỏng — im lặng lúc hỏng mới là thứ nguy hiểm.
-      alert(`Không thu hồi được: ${(e as Error).message}`);
+      pushToast({ title: "Không thu hồi được", body: (e as Error).message, tone: "error" });
     }
     refetch();
   };
@@ -284,7 +286,7 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d?.success === false) throw new Error(d?.error || `HTTP ${r.status}`);
     } catch (e) {
-      alert(`Không sửa được: ${(e as Error).message}`);
+      pushToast({ title: "Không sửa được", body: (e as Error).message, tone: "error" });
     }
     refetch();
   };

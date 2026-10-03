@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { useConfirm } from '@/components/ConfirmDialog';
 import {
   Image as ImageIcon,
   Copy,
@@ -27,6 +28,7 @@ export default function MediaGalleryGrid({
   onEdit,
   className = '',
 }) {
+  const confirm = useConfirm();
   const [copiedId, setCopiedId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [draggedIndex, setDraggedIndex] = useState(null);
@@ -61,7 +63,7 @@ export default function MediaGalleryGrid({
 
   const handleDelete = async (image) => {
     const name = image.position_id || image.file_name || 'hình ảnh này';
-    if (!window.confirm(`Xóa ${name}?`)) return;
+    if (!(await confirm({ title: `Xóa ${name}?`, confirmLabel: 'Xóa', destructive: true }))) return;
 
     setDeletingId(image.id);
     try {

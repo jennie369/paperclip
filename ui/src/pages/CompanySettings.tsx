@@ -16,6 +16,7 @@ import {
   HintIcon
 } from "../components/agent-config-primitives";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 type AgentSnippetInput = {
   onboardingTextUrl: string;
   connectionCandidates?: string[] | null;
@@ -23,6 +24,7 @@ type AgentSnippetInput = {
 };
 
 export function CompanySettings() {
+  const confirm = useConfirm();
   const {
     companies,
     selectedCompany,
@@ -515,11 +517,14 @@ export function CompanySettings() {
                 archiveMutation.isPending ||
                 selectedCompany.status === "archived"
               }
-              onClick={() => {
+              onClick={async () => {
                 if (!selectedCompanyId) return;
-                const confirmed = window.confirm(
-                  `Archive company "${selectedCompany.name}"? It will be hidden from the sidebar.`
-                );
+                const confirmed = await confirm({
+                  title: `Archive company "${selectedCompany.name}"?`,
+                  body: "It will be hidden from the sidebar.",
+                  destructive: true,
+                  confirmLabel: "Archive",
+                });
                 if (!confirmed) return;
                 const nextCompanyId =
                   companies.find(

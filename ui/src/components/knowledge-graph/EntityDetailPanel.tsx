@@ -8,6 +8,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { ENTITY_TYPES, RELATION_TYPES } from "@/lib/kg-config";
 import type { KGEntity, KGRelation } from "@/api/kg-types";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 interface EntityDetailPanelProps {
   entityId: string;
   onClose: () => void;
@@ -21,6 +22,7 @@ export default function EntityDetailPanel({
   onEntityClick,
   onTraverse,
 }: EntityDetailPanelProps) {
+  const confirm = useConfirm();
   const queryClient = useQueryClient();
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -243,8 +245,8 @@ export default function EntityDetailPanel({
               Traverse
             </button>
             <button
-              onClick={() => {
-                if (confirm("Xóa entity này? Tất cả quan hệ sẽ bị xóa theo.")) {
+              onClick={async () => {
+                if (await confirm({ title: "Xóa entity này?", body: "Tất cả quan hệ sẽ bị xóa theo.", confirmLabel: "Xóa", destructive: true })) {
                   deleteMutation.mutate();
                 }
               }}

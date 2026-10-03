@@ -19,6 +19,7 @@ import { mapCrm } from "@/components/crm-messaging/command-center/adapters";
 import { useToast } from "@/context/ToastContext";
 import { fetchOk } from "@/lib/readJsonOrThrow";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 const defaultTicketForm = { title: "", description: "", category: "general", priority: "medium", status: "open", assigned_to_agent: "" };
 
 // SSOT enums (crm_customers) — khớp docs/design_and_architecture/CRM_AND_META_CAPI_SSOT.md
@@ -314,6 +315,7 @@ function InteractionItem({
 }
 
 export function CustomerSidebar({ conversation: conv, onClose }: Props) {
+  const confirm = useConfirm();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
@@ -1040,7 +1042,7 @@ export function CustomerSidebar({ conversation: conv, onClose }: Props) {
                   expanded={expandedActs.has(String(i.id))}
                   onToggle={() => toggleAct(String(i.id))}
                   onSave={(patch) => updateInteractionMut.mutate({ id: String(i.id), patch })}
-                  onDelete={() => { if (window.confirm("Xoá hoạt động này?")) deleteInteractionMut.mutate(String(i.id)); }}
+                  onDelete={async () => { if (await confirm({ title: "Xoá hoạt động này?", confirmLabel: "Xoá", destructive: true })) deleteInteractionMut.mutate(String(i.id)); }}
                 />
               ))}
             </div>

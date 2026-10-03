@@ -14,6 +14,7 @@ import { crmApi, type CRMCustomer } from "@/api/crm";
 import { fetchOk } from "@/lib/readJsonOrThrow";
 import { useGuardedAction } from "@/lib/useGuardedAction";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 const statusOptions = [
   { value: '', label: 'Tất cả' },
   { value: 'lead_moi', label: 'Lead mới' },
@@ -63,6 +64,7 @@ const defaultNewCustomer = { display_name: '', phone: '', email: '', status: 'le
  * @capability-skip dirty-guard: trang danh sách chỉ có ô tìm kiếm/bộ lọc; modal thêm khách hàng chỉ 4 ô ngắn (tên, SĐT, email, trạng thái), nhập lại trong vài giây, không có bản nháp dài để mất
  */
 export function CustomerListPage() {
+  const confirm = useConfirm();
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -172,7 +174,7 @@ export function CustomerListPage() {
           }, 'Đổi trạng thái thất bại')}>Đổi trạng thái</Button>
           <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>Bỏ chọn</Button>
           <Button size="sm" variant="destructive" onClick={async () => {
-            if (!confirm('Xóa ' + selected.size + ' khách hàng đã chọn?')) return;
+            if (!(await confirm({ title: `Xóa ${selected.size} khách hàng đã chọn?`, confirmLabel: "Xóa", destructive: true }))) return;
             await guard(async () => {
               await fetchOk('/api/channels/crm/customers/bulk-delete', {
                 method: 'POST',

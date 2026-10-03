@@ -13,6 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { queryKeys } from "../lib/queryKeys";
 import { formatDateTime, relativeTime } from "../lib/utils";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -27,6 +28,7 @@ function buildAgentHref(agent: InstanceSchedulerHeartbeatAgent) {
 }
 
 export function InstanceSettings() {
+  const confirm = useConfirm();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
@@ -185,9 +187,13 @@ export function InstanceSettings() {
             size="sm"
             className="ml-auto h-7 text-xs"
             disabled={disableAllMutation.isPending}
-            onClick={() => {
+            onClick={async () => {
               const noun = enabledCount === 1 ? "agent" : "agents";
-              if (!window.confirm(`Disable timer heartbeats for all ${enabledCount} enabled ${noun}?`)) {
+              if (!(await confirm({
+                title: `Disable timer heartbeats for all ${enabledCount} enabled ${noun}?`,
+                destructive: true,
+                confirmLabel: "Disable all",
+              }))) {
                 return;
               }
               disableAllMutation.mutate(agents);

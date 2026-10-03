@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import CCSelect from './CCSelect';
 import { supabase } from '../../lib/supabaseClient';
 import { useAuth } from '../../lib/authCompat';
+import { useConfirm } from '@/components/ConfirmDialog';
+import { useToast } from '@/context/ToastContext';
 const formatDate = (d) => d ? new Date(d).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 import {
   Settings,
@@ -48,6 +50,8 @@ const EMPTY_CONNECT_FORM = {
 };
 
 export default function SettingsPage() {
+  const confirm = useConfirm();
+  const { pushToast } = useToast();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('general');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -159,14 +163,14 @@ export default function SettingsPage() {
       handleCancelConnect();
       loadPlatforms();
     } catch (err) {
-      alert('Lỗi khi kết nối: ' + err.message);
+      pushToast({ title: 'Lỗi khi kết nối', body: err.message, tone: 'error' });
     } finally {
       setPlatformSaving(false);
     }
   };
 
   const handleDisconnect = async (platformRecord) => {
-    if (!confirm(`Ngắt kết nối ${platformRecord.platform}?`)) return;
+    if (!(await confirm({ title: `Ngắt kết nối ${platformRecord.platform}?`, confirmLabel: 'Ngắt kết nối', destructive: true }))) return;
 
     try {
       const { error } = await supabase
@@ -181,7 +185,7 @@ export default function SettingsPage() {
       if (error) throw error;
       loadPlatforms();
     } catch (err) {
-      alert('Lỗi: ' + err.message);
+      pushToast({ title: 'Lỗi ngắt kết nối', body: err.message, tone: 'error' });
     }
   };
 

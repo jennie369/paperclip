@@ -28,6 +28,7 @@ import { MetaSelect, SlugUrlHandle } from "../../content-center/components";
 import { ContentBoardView } from "./ContentBoardView";
 import { ContentCalendarView } from "./ContentCalendarView";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1381,6 +1382,7 @@ const ScriptRow = memo(function ScriptRow({
   approveMut: any; dispatchMut: any; onReject: (id: string) => void; deleteMut: any; complianceMut: any;
   pushToast: any; navigate: any; inv: () => void;
 }) {
+  const confirm = useConfirm();
   // Lazy mount: chỉ mount ScriptExpandedPanel lần đầu khi expand, giữ trong DOM bằng CSS display:none.
   // Tác dụng: click expand lần 2+ = instant, không có mount overhead.
   const [hasBeenExpanded, setHasBeenExpanded] = useState(isExpanded);
@@ -1557,7 +1559,7 @@ const ScriptRow = memo(function ScriptRow({
           <Button size="sm" variant="ghost" onClick={() => complianceMut.mutate(fullText)} title="Compliance check">
             <Shield className="h-3 w-3" />
           </Button>
-          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Xóa bài này?')) deleteMut.mutate(s.id); }}>
+          <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => { if (await confirm({ title: 'Xóa bài này?', confirmLabel: 'Xóa', destructive: true })) deleteMut.mutate(s.id); }}>
             <Trash2 className="h-3 w-3" />
           </Button>
           <Button
@@ -1730,6 +1732,7 @@ const MemoizedIframePreview = memo(function MemoizedIframePreview({ srcDoc }: { 
  * @navigable
  */
 export function ContentTab() {
+  const confirm = useConfirm();
   const EmptyState = () => null;
 
 
@@ -2448,7 +2451,7 @@ export function ContentTab() {
             variant="ghost" 
             className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10" 
             onClick={async () => {
-              if (!confirm(`Xóa vĩnh viễn ${selectedIds.size} script?`)) return;
+              if (!(await confirm({ title: `Xóa vĩnh viễn ${selectedIds.size} script?`, confirmLabel: 'Xóa', destructive: true }))) return;
               const ids = Array.from(selectedIds);
               for (const id of ids) await opsApi.deleteScript(id);
               setSelectedIds(new Set());
@@ -2480,9 +2483,10 @@ export function ContentTab() {
               <Check className="w-4 h-4" /> Chọn / Bỏ chọn
             </div>
             <div className="h-px bg-border my-1" />
-            <div className="px-3 py-1.5 hover:bg-muted cursor-pointer text-destructive flex items-center gap-2" onClick={() => { 
-              if (confirm('Xóa script này?')) deleteMut.mutate(contextMenu.scriptId); 
+            <div className="px-3 py-1.5 hover:bg-muted cursor-pointer text-destructive flex items-center gap-2" onClick={async () => { 
+              const scriptId = contextMenu.scriptId;
               closeContextMenu(); 
+              if (await confirm({ title: 'Xóa script này?', confirmLabel: 'Xóa', destructive: true })) deleteMut.mutate(scriptId); 
             }}>
               <Trash2 className="w-4 h-4" /> Xóa script
             </div>

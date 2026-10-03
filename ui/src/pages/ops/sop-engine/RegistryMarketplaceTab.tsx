@@ -180,6 +180,7 @@ function GenericListView({
   rowActions?: RowAction[];
   onRowClick?: (row: any) => void;
 }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const idKey = idField || 'id';
@@ -359,9 +360,9 @@ function GenericListView({
                       </Tip>
                       <Tip text="Xóa item (cả DB và disk nếu có)">
                         <button
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            if (confirm(`Xóa ${item.name || item[idKey]}?`)) {
+                            if (await confirm({ title: `Xóa ${item.name || item[idKey]}?`, confirmLabel: "Xóa", destructive: true })) {
                               deleteMutation.mutate(item[idKey]);
                             }
                           }}
@@ -800,11 +801,12 @@ function HooksSubTab() {
 }
 
 function ScriptsSubTab() {
+  const confirm = useConfirm();
   const [importOpen, setImportOpen] = useState(false);
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const runScript = async (row: any) => {
-    if (!confirm(`Chạy script "${row.name}" ngay bây giờ?\n\nPath: ${row.disk_path || row.script_root + '/' + row.file_name}`)) return;
+    if (!(await confirm({ title: `Chạy script "${row.name}" ngay bây giờ?`, body: `Path: ${row.disk_path || row.script_root + '/' + row.file_name}`, confirmLabel: "Chạy ngay" }))) return;
     pushToast({ title: `▶️ Running ${row.name}...`, tone: 'info' });
     try {
       const res = await fetch(`/api/registry/scripts/${row.id}/execute`, {
@@ -1336,6 +1338,7 @@ function SystemSubTab() {
 // See SESSION_LOG_VIEWER_FEATURE_SPEC for the drawer design contract.
 import { CronLogDrawer } from './CronLogDrawer';
 
+import { useConfirm } from "@/components/ConfirmDialog";
 type CronRow = {
   id: string;
   display_name: string;
@@ -1394,6 +1397,7 @@ function StatusDotMini({ s }: { s?: string }) {
 }
 
 function CronRegistryListView() {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1443,7 +1447,7 @@ function CronRegistryListView() {
 
   const runNow = async (row: CronRow, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`Chạy cron "${row.display_name}" NGAY?\n\nSchedule: ${row.cron_humanized || row.cron_expression}`)) return;
+    if (!(await confirm({ title: `Chạy cron "${row.display_name}" NGAY?`, body: `Schedule: ${row.cron_humanized || row.cron_expression}`, confirmLabel: "Chạy ngay" }))) return;
     pushToast({ title: `▶️ ${row.display_name}...`, tone: 'info' });
     try {
       const r = await fetch(`/api/registry/crons/${row.id}/execute`, { method: 'POST' });
@@ -1461,7 +1465,7 @@ function CronRegistryListView() {
 
   const toggle = async (row: CronRow, enable: boolean, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`${enable ? 'Bật' : 'Tắt'} "${row.display_name}"?`)) return;
+    if (!(await confirm({ title: `${enable ? 'Bật' : 'Tắt'} "${row.display_name}"?`, confirmLabel: enable ? 'Bật' : 'Tắt' }))) return;
     try {
       const r = await fetch(`/api/registry/crons/${row.id}`, {
         method: 'PATCH',

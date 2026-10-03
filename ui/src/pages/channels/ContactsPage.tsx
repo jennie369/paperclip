@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { ChannelBadge } from "@/components/ChannelBadge";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 interface InboxContact {
   id: string;
   name: string;
@@ -155,6 +156,7 @@ function Avatar({ src, name, size = "md" }: { src?: string | null; name: string;
 }
 
 export function ContactsPage() {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -454,9 +456,9 @@ export function ContactsPage() {
                           <Pencil className="h-4 w-4" />
                         </button>
                         <button
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            if (confirm(`Xóa liên hệ "${c.name}"?`)) {
+                            if (await confirm({ title: `Xóa liên hệ "${c.name}"?`, confirmLabel: "Xóa", destructive: true })) {
                               deleteMut.mutate(c.id);
                             }
                           }}

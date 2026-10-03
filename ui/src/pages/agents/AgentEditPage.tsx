@@ -25,9 +25,11 @@ import {
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 
+import { useToast } from "@/context/ToastContext";
 const PROVIDERS: AgentProvider[] = ["claude", "gemini", "antigravity", "openrouter"];
 
 export function AgentEditPage() {
+  const { pushToast } = useToast();
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -742,7 +744,11 @@ export function AgentEditPage() {
               navigate("/ops/sop-engine");
             } else {
               const err = await r.json().catch(() => ({ error: "Lỗi xóa agent" }));
-              alert(err.error || "Không thể xóa agent. Có thể agent đang được gán cho kênh.");
+              pushToast({
+                title: "Không thể xóa agent",
+                body: err.error || "Có thể agent đang được gán cho kênh.",
+                tone: "error",
+              });
             }
           }}>
             <Trash2 className="h-4 w-4 mr-1.5" />

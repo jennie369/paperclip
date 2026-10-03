@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 
+import { useConfirm } from "@/components/ConfirmDialog";
 // ─────────── Types ───────────
 
 interface Cron {
@@ -208,6 +209,7 @@ function fmtDuration(ms?: number): string {
 }
 
 export function CronLogDrawer({ cronId, open, onClose, onOpenRelated }: Props) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -248,7 +250,7 @@ export function CronLogDrawer({ cronId, open, onClose, onOpenRelated }: Props) {
 
   const runNow = useCallback(async () => {
     if (!cron) return;
-    if (!confirm(`Chạy cron "${cron.display_name}" NGAY bây giờ?`)) return;
+    if (!(await confirm({ title: `Chạy cron "${cron.display_name}" NGAY bây giờ?`, confirmLabel: "Chạy ngay" }))) return;
     pushToast({ title: `▶️ Triggering ${cron.display_name}…`, tone: 'info' });
     try {
       const r = await fetch(`/api/registry/crons/${cron.id}/execute`, { method: 'POST' });
@@ -263,12 +265,12 @@ export function CronLogDrawer({ cronId, open, onClose, onOpenRelated }: Props) {
     } catch (e: any) {
       pushToast({ title: 'Run thất bại', body: e.message, tone: 'error' });
     }
-  }, [cron, pushToast, qc, refetchCron, refetchRuns]);
+  }, [cron, confirm, pushToast, qc, refetchCron, refetchRuns]);
 
   const toggleEnabled = useCallback(async () => {
     if (!cron) return;
     const next = !cron.enabled;
-    if (!confirm(`${next ? 'Bật lại' : 'Tắt'} cron "${cron.display_name}"?`)) return;
+    if (!(await confirm({ title: `${next ? 'Bật lại' : 'Tắt'} cron "${cron.display_name}"?`, confirmLabel: next ? 'Bật lại' : 'Tắt' }))) return;
     try {
       const r = await fetch(`/api/registry/crons/${cron.id}`, {
         method: 'PATCH',
@@ -282,7 +284,7 @@ export function CronLogDrawer({ cronId, open, onClose, onOpenRelated }: Props) {
     } catch (e: any) {
       pushToast({ title: 'Toggle thất bại', body: e.message, tone: 'error' });
     }
-  }, [cron, pushToast, qc, refetchCron]);
+  }, [cron, confirm, pushToast, qc, refetchCron]);
 
   // Close on Esc
   useEffect(() => {

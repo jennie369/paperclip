@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import { GenericKanban, type KanbanColumnDef } from "./GenericKanban";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 const defaultBoardStatuses = [
   "backlog",
   "todo",
@@ -71,6 +72,7 @@ function KanbanCard({
   onDelete?: () => void;
   onArchive?: () => void;
 }) {
+  const confirm = useConfirm();
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -123,9 +125,9 @@ function KanbanCard({
                 {onDelete && (
                   <button
                     className="flex w-full items-center gap-2 px-3 py-1.5 hover:bg-destructive/10 text-destructive text-left"
-                    onClick={() => {
+                    onClick={async () => {
                       setMenuOpen(false);
-                      if (window.confirm("Xóa issue này? Hành động không thể hoàn tác.")) {
+                      if (await confirm({ title: "Xóa issue này?", body: "Hành động không thể hoàn tác.", confirmLabel: "Xóa", destructive: true })) {
                         onDelete();
                       }
                     }}

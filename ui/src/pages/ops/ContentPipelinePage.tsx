@@ -22,6 +22,7 @@ import BatchJobsView from "./sop-engine/BatchGeneratorTab";
 import { GenerationJobsBlock } from "./components/GenerationJobsBlock";
 import MediaGallerySection from "../content-center/components/MediaGallerySection";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 // 2026-04-18 — TABS is now a mutable default; the live order lives in state so
 // the user can drag tabs to reorder. aigen moved in front of pipeline per
 // Jennie's request.
@@ -64,6 +65,7 @@ function tabKeysToTabs(keys: TabKey[]): Tab[] {
 }
 
 export function ContentPipelinePage() {
+  const confirm = useConfirm();
   // ── Persistent order via useUIOrder (localStorage cache + Supabase SSOT) ──
   const DEFAULT_TAB_KEYS = DEFAULT_TABS.map((t) => t.key) as TabKey[];
   const [tabKeys, setTabKeys] = useUIOrder<TabKey>('pipeline.tabs.v1', DEFAULT_TAB_KEYS);
@@ -255,7 +257,7 @@ export function ContentPipelinePage() {
               <div className="flex flex-wrap gap-2 items-center">
                 <button
                   onClick={async () => {
-                    if (!confirm("Publish batch TẤT CẢ bài approved có publish_mode=threshold_5 ngay bây giờ?")) return;
+                    if (!(await confirm({ title: "Publish batch ngay bây giờ?", body: "Tất cả bài approved có publish_mode=threshold_5 sẽ được đăng.", confirmLabel: "Publish" }))) return;
                     try {
                       const r = await fetchOk("/api/ops/content-pipeline/publish-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }, "Lỗi publish-batch");
                       const data = await r.json();
@@ -269,7 +271,7 @@ export function ContentPipelinePage() {
                 </button>
                 <button
                   onClick={async () => {
-                    if (!confirm("Publish TẤT CẢ bài approved chưa published (bỏ qua publish_mode)?")) return;
+                    if (!(await confirm({ title: "Publish TẤT CẢ bài approved?", body: "Gồm mọi bài approved chưa published, bỏ qua publish_mode.", confirmLabel: "Publish tất cả" }))) return;
                     try {
                       const r = await fetchOk("/api/ops/content-pipeline/publish-batch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force_all: true }) }, "Lỗi publish-batch force");
                       const data = await r.json();

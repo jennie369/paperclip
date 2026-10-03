@@ -16,7 +16,9 @@ import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
 import type { ApprovalComment } from "@paperclipai/shared";
 import { MarkdownBody } from "../components/MarkdownBody";
 
+import { useConfirm } from "@/components/ConfirmDialog";
 export function ApprovalDetail() {
+  const confirm = useConfirm();
   const { approvalId } = useParams<{ approvalId: string }>();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -311,8 +313,8 @@ export function ApprovalDetail() {
               size="sm"
               variant="outline"
               className="text-destructive border-destructive/40"
-              onClick={() => {
-                if (!window.confirm("Delete this disapproved agent? This cannot be undone.")) return;
+              onClick={async () => {
+                if (!(await confirm({ title: "Delete this disapproved agent?", body: "This cannot be undone.", confirmLabel: "Delete", destructive: true }))) return;
                 deleteAgentMutation.mutate(linkedAgentId);
               }}
               disabled={deleteAgentMutation.isPending}

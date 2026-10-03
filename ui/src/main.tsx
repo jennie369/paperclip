@@ -12,6 +12,7 @@ import { PanelProvider } from "./context/PanelContext";
 import { SidebarProvider } from "./context/SidebarContext";
 import { DialogProvider } from "./context/DialogContext";
 import { ToastProvider } from "./context/ToastContext";
+import { ConfirmProvider } from "./components/ConfirmDialog";
 import { ThemeProvider } from "./context/ThemeContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initPluginBridge } from "./plugins/bridge-init";
@@ -45,6 +46,7 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <CompanyProvider>
             <ToastProvider>
+              <ConfirmProvider>
               <LiveUpdatesProvider>
                 <TooltipProvider>
                   <BreadcrumbProvider>
@@ -60,6 +62,7 @@ createRoot(document.getElementById("root")!).render(
                   </BreadcrumbProvider>
                 </TooltipProvider>
               </LiveUpdatesProvider>
+              </ConfirmProvider>
             </ToastProvider>
           </CompanyProvider>
         </BrowserRouter>
