@@ -1007,7 +1007,30 @@ async function processResolved(
         // hoàn toàn (khách Zalo Hồ Thị Mỹ Huệ bị bỏ rơi 28→29/09, 3 tin, ~20h không ai hay).
         // Chỉ DM khách thật (group/comment không có người đang chờ trả lời). noPause: sự cố hạ tầng,
         // không khoá phiên (tin sau của khách vẫn được bot thử lại). Ticket dedup + ping phanh 30'/session.
-        if (merged.peerKind !== 'group' && merged.peerKind !== 'comment') {
+        // 03/10: router CHẶN reply hỏng (trace/collapse/operator-report/COD 2 lần) giờ trả '' (im lặng,
+        // không gửi câu đệm "Dạ mình đợi em kiểm tra…" — chị Jennie: câu đệm gửi cả cho spam MISA).
+        // Escalation router gắn vẫn phải chạy (dừng bot + phiếu + ping) — nhánh rỗng return sớm nên
+        // xử lý TẠI ĐÂY, thay cho alert agent_silent noPause bên dưới.
+        const routerEsc = (merged as any)._escalation as
+          | { reason: string; priority: 'low' | 'normal' | 'high' | 'urgent'; summary: string }
+          | undefined;
+        if (routerEsc && merged.peerKind !== 'group' && merged.peerKind !== 'comment') {
+          handleEscalation({
+            agentSlug,
+            sessionKey,
+            channelName: merged.channel,
+            chatId: merged.chatId,
+            customerId: customerId || null,
+            customerName: ((merged as any)._customerContext?.name as string) || merged.senderName || null,
+            reason: routerEsc.reason,
+            priority: routerEsc.priority,
+            summary: routerEsc.summary,
+            triggerMessage: merged.content,
+            agentReply: '(reply bị chặn — KHÔNG gửi gì cho khách)',
+          }).catch((err) => {
+            console.error(`${logPrefix} router escalation (silent) unexpected throw: ${err.message}`);
+          });
+        } else if (merged.peerKind !== 'group' && merged.peerKind !== 'comment') {
           // GEM-1126: ngoại lệ HẸP của "không canned fallback" — tin khách CHỈ là lời chào ngắn ("Hi Em")
           // thì gửi 1 câu chào cố định (không giá/cam kết) để khách không treo >20h; mọi tin khác vẫn im lặng.
           // Ticket/ping VẪN tạo (người còn phải vào trả lời phần thật). Fail-soft: lỗi publish → coi như chưa gửi.

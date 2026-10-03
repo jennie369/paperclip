@@ -32,16 +32,17 @@ const cfg = () => ({ slug: "sales-closer", provider: "claude" }) as any;
 
 describe("reply-contract golden-set (P0 baseline)", () => {
   // ── G1: output-style collapse → corrupted → handoff + escalation ──
-  it("G1 backtick/insight collapse → safe handoff + escalation set", async () => {
+  // 03/10 (chị Jennie): chặn reply hỏng → IM LẶNG, KHÔNG gửi câu đệm "Dạ mình đợi em kiểm tra…"
+  // (câu đệm từng gửi cho cả spammer MISA). Escalation vẫn bật → consumer dừng bot + phiếu + ping.
+  it("G1 backtick/insight collapse → SILENT + escalation set", async () => {
     const config = cfg();
     const input =
       "★ Insight ─────────────────────────────────────\n" +
       "Some internal reasoning about the customer.\n" +
       "─────────────────────────────────────────────────\n`";
     const out = await postProcessReply(input, config, null);
-    // Original had letters, scrub nuked them → NOT the raw backtick.
-    expect(out).not.toBe("`");
-    expect(out.length).toBeGreaterThan(0);
+    // Original had letters, scrub nuked them → NOT the raw backtick, and NO canned line.
+    expect(out).toBe("");
     // Corrupted collapse escalates (bot_paused + ticket downstream).
     expect((config as any)._escalation).toBeTruthy();
     expect((config as any)._escalation.reason).toBe("agent_output_corrupted");
@@ -99,11 +100,25 @@ describe("reply-contract golden-set (P0 baseline)", () => {
   });
 
   // ── G8: raw JSONL provider-stream leak → safe fallback ──
-  it("G8 JSONL raw leak → safe fallback line", async () => {
+  // G8c (03/10): KHÔNG chuỗi câu-đệm nào được nằm trong router làm reply cho khách (chặn tái phát).
+  it("G8c router không chứa câu đệm gửi khách", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "../channels/router.ts"), "utf-8");
+    for (const canned of [
+      "Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.",
+      "Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.",
+      "Dạ chị đợi em kiểm tra lại đơn một chút",
+    ]) {
+      expect(src.includes(`'${canned}`), `router còn câu đệm: ${canned}`).toBe(false);
+    }
+  });
+
+  it("G8 JSONL raw leak → SILENT (no canned fallback)", async () => {
     const input =
       '{"type":"init","role":"system"}\n{"type":"message","content":"..."}';
     const out = await postProcessReply(input, cfg(), null);
-    expect(out).toBe("Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.");
+    expect(out).toBe("");
   });
 
   // ── G8b (2026-08-01): Antigravity/Gemini function-call TRACE leak → handoff + escalate ──
@@ -112,15 +127,15 @@ describe("reply-contract golden-set (P0 baseline)", () => {
   //    ...ExitCode:0,Output:=== GET SCHEMA DEFINITIONS ===...task-36}`) prepended to the real reply.
   //    The whole reply must be refused (bled transcript can carry another customer's data) +
   //    escalated (agent malfunctioning). Distinct from G8 (raw JSONL) and G1 (output-style collapse).
-  it("G8b antigravity trace leak → safe handoff + escalation, no trace leaked", async () => {
+  it("G8b antigravity trace leak → SILENT + escalation, no trace leaked", async () => {
     const config = cfg();
     const input =
       'default_api:run_command{CommandLine:python "C:\\Users\\x\\.gemini\\antigravity-cli\\brain\\0a31daed\\scratch\\inspect_tables.py",Cwd:C:\\proj,ExitCode:0,Output:=== GET SCHEMA DEFINITIONS ===\ncrm_tickets properties:\n - id: string\n task-36}\n\nDạ em nhận được chuyển khoản 899k của chị Huệ rồi ạ.';
     const out = await postProcessReply(input, config, null);
     // Never leak any internal-trace token to the customer.
     expect(out).not.toMatch(/default_api|run_command|ExitCode|antigravity-cli|GET SCHEMA/i);
-    // Safe handoff line (same as the corrupted-collapse guard).
-    expect(out).toBe("Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.");
+    // Im lặng (03/10) — không câu đệm.
+    expect(out).toBe("");
     // Malfunction → escalate (bot_paused + ticket + CS ping downstream).
     expect((config as any)._escalation).toBeTruthy();
     expect((config as any)._escalation.reason).toBe("agent_output_corrupted");

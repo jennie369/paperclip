@@ -432,7 +432,7 @@ export async function runAgentWithConfig(
           priority: 'high',
           summary: 'Agent nhắc COD / hỏi hình thức thanh toán 2 lần liên tiếp — cần người xử lý đơn.',
         };
-        reply = 'Dạ chị đợi em kiểm tra lại đơn một chút rồi báo lại chị ngay nha 💛';
+        reply = ''; // 03/10: im lặng, escalation payment_policy_violation chạy ở consumer
       } else {
         reply = reply2;
       }
@@ -774,7 +774,7 @@ async function runViaClaude(
         // Last resort: if nothing parsed, DON'T return raw JSON — return error message
         if (!reply) {
           console.warn(`[Router] Claude JSONL parse: no text found in ${lines.length} lines`);
-          reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+          reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người
         }
 
         // Save session ID
@@ -804,7 +804,7 @@ async function runViaClaude(
       } catch (parseErr) {
         console.warn('[Router] Parse failed:', parseErr);
         // NEVER return raw JSON to customer — return safe fallback
-        reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+        reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người
       }
 
       streamEvents.emit('agent:done', { agentSlug: config.slug, streamKey, reply });
@@ -1212,7 +1212,7 @@ async function runViaGemini(
           } else {
             console.warn(`[Router/${config.provider}] ${config.slug}: no assistant text in ${lines.length} lines (assistantChunks=${assistantChunks.length})`);
           }
-          reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+          reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người
         }
 
         if (newSessionId && !sessionId) {
@@ -1229,7 +1229,7 @@ async function runViaGemini(
       } catch (parseErr) {
         console.warn(`[Router/${config.provider}] ${config.slug}: parse failed`, parseErr);
         // NEVER return raw stdout — return safe fallback
-        reply = 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+        reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người
       }
 
       try {
@@ -1482,7 +1482,7 @@ async function runViaAntigravity(
 
         if (!reply) {
           console.warn(`[Router] Antigravity ${config.slug}: empty reply (exit ${code}). stderr=${stderr.substring(0, 200)}`);
-          reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+          reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người (gem-master: edge chuyển dự phòng)
         }
 
         // Expose the brain id via side-channel (mirrors runViaClaude/Gemini).
@@ -1494,7 +1494,7 @@ async function runViaAntigravity(
         // here, do NOT scrub in this fn.
       } catch (parseErr) {
         console.warn(`[Router/antigravity] ${config.slug}: parse failed`, parseErr);
-        reply = config.fallback_message || 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+        reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người (gem-master: edge chuyển dự phòng)
       }
 
       try {
@@ -2397,7 +2397,7 @@ export async function postProcessReply(
     console.error(
       `[Router/${config.provider}] ${config.slug}: postProcessReply REFUSED JSONL leak (${reply.length} chars). Returning safe fallback.`,
     );
-    return 'Xin lỗi, hệ thống đang xử lý. Vui lòng thử lại sau.';
+    return ''; // 03/10: KHÔNG câu đệm (JSONL leak đã chặn) — im lặng + báo người
   }
 
   // ── Final defense: refuse Antigravity/Gemini function-call TRACE leak (incident
@@ -2425,7 +2425,7 @@ export async function postProcessReply(
       priority: 'high',
       summary: 'Bot rò rỉ trace nội bộ (default_api / run_command / brain transcript) — đã chặn gửi, cần người tiếp quản.',
     };
-    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+    return ''; // 03/10 chị Jennie: chặn reply hỏng thì IM LẶNG, không câu đệm (escalation vẫn chạy ở consumer)
   }
 
   let cleaned = scrubBannedPhrases(reply, config.slug);
@@ -2466,7 +2466,7 @@ export async function postProcessReply(
       priority: 'high',
       summary: 'Bot trả lời lỗi định dạng (rò rỉ output-style nội bộ) — đã chặn gửi, cần người tiếp quản.',
     };
-    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+    return ''; // 03/10 chị Jennie: chặn reply hỏng thì IM LẶNG, không câu đệm (escalation vẫn chạy ở consumer)
   }
 
   // ── Final defense: refuse operator-report leak (incident 2026-08-11) ──
@@ -2493,7 +2493,7 @@ export async function postProcessReply(
       priority: 'high',
       summary: `Bot lộ báo cáo nội bộ (operator-report leak, axis=${opReportAxis}) — đã chặn gửi, cần người kiểm tra.`,
     };
-    return 'Dạ mình đợi em kiểm tra rồi sẽ báo lại nhé ạ.';
+    return ''; // 03/10 chị Jennie: chặn reply hỏng thì IM LẶNG, không câu đệm (escalation vẫn chạy ở consumer)
   }
 
   // Parse + strip [[ESCALATE: ...]] FIRST and stash the intent on config so the
