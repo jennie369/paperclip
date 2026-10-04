@@ -999,6 +999,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
 
     if (attempt.proc.timedOut) {
+      // Same class as antigravity (GEM-1213): a run hung on a quota wall until the
+      // timeout is a quota failure → report it so the quota-retry plan fires.
+      if (
+        !authMeta.requiresAuth &&
+        detectGeminiQuotaExhausted({
+          parsed: attempt.parsed.resultEvent,
+          stdout: attempt.proc.stdout,
+          stderr: attempt.proc.stderr,
+        }).exhausted
+      ) {
+        return {
+          exitCode: attempt.proc.exitCode,
+          signal: attempt.proc.signal,
+          timedOut: false,
+          errorMessage: `Gemini quota exhausted (run hung ${timeoutSec}s on the quota wall).`,
+          errorCode: "gemini_quota_exhausted",
+          clearSession: clearSessionOnMissingSession,
+        };
+      }
       return {
         exitCode: attempt.proc.exitCode,
         signal: attempt.proc.signal,
