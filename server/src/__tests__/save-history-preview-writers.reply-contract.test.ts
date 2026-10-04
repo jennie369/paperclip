@@ -36,3 +36,27 @@ describe('saveHistory — không là writer thứ ba của preview Hộp thư', 
     expect(insertBranch).toMatch(/last_message_sender/);
   });
 });
+
+// GEM-1212 (ENG-1003-F1177-01): 2 upsert `channel_sessions` còn lại cũng không được đè last_message_at
+// lên phiên đã tồn tại → bắt buộc `ignoreDuplicates: true` (chỉ tạo shell khi chưa có dòng).
+describe('upsert channel_sessions — không đè last_message_at lên phiên đã có', () => {
+  const channelsDir = resolve(__dirname, '../channels');
+  const grab = (file: string, anchor: string) => {
+    const src = stripComments(readFileSync(join(channelsDir, file), 'utf-8'));
+    const i = src.indexOf(anchor);
+    expect(i).toBeGreaterThan(-1);
+    const from = src.slice(i);
+    return from.slice(0, from.indexOf('onConflict') + 80);
+  };
+
+  it("POST /conversations: kiểm tra phiên có sẵn + ignoreDuplicates", () => {
+    const blk = grab('routes.ts', "router.post('/conversations'");
+    expect(blk).toMatch(/\.maybeSingle\(\)/);
+    expect(blk).toMatch(/ignoreDuplicates:\s*true/);
+  });
+
+  it('escalation shell (agent-config-routes): ignoreDuplicates', () => {
+    const blk = grab('agent-config-routes.ts', "channel_name: 'gem-master',\n        agent_slug: 'gem-master',\n        peer_kind: 'direct',\n        chat_id: userId");
+    expect(blk).toMatch(/ignoreDuplicates:\s*true/);
+  });
+});

@@ -823,8 +823,16 @@ router.post('/conversations', async (req, res) => {
   if (!channel || !target_id) {
     return res.status(400).json({ error: 'channel và target_id là bắt buộc' });
   }
-  // Upsert session so it appears in inbox
+  // Tạo phiên nếu CHƯA có để hiện trong inbox. Phiên đã tồn tại → KHÔNG ghi đè gì
+  // (đặc biệt last_message_at: chỉ consumer tin VÀO + trigger tin RA được ghi — P41, GEM-1212).
   const sessionKey = `${channel}:${target_id}:${target_id}`;
+  const { data: existing, error: selErr } = await supabase
+    .from('channel_sessions')
+    .select('*')
+    .eq('session_key', sessionKey)
+    .maybeSingle();
+  if (selErr) return res.status(500).json({ error: selErr.message });
+  if (existing) return res.json(existing);
   const { data, error } = await supabase
     .from('channel_sessions')
     .upsert({
@@ -836,10 +844,15 @@ router.post('/conversations', async (req, res) => {
       status: 'active',
       peer_kind: 'direct',
       last_message_at: new Date().toISOString(),
-    }, { onConflict: 'session_key' })
+    }, { onConflict: 'session_key', ignoreDuplicates: true })
     .select()
-    .single();
+    .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) {
+    // race: phiên vừa được tạo bởi writer khác giữa select và upsert
+    const { data: row } = await supabase.from('channel_sessions').select('*').eq('session_key', sessionKey).maybeSingle();
+    return res.json(row);
+  }
   res.json(data);
 });
 

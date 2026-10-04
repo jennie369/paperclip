@@ -1730,7 +1730,8 @@ async function containGemMasterCorruptedOutput(
         status: 'active',
         last_message_at: nowIso,
       },
-      { onConflict: 'session_key' },
+      // ignoreDuplicates: chỉ tạo shell khi CHƯA có phiên — không đè last_message_at (P41, GEM-1212)
+      { onConflict: 'session_key', ignoreDuplicates: true },
     );
     // ② Metadata via atomic jsonb-merge RPC — never read-merge-write the whole
     // object (BUG-081 clobber class) and never inline metadata in the upsert
