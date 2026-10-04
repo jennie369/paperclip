@@ -3600,25 +3600,18 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     addToast({ type: 'success', message: `Đã chèn "${item.label}" vào email.` });
   }, [output, addToast]);
 
-  // -- Email iframe auto-resize to content height --
-  const handleEmailIframeLoad = useCallback(() => {
-    const iframe = emailIframeRef.current;
-    if (!iframe) return;
-    try {
-      const doc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (doc?.body) {
-        const height = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
-        iframe.style.height = height + 40 + 'px';
-      }
-    } catch (e) {
-      // cross-origin error — ignore, keep minHeight
-    }
-  }, []);
-
-  // -- Listen for postMessage from iframe (drop, delete, edit events) --
+  // -- Listen for postMessage from iframe (drop, delete, edit, height events) --
+  // Iframe sandbox không có allow-same-origin => không đọc được contentDocument; iframe tự báo chiều cao qua 'email-height'.
   useEffect(() => {
     const handler = (e) => {
       if (!e.data?.type) return;
+      // Chỉ tin message do chính iframe preview gửi (origin của nó là "null", nên kiểm theo source)
+      if (e.source !== emailIframeRef.current?.contentWindow) return;
+
+      if (e.data.type === 'email-height' && Number.isFinite(e.data.height)) {
+        const iframe = emailIframeRef.current;
+        if (iframe) iframe.style.height = Math.min(Math.max(e.data.height, 0), 20000) + 40 + 'px';
+      }
 
       if (e.data.type === 'email-drop-insert' && e.data.insertBeforeIndex != null) {
         const pendingHtml = window.__emailPendingDropHtml;
@@ -4071,6 +4064,12 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
     // Undo/Redo from parent buttons
     if (e.data.type === 'email-undo') doUndo();
     if (e.data.type === 'email-redo') doRedo();
+  });
+
+  // Report content height once on load (parent cannot read it: sandbox has no same-origin)
+  window.addEventListener('load', function() {
+    var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    window.parent.postMessage({ type: 'email-height', height: h }, '*');
   });
 
   // No auto-sync during editing — sync only happens in disableEditMode()
@@ -6122,7 +6121,6 @@ KHÔNG liệt kê tính năng / điểm mạnh / lợi ích khô khan. PHẢI vi
             contentType={contentType}
             previewSrcDoc={previewSrcDoc}
             iframeRef={emailIframeRef}
-            onIframeLoad={handleEmailIframeLoad}
             canUndo={canUndo}
             canRedo={canRedo}
             placeholders={emailPlaceholders}

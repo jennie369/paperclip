@@ -249,7 +249,7 @@ export function ContentResultPanel({
                   srcDoc={previewSrcDoc}
                   className="border-0 w-full max-w-[620px] bg-white shadow-lg rounded"
                   style={{ minHeight: '800px' }}
-                  sandbox="allow-same-origin allow-scripts"
+                  sandbox="allow-scripts"
                   onLoad={onIframeLoad}
                 />
               </div>

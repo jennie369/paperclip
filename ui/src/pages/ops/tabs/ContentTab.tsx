@@ -1346,7 +1346,7 @@ const MemoizedMarkdownPreview = memo(function MemoizedMarkdownPreview({ body, vi
           srcDoc={buildPreviewDoc(body)}
           style={{ width: '100%', minHeight: 450, border: 'none', display: 'block' }}
           title="HTML Email Preview"
-          sandbox="allow-same-origin allow-scripts allow-popups"
+          sandbox="allow-scripts allow-popups"
         />
       </div>
     );
@@ -1667,6 +1667,15 @@ function buildPreviewDoc(srcDoc: string): string {
 }
 
 
+// Iframe sandbox KHÔNG có allow-same-origin (HTML do admin/AI soạn chạy ở origin mờ, ENG-1004-F1181-02):
+// parent không đọc được contentDocument → font/hover/chiều cao đều chạy TRONG iframe, báo chiều cao qua postMessage.
+const PREVIEW_FONT_CSS = `body,*{-webkit-font-smoothing:antialiased;}:not([style*='font-family']){font-family:'Be Vietnam Pro',Arial,sans-serif;}`;
+
+function withPreviewRuntime(doc: string): string {
+  const runtime = `<script>(function(){var st=document.createElement('style');st.textContent=${JSON.stringify(PREVIEW_FONT_CSS)};document.head.appendChild(st);${HOVER_JS}window.addEventListener('load',function(){var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);window.parent.postMessage({type:'content-preview-height',height:h},'*');});})();<\/script>`;
+  return doc + runtime;
+}
+
 const MemoizedIframePreview = memo(function MemoizedIframePreview({ srcDoc }: { srcDoc: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [loaded, setLoaded] = useState(false);
@@ -1677,10 +1686,22 @@ const MemoizedIframePreview = memo(function MemoizedIframePreview({ srcDoc }: { 
     setLoaded(false);
     const raf = requestAnimationFrame(() => {
       // buildPreviewDoc nhẹ hơn: chỉ inject font link, không bạk hover script
-      setActiveDoc(buildPreviewDoc(srcDoc));
+      setActiveDoc(withPreviewRuntime(buildPreviewDoc(srcDoc)));
     });
     return () => cancelAnimationFrame(raf);
   }, [srcDoc]);
+
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const iframe = iframeRef.current;
+      if (!iframe || e.source !== iframe.contentWindow) return;
+      if (e.data?.type === 'content-preview-height' && Number.isFinite(e.data.height) && e.data.height > 0) {
+        iframe.style.height = Math.min(e.data.height + 20, 2000) + 'px';
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
 
   return (
     <div className="rounded-lg border overflow-hidden bg-white relative" style={{ minHeight: 600 }}>
@@ -1695,27 +1716,8 @@ const MemoizedIframePreview = memo(function MemoizedIframePreview({ srcDoc }: { 
           srcDoc={activeDoc}
           style={{ width:'100%', minHeight:600, border:'none', display:'block', opacity: loaded ? 1 : 0, transition:'opacity 0.15s ease' }}
           title="HTML Preview"
-          sandbox="allow-same-origin allow-scripts allow-popups"
-          onLoad={(e) => {
-            const iframe = e.currentTarget;
-            try {
-              const doc = iframe.contentDocument;
-              if (doc?.body) {
-                // Inject font normalizer style
-                const st = doc.createElement('style');
-                st.textContent = `body,*{-webkit-font-smoothing:antialiased;}:not([style*='font-family']){font-family:'Be Vietnam Pro',Arial,sans-serif;}`;
-                doc.head?.appendChild(st);
-                // Inject hover tooltip script (nhẹ, không phải bắt HTML string)
-                const sc = doc.createElement('script');
-                sc.textContent = HOVER_JS;
-                doc.body.appendChild(sc);
-                // Adjust height TRƯỚC khi show
-                const h = doc.documentElement.scrollHeight;
-                if (h > 0) iframe.style.height = Math.min(h + 20, 2000) + 'px';
-              }
-            } catch {}
-            setLoaded(true);
-          }}
+          sandbox="allow-scripts allow-popups"
+          onLoad={() => setLoaded(true)}
         />
       )}
     </div>
