@@ -1048,7 +1048,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stderr: attempt.proc.stderr,
     });
 
+    const quotaMeta = detectAntigravityQuotaExhausted({
+      stdout: attempt.proc.stdout,
+      stderr: attempt.proc.stderr,
+    });
+
     if (attempt.proc.timedOut) {
+      // A run stuck on a provider quota wall (stderr RESOURCE_EXHAUSTED, agy retries
+      // until our timeout — e.g. Pinterest 02:32 ran 2508s) is a quota failure, not a
+      // plain timeout: report it as such (timedOut:false) so heartbeat's quota-retry
+      // plan schedules the backoff retry instead of marking it `timed_out` (GEM-1213).
+      if (quotaMeta.exhausted && !authMeta.requiresAuth) {
+        return {
+          exitCode: attempt.proc.exitCode,
+          signal: attempt.proc.signal,
+          timedOut: false,
+          errorMessage:
+            firstNonEmptyLine(attempt.proc.stderr) ||
+            `Antigravity Ultra quota exhausted (run hung ${timeoutSec}s on the quota wall).`,
+          errorCode: "antigravity_quota_exhausted",
+        };
+      }
       return {
         exitCode: attempt.proc.exitCode,
         signal: attempt.proc.signal,
@@ -1058,10 +1078,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     }
 
-    const quotaMeta = detectAntigravityQuotaExhausted({
-      stdout: attempt.proc.stdout,
-      stderr: attempt.proc.stderr,
-    });
     // agy `-p --conversation <id>` IGNORES the id we pass when that brain does NOT
     // exist — it auto-creates a brain under ITS OWN id and runs there (verified
     // 2026-06-16). So reading by the id we passed returns empty. Locate the REAL
