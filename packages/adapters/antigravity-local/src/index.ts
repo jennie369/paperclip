@@ -6,6 +6,12 @@ export const label = "Antigravity CLI (Gemini 3.1 Pro)";
 // đoán sai tên model Antigravity expose.
 export const DEFAULT_ANTIGRAVITY_MODEL = "Gemini 3.1 Pro (High)";
 
+// Model dự phòng khi model chính (Gemini) đụng tường credits/quota (GEM-1241): 05/10 tín
+// dụng Gemini cạn ở MỌI model Gemini → 17 agent + 2 bot CSKH đứng 5,5h vì adapter retry cùng
+// model. Mặc định CHỈ áp cho model chính họ Gemini (Claude trong agy là hạn mức riêng — probe
+// 05/10 OK). Ghi đè per-agent bằng adapterConfig.fallbackModels (mảng; [] = tắt dự phòng).
+export const DEFAULT_ANTIGRAVITY_FALLBACK_MODELS: readonly string[] = ["Claude Sonnet 5.5 (High)"];
+
 // Full Antigravity model picker. Pass the string VERBATIM via `--model "<id>"`.
 // Default = DEFAULT_ANTIGRAVITY_MODEL above.
 //

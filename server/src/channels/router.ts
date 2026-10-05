@@ -12,6 +12,9 @@ import {
   findAntigravityReplyByTurnMarker,
   looksLikeSystemPromptLeak as agyLooksLikeLeak,
   defaultAgyCommand,
+  resolveAntigravityModelChain,
+  shouldAntigravityFallback,
+  DEFAULT_ANTIGRAVITY_FALLBACK_MODELS,
 } from '@paperclipai/adapter-antigravity-local/server';
 
 const PROJECT_ROOT = process.env.PROJECT_ROOT || 'C:/Users/Jennie Chu/Desktop/Projects/crypto-pattern-scanner';
@@ -215,6 +218,7 @@ export async function loadAgentConfig(slug: string): Promise<AgentConfig | null>
     enabled: pa?.enabled ?? (data.status !== 'paused'),
     // Antigravity (agy) seeded brain id — see AgentConfig.conversation_id.
     conversation_id: ac.conversationId || pa?.conversation_id || null,
+    fallback_models: ac.fallbackModels,
     created_at: data.created_at,
     updated_at: pa?.updated_at || data.updated_at,
   };
@@ -1483,6 +1487,27 @@ async function runViaAntigravity(
         if (!reply) {
           console.warn(`[Router] Antigravity ${config.slug}: empty reply (exit ${code}). stderr=${stderr.substring(0, 200)}`);
           reply = ''; // 03/10: KHÔNG câu đệm — rỗng = consumer im lặng + báo người (gem-master: edge chuyển dự phòng)
+        }
+
+        // Hết credits/quota ở model này (stderr) → trả lời lại NGAY bằng model kế trong chuỗi
+        // (GEM-1241: 05/10 Gemini cạn tín dụng, gem-master/sales-closer câm 5,5h). Lượt sau
+        // vẫn bắt đầu bằng model chính → Gemini hồi là tự quay về.
+        if (!reply && shouldAntigravityFallback({ stderr })) {
+          const chain = resolveAntigravityModelChain(model, config.fallback_models, DEFAULT_ANTIGRAVITY_FALLBACK_MODELS);
+          const next = chain[1];
+          if (next) {
+            console.warn(`[Router/antigravity] ${config.slug}: model "${model}" hết credits/quota → chạy lại bằng "${next}"`);
+            streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: `antigravity quota: ${model} → ${next}` });
+            try {
+              resolve(await runViaAntigravity(
+                { ...config, model: next, fallback_models: chain.slice(2) },
+                systemPrompt, history, message, sessionKey, signal,
+              ));
+            } catch (fbErr) {
+              reject(fbErr);
+            }
+            return;
+          }
         }
 
         // Expose the brain id via side-channel (mirrors runViaClaude/Gemini).

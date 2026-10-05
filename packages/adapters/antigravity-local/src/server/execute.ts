@@ -27,10 +27,12 @@ import {
   renderTemplate,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
-import { DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
+import { DEFAULT_ANTIGRAVITY_FALLBACK_MODELS, DEFAULT_ANTIGRAVITY_MODEL } from "../index.js";
 import {
   detectAntigravityAuthRequired,
   detectAntigravityQuotaExhausted,
+  resolveAntigravityModelChain,
+  shouldAntigravityFallback,
   detectAntigravityTransientDisconnect,
   findAntigravityRunByTurnMarker,
   looksLikeSystemPromptLeak,
@@ -488,9 +490,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
   );
   const command = asString(config.command, defaultAgyCommand());
-  // Default "Gemini 3.1 Pro (High)" (verified string). No runtime model swap —
-  // Ultra quota exhaustion is handled by the operator switching provider via UI.
+  // Default "Gemini 3.1 Pro (High)" (verified string). Credits/quota wall on the primary
+  // model → the SAME run re-runs on the next model in the chain (GEM-1241); every run
+  // starts on the primary again, so a recovered Gemini is picked back up automatically.
   const model = asString(config.model, DEFAULT_ANTIGRAVITY_MODEL).trim();
+  const modelChain = resolveAntigravityModelChain(
+    model,
+    config.fallbackModels,
+    DEFAULT_ANTIGRAVITY_FALLBACK_MODELS,
+  );
 
   const workspaceContext = parseObject(context.paperclipWorkspace);
   const workspaceCwd = asString(workspaceContext.cwd, "");
@@ -983,7 +991,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Override per-agent via config.printTimeout (Go duration string, e.g. "20m"/"1h"/"24h").
   const agyPrintTimeout = asString(config.printTimeout, "24h").trim() || "24h";
 
-  const buildArgs = (conversationId: string) => {
+  const buildArgs = (conversationId: string, model: string) => {
     const args: string[] = ["-p", pointerPrompt, "--dangerously-skip-permissions"];
     args.push("--print-timeout", agyPrintTimeout);
     // model default is a real string ("Gemini 3.1 Pro (High)") → always pass it.
@@ -994,8 +1002,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     return args;
   };
 
-  const runAttempt = async (conversationId: string) => {
-    const args = buildArgs(conversationId);
+  const runAttempt = async (conversationId: string, attemptModel: string) => {
+    const args = buildArgs(conversationId, attemptModel);
     if (onMeta) {
       await onMeta({
         adapterType: "antigravity_local",
@@ -1042,6 +1050,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       parsed: ReturnType<typeof parseAntigravityStdout>;
     },
     conversationId: string,
+    usedModel: string,
+    modelsTried: string[],
   ): Promise<AdapterExecutionResult> => {
     const authMeta = detectAntigravityAuthRequired({
       stdout: attempt.proc.stdout,
@@ -1170,7 +1180,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       sessionDisplayId: realBrainId,
       provider: "google",
       biller: "google",
-      model,
+      model: usedModel,
       billingType,
       costUsd,
       // buildRunSummaryComment (heartbeat) reads the agent's reply from
@@ -1179,6 +1189,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         stdout: attempt.proc.stdout,
         stderr: attempt.proc.stderr,
         summary,
+        // Model that actually produced this result + the chain tried (GEM-1241).
+        model: usedModel,
+        modelPrimary: model,
+        ...(modelsTried.length > 1 ? { modelsTried, modelFallback: true } : {}),
       },
       summary,
       clearSession: false,
@@ -1195,7 +1209,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   //      run) — gives cross-heartbeat continuity.
   //   3. runId — first run with no brain; agy ignores it + auto-creates; we detect
   //      and persist the real id so run #2 resumes it.
-  // No flash-tier quota fallback — Ultra quota exhaustion → switch provider in UI.
+  // Quota/credits wall → model-chain fallback below (GEM-1241), same conversation id.
   const configuredConversationId = asString(config.conversationId, "").trim();
   const configuredBrainExists =
     configuredConversationId.length > 0 &&
@@ -1238,13 +1252,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   })();
 
+  const modelsTried: string[] = [];
   const initial = await (async () => {
     try {
-      return await runAttempt(conversationId);
+      for (let i = 0; ; i++) {
+        const attemptModel = modelChain[i] ?? model;
+        modelsTried.push(attemptModel);
+        const attempt = await runAttempt(conversationId, attemptModel);
+        const next = modelChain[i + 1];
+        if (!next || !shouldAntigravityFallback({ stderr: attempt.proc.stderr })) return attempt;
+        await onLog(
+          "stderr",
+          `[paperclip] Model "${attemptModel}" hết credits/quota (${firstNonEmptyLine(attempt.proc.stderr) || "stderr quota"}) → chạy lại ngay bằng "${next}".\n`,
+        );
+      }
     } finally {
       livePolling = false;
       await liveLoop;
     }
   })();
-  return toResult(initial, conversationId);
+  return toResult(initial, conversationId, modelsTried[modelsTried.length - 1] ?? model, modelsTried);
 }
