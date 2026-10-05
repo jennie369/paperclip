@@ -58,6 +58,16 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
+// Windows: postgres child handles linger briefly after stop() -> rmSync throws EPERM and
+// used to fail the whole suite (probe/teardown of a TEMP dir must never fail a test run).
+function removeTempDir(dir: string) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch {
+    // best effort: leftover temp dir is harmless
+  }
+}
+
 function formatEmbeddedPostgresError(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
   if (typeof error === "string" && error.length > 0) return error;
@@ -90,7 +100,7 @@ async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSuppo
     };
   } finally {
     await instance.stop().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    removeTempDir(dataDir);
   }
 }
 
@@ -131,12 +141,12 @@ export async function startEmbeddedPostgresTestDatabase(
       connectionString,
       cleanup: async () => {
         await instance.stop().catch(() => {});
-        fs.rmSync(dataDir, { recursive: true, force: true });
+        removeTempDir(dataDir);
       },
     };
   } catch (error) {
     await instance.stop().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    removeTempDir(dataDir);
     throw new Error(
       `Failed to start embedded PostgreSQL test database: ${formatEmbeddedPostgresError(error)}`,
     );
