@@ -23,7 +23,7 @@ import { boundedPoll } from "./bounded-poll.js";
 import { publishLiveEvent } from "./live-events.js";
 import { isHeartbeatSkipped } from "./heartbeat-eligibility.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
-import { getServerAdapter, runningProcesses } from "../adapters/index.js";
+import { getServerAdapter, runningProcesses, terminateProcessTree } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, asString, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
@@ -4390,13 +4390,8 @@ export function heartbeatService(db: Db) {
 
     const running = runningProcesses.get(run.id);
     if (running) {
-      running.child.kill("SIGTERM");
-      const graceMs = Math.max(1, running.graceSec) * 1000;
-      setTimeout(() => {
-        if (!running.child.killed) {
-          running.child.kill("SIGKILL");
-        }
-      }, graceMs);
+      // Kill the WHOLE tree (agy.exe spawns ~30 workers) — fire-and-forget.
+      terminateProcessTree(running.child, running.graceSec);
     }
 
     const cancelled = await setRunStatus(run.id, "cancelled", {
@@ -4422,7 +4417,11 @@ export function heartbeatService(db: Db) {
 
     runningProcesses.delete(run.id);
     await finalizeAgentStatus(run.agentId, "cancelled");
-    await startNextQueuedRunForAgent(run.agentId);
+    // Don't hold the cancel request on the agent start-lock / next spawn:
+    // cancelling N runs in a row used to serialize N lock waits + N spawns.
+    void startNextQueuedRunForAgent(run.agentId).catch((err) => {
+      logger.error({ err, agentId: run.agentId }, "start next queued run after cancel failed");
+    });
     return cancelled;
   }
 
@@ -4446,7 +4445,7 @@ export function heartbeatService(db: Db) {
 
       const running = runningProcesses.get(run.id);
       if (running) {
-        running.child.kill("SIGTERM");
+        terminateProcessTree(running.child, running.graceSec);
         runningProcesses.delete(run.id);
       }
       await releaseIssueExecutionAndPromote(run);

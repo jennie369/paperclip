@@ -35,6 +35,66 @@ type ChildProcessWithEvents = ChildProcess & {
 };
 
 export const runningProcesses = new Map<string, RunningProcess>();
+
+/**
+ * GEMRAL FIX 2026-10-05: kill a spawned child AND all its descendants.
+ *
+ * On Windows `child.kill()` only TerminateProcess()es the direct child (often
+ * the cmd.exe wrapper or agy.exe) — grandchildren (~30 agy workers) survive as
+ * orphans and keep eating RAM. `child.killed` also flips true as soon as the
+ * signal is *sent*, so the old "if (!child.killed) SIGKILL" escalation never ran.
+ *
+ * Windows: `taskkill /PID <pid> /T /F` (whole tree, forced). Spawned with
+ * windowsHide + ignored stdio → libuv adds CREATE_NO_WINDOW (no console flash).
+ * Fire-and-forget: never awaited, never throws, so callers (HTTP cancel route,
+ * timeout timers) return immediately.
+ * POSIX: plain signal to the child (adapters are not spawned detached, so there
+ * is no process group to target).
+ */
+export function killProcessTree(
+  target: ChildProcess | number | null | undefined,
+  signal: NodeJS.Signals = "SIGTERM",
+): void {
+  const pid = typeof target === "number" ? target : target?.pid;
+  if (typeof pid !== "number" || pid <= 0) return;
+  if (process.platform === "win32") {
+    try {
+      const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+        shell: false,
+      });
+      killer.on("error", () => {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already gone */
+        }
+      });
+      killer.unref();
+    } catch {
+      /* best effort */
+    }
+    return;
+  }
+  try {
+    if (typeof target === "object" && target) target.kill(signal);
+    else process.kill(pid, signal);
+  } catch {
+    /* already gone */
+  }
+}
+
+/** SIGTERM the tree now; on POSIX escalate to SIGKILL after graceSec unless it actually exited. */
+export function terminateProcessTree(child: ChildProcess, graceSec: number): void {
+  killProcessTree(child, "SIGTERM");
+  if (process.platform === "win32") return; // taskkill /F is already final
+  const timer = setTimeout(() => {
+    // `child.killed` only means "signal sent"; exitCode/signalCode mean "actually exited".
+    if (child.exitCode === null && child.signalCode === null) killProcessTree(child, "SIGKILL");
+  }, Math.max(1, graceSec) * 1000);
+  timer.unref();
+}
 export const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 export const MAX_EXCERPT_BYTES = 32 * 1024;
 const SENSITIVE_ENV_KEY = /(key|token|secret|password|passwd|authorization|cookie)/i;
@@ -1106,12 +1166,7 @@ export async function runChildProcess(
           opts.timeoutSec > 0
             ? setTimeout(() => {
                 timedOut = true;
-                child.kill("SIGTERM");
-                setTimeout(() => {
-                  if (!child.killed) {
-                    child.kill("SIGKILL");
-                  }
-                }, Math.max(1, opts.graceSec) * 1000);
+                terminateProcessTree(child, opts.graceSec);
               }, opts.timeoutSec * 1000)
             : null;
 
