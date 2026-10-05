@@ -22,6 +22,15 @@ import { logger } from "../middleware/logger.js";
 import { boundedPoll } from "./bounded-poll.js";
 import { publishLiveEvent } from "./live-events.js";
 import { isHeartbeatSkipped } from "./heartbeat-eligibility.js";
+import {
+  evaluateFleetClaim,
+  fleetWindowStart,
+  isFleetClaimGateEnabled,
+  isTimerExempt,
+  orderTimerCandidatesFairly,
+  readFleetThrottleConfig,
+  withKeyedLock,
+} from "./fleet-throttle.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses, terminateProcessTree } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
@@ -1042,6 +1051,8 @@ export function heartbeatService(db: Db) {
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
   const activeRunExecutions = new Set<string>();
+  // Runs already logged as held by the fleet throttle (log once per run, not every tick).
+  const fleetDeferredRunIds = new Set<string>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
@@ -1925,6 +1936,69 @@ export function heartbeatService(db: Db) {
     return Number(count ?? 0);
   }
 
+  /**
+   * Atomic queued→running transition guarded by the company-wide fleet throttle
+   * (fleet-throttle.ts rules 1+2). Serialized per company in-process AND by a
+   * transaction-scoped advisory lock, so two concurrent claimers can never both see
+   * "1 running" and push the fleet to 3. Returns null (run stays queued) when the
+   * fleet is full; the periodic recovery tick (resumeQueuedRuns) retries it.
+   */
+  async function claimQueuedRunWithinFleetLimits(run: typeof heartbeatRuns.$inferSelect) {
+    const fleet = readFleetThrottleConfig();
+    const doClaim = async (executor: Pick<Db, "update">) => {
+      const claimedAt = new Date();
+      return executor
+        .update(heartbeatRuns)
+        .set({
+          status: "running",
+          startedAt: run.startedAt ?? claimedAt,
+          updatedAt: claimedAt,
+        })
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+    };
+    if (!isFleetClaimGateEnabled(fleet)) return doClaim(db);
+
+    return withKeyedLock(`fleet-claim:${run.companyId}`, () =>
+      db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`paperclip:fleet-claim:${run.companyId}`}))`,
+        );
+        const windowStart = fleetWindowStart(new Date(), fleet.startWindowMs);
+        const [counts] = await tx
+          .select({
+            running: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'running')`,
+            startsInWindow: sql<number>`count(*) filter (where ${heartbeatRuns.startedAt} >= ${windowStart.toISOString()}::timestamptz)`,
+          })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.companyId, run.companyId),
+              sql`(${heartbeatRuns.status} = 'running' or ${heartbeatRuns.startedAt} >= ${windowStart.toISOString()}::timestamptz)`,
+            ),
+          );
+        const verdict = evaluateFleetClaim(fleet, {
+          running: Number(counts?.running ?? 0),
+          startsInWindow: Number(counts?.startsInWindow ?? 0),
+        });
+        if (!verdict.ok) {
+          if (!fleetDeferredRunIds.has(run.id)) {
+            if (fleetDeferredRunIds.size > 500) fleetDeferredRunIds.clear();
+            fleetDeferredRunIds.add(run.id);
+            logger.info(
+              { runId: run.id, agentId: run.agentId, ...verdict, maxRunning: fleet.maxRunning, startsPerWindow: fleet.startsPerWindow },
+              "[fleet-throttle] run held in queue (company-wide limit)",
+            );
+          }
+          return null;
+        }
+        fleetDeferredRunIds.delete(run.id);
+        return doClaim(tx as unknown as Db);
+      }),
+    );
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
@@ -1947,18 +2021,9 @@ export function heartbeatService(db: Db) {
       return null;
     }
 
-    const claimedAt = new Date();
-    const claimed = await db
-      .update(heartbeatRuns)
-      .set({
-        status: "running",
-        startedAt: run.startedAt ?? claimedAt,
-        updatedAt: claimedAt,
-      })
-      .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
-      .returning()
-      .then((rows) => rows[0] ?? null);
+    const claimed = await claimQueuedRunWithinFleetLimits(run);
     if (!claimed) return null;
+    const claimedAt = claimed.updatedAt ?? new Date();
 
     publishLiveEvent({
       companyId: claimed.companyId,
@@ -2090,7 +2155,79 @@ export function heartbeatService(db: Db) {
 
   // Fire due quota retries. The claim is one atomic UPDATE (CTE snapshots the plan,
   // the UPDATE removes it) so two overlapping ticks cannot double-fire a retry.
-  async function fireDueQuotaRetries(now: Date) {
+  /**
+   * Fleet rule 3: remaining timer wakes per company in the current wall-clock hour.
+   * Every timer-source run created this hour counts (scheduler fires AND quota retries,
+   * which also carry invocationSource=timer), except exempt agents. null = rule off.
+   */
+  async function computeTimerWakeBudget(
+    now: Date,
+    fleet: ReturnType<typeof readFleetThrottleConfig>,
+    exemptIds: Set<string>,
+  ): Promise<Map<string, number> | null> {
+    if (fleet.timerWakesPerHour <= 0) return null;
+    const hourStart = fleetWindowStart(now, fleet.timerWindowMs);
+    const rows = await db
+      .select({ companyId: heartbeatRuns.companyId, agentId: heartbeatRuns.agentId, count: sql<number>`count(*)` })
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.invocationSource, "timer"), sql`${heartbeatRuns.createdAt} >= ${hourStart.toISOString()}::timestamptz`))
+      .groupBy(heartbeatRuns.companyId, heartbeatRuns.agentId);
+    const budget = new Map<string, number>();
+    for (const row of rows) {
+      if (exemptIds.has(row.agentId)) continue;
+      budget.set(row.companyId, (budget.get(row.companyId) ?? fleet.timerWakesPerHour) - Number(row.count ?? 0));
+    }
+    return budget;
+  }
+
+  async function lastFinishedAtByAgent(agentIds: string[]) {
+    const result = new Map<string, Date | null>();
+    if (agentIds.length === 0) return result;
+    const rows = await db
+      .select({ agentId: heartbeatRuns.agentId, lastFinishedAt: sql<string | null>`max(${heartbeatRuns.finishedAt})` })
+      .from(heartbeatRuns)
+      .where(inArray(heartbeatRuns.agentId, agentIds))
+      .groupBy(heartbeatRuns.agentId);
+    for (const row of rows) {
+      result.set(row.agentId, row.lastFinishedAt ? new Date(row.lastFinishedAt) : null);
+    }
+    return result;
+  }
+
+  async function fireDueQuotaRetries(
+    now: Date,
+    fleetGate?: { timerBudget: Map<string, number> | null; timerExemptIds: Set<string>; fleetDefault: number },
+  ) {
+    // Fleet rule 3: timer-source quota retries share the hourly timer cap. Over-cap plans
+    // are left untouched (still due) so a later tick fires them — never dropped.
+    let agentFilter = sql``;
+    const timerBudget = fleetGate?.timerBudget ?? null;
+    if (timerBudget && fleetGate) {
+      const dueRows = await boundedPoll(db, (tx) =>
+        tx.execute(sql`
+          select s.agent_id as "agentId", a.company_id as "companyId",
+                 coalesce(s.state_json -> 'quotaRetry' ->> 'source', 'timer') as "source"
+          from agent_runtime_state s
+          join agents a on a.id = s.agent_id
+          where (s.state_json -> 'quotaRetry' ->> 'retryAt') ~ '^\\d{4}-'
+            and (s.state_json -> 'quotaRetry' ->> 'retryAt')::timestamptz <= ${now.toISOString()}::timestamptz
+          order by (s.state_json -> 'quotaRetry' ->> 'retryAt')::timestamptz asc
+        `),
+      );
+      const allowed: string[] = [];
+      for (const row of Array.from(dueRows as unknown as Iterable<{ agentId: string; companyId: string; source: string }>)) {
+        if (row.source !== "timer" || fleetGate.timerExemptIds.has(row.agentId)) {
+          allowed.push(row.agentId);
+          continue;
+        }
+        const remaining = timerBudget.get(row.companyId) ?? fleetGate.fleetDefault;
+        if (remaining <= 0) continue;
+        timerBudget.set(row.companyId, remaining - 1);
+        allowed.push(row.agentId);
+      }
+      if (allowed.length === 0) return { due: 0, fired: 0 };
+      agentFilter = sql`and agent_id::text in (${sql.join(allowed.map((id) => sql`${id}`), sql`, `)})`;
+    }
     const claimed = await boundedPoll(db, (tx) =>
       tx.execute(sql`
         with due as (
@@ -2098,6 +2235,7 @@ export function heartbeatService(db: Db) {
           from agent_runtime_state
           where (state_json -> 'quotaRetry' ->> 'retryAt') ~ '^\\d{4}-'
             and (state_json -> 'quotaRetry' ->> 'retryAt')::timestamptz <= ${now.toISOString()}::timestamptz
+            ${agentFilter}
           for update skip locked
         )
         update agent_runtime_state s
@@ -2326,10 +2464,13 @@ export function heartbeatService(db: Db) {
       tx
         .select({ agentId: heartbeatRuns.agentId })
         .from(heartbeatRuns)
-        .where(eq(heartbeatRuns.status, "queued")),
+        .where(eq(heartbeatRuns.status, "queued"))
+        // Fleet throttle fairness: the agent whose run has waited longest goes first.
+        .orderBy(asc(heartbeatRuns.createdAt)),
     );
 
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
+    let spawnedPrevious = false;
     for (let i = 0; i < agentIds.length; i++) {
       // GEMRAL FIX 2026-05-10: Stagger subprocess spawning across agents.
       // executeRun() inside startNextQueuedRunForAgent is fire-and-forget (void),
@@ -2337,10 +2478,13 @@ export function heartbeatService(db: Db) {
       // spawning nearly simultaneously. With 4+ agents each making their first
       // Gemini API call at the same instant, Google's burst rate limiter fires
       // "Reset after 0s" (429). A 2s gap between agents prevents the burst.
-      if (i > 0) {
+      // Only stagger after an agent actually spawned — runs held by the fleet throttle
+      // spawn nothing, so waiting 2s per held agent would just stall the recovery tick.
+      if (i > 0 && spawnedPrevious) {
         await new Promise<void>((res) => setTimeout(res, 2000));
       }
-      await startNextQueuedRunForAgent(agentIds[i]!);
+      const started = await startNextQueuedRunForAgent(agentIds[i]!);
+      spawnedPrevious = Array.isArray(started) && started.length > 0;
     }
   }
 
@@ -4751,17 +4895,44 @@ export function heartbeatService(db: Db) {
       // executeRun() kicked off nearly at the same instant, causing Google Gemini API
       // burst-rate 429 errors ("Reset after 0s"). The 2 s gap matches resumeQueuedRuns.
       let enqueuedInThisTick = 0;
-      for (const { agent, policy, reason } of pendingFires) {
-        const flags = agentTaskFlags.get(agent.id) ?? { hasActionable: false, hasBlocked: false };
+      const fireable: PendingFire[] = [];
+      for (const pending of pendingFires) {
+        const flags = agentTaskFlags.get(pending.agent.id) ?? { hasActionable: false, hasBlocked: false };
 
         // Skip timer-driven heartbeat when all assigned tasks are blocked.
         // Prevents the agent from looping on work it cannot make progress on.
         if (!flags.hasActionable && flags.hasBlocked) {
           logger.debug(
-            { agentId: agent.id },
+            { agentId: pending.agent.id },
             "[tickTimers] Skipping timer wakeup — agent has only blocked tasks",
           );
           skipped += 1;
+          continue;
+        }
+        fireable.push(pending);
+      }
+
+      // Fleet throttle rule 3 (fleet-throttle.ts): at most N timer wakes per wall-clock
+      // hour per company. Over-cap fires are NOT enqueued and their baseline is NOT
+      // advanced, so the next tick re-evaluates them. Fair pick = oldest last-finished.
+      const fleet = readFleetThrottleConfig();
+      const timerExemptIds = new Set(allAgents.filter((a) => isTimerExempt(fleet, a)).map((a) => a.id));
+      const timerBudget = await computeTimerWakeBudget(now, fleet, timerExemptIds);
+      let deferredByFleet = 0;
+      let orderedFires = fireable;
+      if (timerBudget && fireable.length > 1) {
+        const lastFinished = await lastFinishedAtByAgent(fireable.map((p) => p.agent.id));
+        orderedFires = orderTimerCandidatesFairly(fireable, (p) => lastFinished.get(p.agent.id));
+      }
+
+      for (const { agent, policy, reason } of orderedFires) {
+        const capped = timerBudget !== null && !timerExemptIds.has(agent.id);
+        if (capped && (timerBudget.get(agent.companyId) ?? fleet.timerWakesPerHour) <= 0) {
+          deferredByFleet += 1;
+          logger.debug(
+            { agentId: agent.id, timerWakesPerHour: fleet.timerWakesPerHour },
+            "[fleet-throttle] timer wake skipped — hourly company cap reached; re-evaluated next tick",
+          );
           continue;
         }
 
@@ -4788,6 +4959,12 @@ export function heartbeatService(db: Db) {
         if (run) {
           enqueued += 1;
           enqueuedInThisTick += 1;
+          if (capped && timerBudget) {
+            timerBudget.set(
+              agent.companyId,
+              (timerBudget.get(agent.companyId) ?? fleet.timerWakesPerHour) - 1,
+            );
+          }
           // GEMRAL FIX 2026-06-10 (C): claim the slot at ENQUEUE time, not only on
           // run completion (finalizeAgentStatus). Without this the baseline stays old
           // while the run executes, so every 30s tick re-enqueues the same agent
@@ -4803,12 +4980,15 @@ export function heartbeatService(db: Db) {
       // GEM-1004: quota retries ride the same tick (persisted plan, fires after restart too).
       let quotaRetries = { due: 0, fired: 0 };
       try {
-        quotaRetries = await fireDueQuotaRetries(now);
+        quotaRetries = await fireDueQuotaRetries(now, { timerBudget, timerExemptIds, fleetDefault: fleet.timerWakesPerHour });
       } catch (err) {
         logger.warn({ err }, "[tickTimers] quota retry pass failed");
       }
 
-      return { checked, enqueued, skipped, quotaRetries };
+      if (deferredByFleet > 0) {
+        logger.debug({ deferredByFleet }, "[fleet-throttle] timer wakes deferred this tick");
+      }
+      return { checked, enqueued, skipped, deferredByFleet, quotaRetries };
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),
