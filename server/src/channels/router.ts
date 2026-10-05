@@ -39,7 +39,7 @@ import { renderHistoryForPrompt, stripInjectedContext } from './session-history-
 import { detectPaymentPolicyViolation, PREPAY_POLICY_AGENTS } from './payment-policy.js';
 import { loadSalesCloserMediaFromCatalog } from './catalog-media-source.js';
 import { selectInlineJson } from './inline-ssot-select.js';
-import { ProviderTimeoutError, getTimeoutBreaker, resolveTimeoutFallback, runWithTimeoutFallback, withApiTimeout } from './agy-timeout-fallback.js';
+import { ProviderQuotaError, ProviderTimeoutError, getTimeoutBreaker, resolveTimeoutFallback, runWithTimeoutFallback, withApiTimeout } from './agy-timeout-fallback.js';
 
 // Global event emitter for streaming events
 export const streamEvents = new EventEmitter();
@@ -1508,6 +1508,12 @@ async function runViaAntigravity(
             }
             return;
           }
+          // Hết chuỗi model mà vẫn cạn (tín dụng agy là quỹ chung mọi model) → đổi hẳn provider
+          // (claude CLI) qua withTimeoutFallback + breaker, thay vì trả '' cho khách im lặng.
+          console.warn(`[Router/antigravity] ${config.slug}: mọi model agy cạn credits/quota → đổi provider`);
+          streamEvents.emit('agent:error', { agentSlug: config.slug, streamKey, error: 'antigravity quota: hết chuỗi model' });
+          reject(new ProviderQuotaError('antigravity', 'Antigravity', config.slug));
+          return;
         }
 
         // Expose the brain id via side-channel (mirrors runViaClaude/Gemini).

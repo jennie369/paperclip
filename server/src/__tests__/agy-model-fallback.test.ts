@@ -57,3 +57,25 @@ describe('agy model fallback (GEM-1241)', () => {
     expect(resolveAntigravityModelChain('Claude Sonnet 5.5 (High)', undefined, DEFAULT_ANTIGRAVITY_FALLBACK_MODELS)).toEqual(['Claude Sonnet 5.5 (High)']);
   });
 });
+
+// GEM-1241 (12:28 đo thật): tín dụng agy là quỹ chung — Claude trong agy cũng cạn. Hết chuỗi model
+// → ProviderQuotaError → đổi hẳn provider (claude CLI) qua runWithTimeoutFallback; lỗi thường thì không.
+import { ProviderQuotaError, ProviderTimeoutError, runWithTimeoutFallback } from '../channels/agy-timeout-fallback.js';
+
+describe('agy hết credits mọi model → đổi provider (GEM-1241)', () => {
+  it('ProviderQuotaError kích fallback provider khác', async () => {
+    const out = await runWithTimeoutFallback(
+      () => Promise.reject(new ProviderQuotaError('antigravity', 'Antigravity', 'gem-master')),
+      async () => 'claude-reply',
+    );
+    expect(out).toBe('claude-reply');
+    expect(new ProviderQuotaError('antigravity', 'Antigravity', 'x')).toBeInstanceOf(ProviderTimeoutError);
+  });
+
+  it('lỗi thường (không phải quota/timeout) KHÔNG đổi provider', async () => {
+    await expect(runWithTimeoutFallback(
+      () => Promise.reject(new Error('exit 1')),
+      async () => 'claude-reply',
+    )).rejects.toThrow('exit 1');
+  });
+});

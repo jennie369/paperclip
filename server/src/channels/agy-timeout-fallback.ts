@@ -21,6 +21,19 @@ export class ProviderTimeoutError extends Error {
   }
 }
 
+/**
+ * Provider cạn tín dụng/quota ở MỌI model của nó (vd agy: Gemini → Claude trong agy đều "credits balance
+ * is too low" — tín dụng Antigravity là 1 quỹ chung, đo 05/10 12:28). Kế thừa ProviderTimeoutError để đi
+ * đúng đường đổi provider + circuit-breaker sẵn có (agy → claude CLI, quỹ độc lập). GEM-1241.
+ */
+export class ProviderQuotaError extends ProviderTimeoutError {
+  constructor(provider: string, label: string, slug: string) {
+    super(provider, label, slug);
+    this.message = `${label} credits/quota exhausted on every model for ${slug}`;
+    this.name = 'ProviderQuotaError';
+  }
+}
+
 export interface TimeoutFallback {
   provider: 'claude' | 'gemini';
   model: string;
