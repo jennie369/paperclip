@@ -223,6 +223,36 @@ function parseAntigravityRunEntries(
   return { entries, reply: replies.join("\n\n").trim(), found: true };
 }
 
+// GEM-1307 — agy tools that only READ (no side effect). A heartbeat run whose every
+// tool_call is in this set "planned but never acted" (run d5ca8b44 07/10: Yinyang
+// read its prompt, printed the SPEC-LOCK table, ended the turn → slot left empty yet
+// marked succeeded). Unknown tool names count as ACTION (fail-open toward success:
+// a new agy write tool must never make real work look like a no-op).
+export const ANTIGRAVITY_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "view_file",
+  "view_file_outline",
+  "view_code_item",
+  "view_content_chunk",
+  "list_dir",
+  "find_by_name",
+  "grep_search",
+  "codebase_search",
+  "read_url_content",
+  "search_web",
+  "read_resource",
+  "list_resources",
+]);
+
+export function countAntigravityActionCalls(entries: AntigravityNormEntry[]): number {
+  let n = 0;
+  for (const e of entries ?? []) {
+    if (e.agyKind !== "tool_call") continue;
+    const name = (e.name ?? "").trim().toLowerCase();
+    if (!ANTIGRAVITY_READ_ONLY_TOOLS.has(name)) n++;
+  }
+  return n;
+}
+
 // Synthesize a concise work-summary for a run that did real work (tool calls /
 // reasoning) but produced NO closing prose PLANNER_RESPONSE.content — common for
 // heartbeat WORK runs that end on a tool action. Returns "" when there is nothing

@@ -28,6 +28,10 @@ export const QUOTA_RETRY_MAX_ATTEMPTS = QUOTA_RETRY_BACKOFF_MIN.length;
  */
 export const TRANSIENT_RETRY_ERROR_CODES: ReadonlySet<string> = new Set([
   "antigravity_transient_disconnect",
+  // GEM-1307: model printed its plan then ended the turn without acting — a stall,
+  // not an agent bug; a fresh turn usually completes. Short backoff keeps slot agents
+  // (Yinyang 16:15) inside their window. Capped at 2 attempts like any transient.
+  "antigravity_no_action",
 ]);
 export const TRANSIENT_RETRY_BACKOFF_MIN = [10, 20] as const;
 

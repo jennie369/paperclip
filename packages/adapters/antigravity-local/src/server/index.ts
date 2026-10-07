@@ -14,6 +14,8 @@ export {
   detectAntigravityTransientDisconnect,
   resolveAntigravityModelChain,
   shouldAntigravityFallback,
+  countAntigravityActionCalls,
+  ANTIGRAVITY_READ_ONLY_TOOLS,
 } from "./parse.js";
 export { defaultAgyCommand } from "./execute.js";
 export { DEFAULT_ANTIGRAVITY_FALLBACK_MODELS } from "../index.js";

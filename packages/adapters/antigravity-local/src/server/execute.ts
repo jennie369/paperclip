@@ -40,6 +40,7 @@ import {
   readAntigravityRunEntries,
   readAntigravityTranscriptUsage,
   summarizeAntigravityWork,
+  countAntigravityActionCalls,
 } from "./parse.js";
 import { firstNonEmptyLine } from "./utils.js";
 
@@ -494,6 +495,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // model → the SAME run re-runs on the next model in the chain (GEM-1241); every run
   // starts on the primary again, so a recovered Gemini is picked back up automatically.
   const model = asString(config.model, DEFAULT_ANTIGRAVITY_MODEL).trim();
+  // GEM-1307: a run that only reads files = failed `antigravity_no_action` (default on).
+  const requireToolAction = config.requireToolAction !== false;
   const modelChain = resolveAntigravityModelChain(
     model,
     config.fallbackModels,
@@ -1155,6 +1158,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorMessage =
         `agy chạy xong (exit 0) nhưng không tìm thấy reply cho run này trong brain nào ` +
         `(turnMarker ${turnMarker}). Nghi agy timeout/chưa flush hoặc lỗi auth/MCP giữa chừng.`;
+    } else if (requireToolAction && detected.found && countAntigravityActionCalls(detected.entries) === 0) {
+      // GEM-1307: exit 0 + a reply, but the model only READ (view_file…) and ended the
+      // turn — run d5ca8b44 printed its SPEC-LOCK plan and stopped, Yinyang 16:15 slot
+      // stayed empty while the run showed succeeded. Fail it so the slot gets a short
+      // retry (quota-retry TRANSIENT) and CEO sense sees a failed run, not a green one.
+      // Opt-out per agent: adapterConfig.requireToolAction=false (pure chat agents).
+      errorCode = "antigravity_no_action";
+      errorMessage =
+        `agy kết thúc lượt mà không gọi lệnh hành động nào (chỉ đọc file) — model in kế hoạch rồi dừng, ` +
+        `việc chưa được làm (turnMarker ${turnMarker}).`;
     }
 
     // Persist the REAL brain id (agy's auto-created or resumed id) so the next
