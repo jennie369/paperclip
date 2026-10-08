@@ -2412,6 +2412,21 @@ export function detectOperatorReportLeak(reply: string): string | null {
   return null;
 }
 
+/** true khi reply nói về đời tư chủ/người sáng lập (owner + thuộc tính cá nhân trong cùng ~80 ký tự). */
+const OWNER_REF_RE = /(jennie|uyên\s+chu|người\s+sáng\s+lập|nhà\s+sáng\s+lập|founder|chủ\s+(?:shop|gemral|công\s+ty|doanh\s+nghiệp)|sếp\s+(?:em|mình|bên\s+em)|bà\s+chủ|chị\s+chủ|owner|team\s+chuyên\s+môn\s+cấp\s+cao)/iu;
+const PERSONAL_ATTR_RE = /(ngày\s+sinh|sinh\s+(?:năm|ngày|tháng)|năm\s+sinh|bao\s+nhiêu\s+tuổi|\d+\s+tuổi|lá\s+số|tử\s+vi\s+của|cung\s+hoàng\s+đạo\s+của|địa\s+chỉ\s+nhà|nhà\s+ở|đang\s+sống\s+ở|quê\s+(?:ở|quán)|số\s+điện\s+thoại\s+(?:riêng|cá\s+nhân)|sđt\s+(?:riêng|cá\s+nhân)|căn\s+cước|cccd|cmnd|hộ\s+chiếu|passport|chồng|vợ|người\s+yêu|con\s+(?:gái|trai)|gia\s+đình|email\s+(?:riêng|cá\s+nhân)|gmail)/iu;
+export function detectOwnerPersonalInfoLeak(reply: string): boolean {
+  if (!reply) return false;
+  const text = reply.normalize('NFC');
+  const g = new RegExp(OWNER_REF_RE.source, 'giu');
+  for (const m of text.matchAll(g)) {
+    const start = Math.max(0, (m.index ?? 0) - 80);
+    const end = Math.min(text.length, (m.index ?? 0) + m[0].length + 80);
+    if (PERSONAL_ATTR_RE.test(text.slice(start, end))) return true;
+  }
+  return false;
+}
+
 export async function postProcessReply(
   reply: string,
   config: AgentConfig,
@@ -2527,6 +2542,22 @@ export async function postProcessReply(
     return ''; // 03/10 chị Jennie: chặn reply hỏng thì IM LẶNG, không câu đệm (escalation vẫn chạy ở consumer)
   }
 
+  // ── Final defense: owner personal-info leak (chị Jennie 08/10/2026) ──
+  // Reply nói về đời tư người sáng lập/chủ (ngày sinh, địa chỉ, SĐT riêng, căn cước, gia đình…) →
+  // chặn CẢ câu, im lặng + báo người. Rule 1 chỉ đổi TÊN; câu "người sáng lập sinh năm…" không có tên vẫn lộ.
+  if (detectOwnerPersonalInfoLeak(reply)) {
+    console.error(
+      `[Router/${config.provider}] ${config.slug}: postProcessReply REFUSED owner personal-info leak `
+        + `(${reply.length} chars). Head: ${JSON.stringify(reply.slice(0, 200))}`,
+    );
+    (config as any)._escalation = {
+      reason: 'agent_output_corrupted',
+      priority: 'high',
+      summary: 'Bot định tiết lộ thông tin cá nhân của người sáng lập — đã chặn gửi, cần người kiểm tra.',
+    };
+    return '';
+  }
+
   // Parse + strip [[ESCALATE: ...]] FIRST and stash the intent on config so the
   // consumer can fire handleEscalation (ticket + bot_paused + CS Telegram ping).
   // Previously this marker was never parsed here → escalation never fired
@@ -2611,6 +2642,8 @@ const ESCALATION_REASON_WHITELIST = new Set([
  *
  * Logs a warning when a violation is scrubbed so we can audit prompt drift.
  */
+const AI_PERSONA_AGENTS = new Set(['gem-master']);
+
 export function scrubBannedPhrases(text: string, agentSlug: string): string {
   if (!text) return text;
   let scrubbed = text;
@@ -2621,6 +2654,16 @@ export function scrubBannedPhrases(text: string, agentSlug: string): string {
   if (ownerNameRe.test(scrubbed)) {
     violations.push('owner_name');
     scrubbed = scrubbed.replace(ownerNameRe, 'team chuyên môn cấp cao');
+  }
+
+  // Rule 1c: bot tự nhận là AI/bot/mô hình (chị Jennie 08/10/2026) → chỉ được xưng tư vấn viên.
+  // Chỉ bắt câu TỰ XƯNG ("em là AI", "mình là chatbot", "tôi là Claude") — KHÔNG bắt chữ AI trong
+  // mô tả sản phẩm ("GEM Master là trợ lý AI", "khóa học AI").
+  const aiSelfRe = /\b(em|mình|tôi|bên em|bên mình)\s+(?:chỉ\s+)?là\s+(?:một\s+)?(?:trợ\s+lý\s+(?:ảo|ai)|chatbot|chat\s*bot|bot|ai|trí\s+tuệ\s+nhân\s+tạo|mô\s+hình\s+ngôn\s+ngữ(?:\s+lớn)?|language\s+model|claude|gemini|chatgpt|gpt[-\s]?\d*)(?![\p{L}\p{N}])/giu;
+  // gem-master = sản phẩm chatbot AI bán trong app (khách mua chính vì là AI) → miễn luật này.
+  if (!AI_PERSONA_AGENTS.has(agentSlug) && aiSelfRe.test(scrubbed)) {
+    violations.push('ai_self_disclosure');
+    scrubbed = scrubbed.replace(aiSelfRe, (_m, who) => `${who} là tư vấn viên`);
   }
 
   // Rule 2: short-time promise. Match common resolution-time phrasings.
@@ -3113,6 +3156,17 @@ async function fetchCompanyGoalsBlock(companyId: string): Promise<{ block: strin
   }
 }
 
+/** Agent nói chuyện trực tiếp với khách = `type: "reply"` trong agent.meta.json. Thiếu/hỏng meta → coi là
+ *  nói chuyện với khách (fail-closed: thà thiếu hồ sơ owner còn hơn lộ cho khách). */
+export function isCustomerFacingAgent(agentDir: string): boolean {
+  try {
+    const meta = JSON.parse(readFileSync(pathResolve(agentDir, 'agent.meta.json'), 'utf-8'));
+    return meta?.type !== 'heartbeat';
+  } catch {
+    return true;
+  }
+}
+
 async function buildSystemPrompt(
   config: AgentConfig,
   customerContext?: any,
@@ -3157,7 +3211,11 @@ async function buildSystemPrompt(
   }
 
   // 0. Owner info (shared USER.md) + Agent identity
-  tryLoad(pathResolve(projectRoot, 'agents', 'USER.md'), 'THÔNG TIN OWNER');
+  // Agent loại "reply" nói chuyện với KHÁCH → KHÔNG nạp hồ sơ cá nhân owner (chống lộ thông tin
+  // cá nhân chị Jennie cho khách, chị chốt 08/10/2026). Loại đọc từ agents/<slug>/agent.meta.json.
+  if (!isCustomerFacingAgent(agentsDir)) {
+    tryLoad(pathResolve(projectRoot, 'agents', 'USER.md'), 'THÔNG TIN OWNER');
+  }
   tryLoad(pathResolve(agentsDir, 'IDENTITY.md'), 'NHÂN CÁCH AGENT');
 
   // 1. Agent persona files
