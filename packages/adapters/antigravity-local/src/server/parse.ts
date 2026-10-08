@@ -253,6 +253,34 @@ export function countAntigravityActionCalls(entries: AntigravityNormEntry[]): nu
   return n;
 }
 
+// GEM-1316 — Clean-exit prose patterns. When an agent wakes up via timer / heartbeat / retry
+// and finds that its slot has already posted (idempotency gate), is outside the active time window,
+// or has no actionable tasks in the backlog, it MUST exit cleanly without calling side-effect tools
+// (doing so would cause duplicate posts or unwanted mutations).
+// Such runs have countAntigravityActionCalls === 0, but are legitimate successes, NOT antigravity_no_action bugs.
+export const ANTIGRAVITY_CLEAN_EXIT_PATTERNS: ReadonlyArray<RegExp> = [
+  // 1. Thoát sạch (tiếng Việt phổ biến nhất trong hệ)
+  /thoát\s+sạch/i,
+  // 2. Không có task / issue / việc cần làm → thoát
+  /(?:không\s+có\s+(?:task|issue|việc|backlog)|0\s+(?:task|issue|việc)|chưa\s+có\s+(?:task|issue)).*?(?:thoát|kết\s+thúc|dừng|exit)/i,
+  // 3. Idempotency / chống đăng đôi / đã đăng
+  /(?:idempotent|idempotency(?:\s+gate)?|chống\s+đăng\s+đôi|tránh\s+đăng\s+đôi|không\s+đăng\s+đôi)/i,
+  /(?:slot\s+.*?đã\s+(?:đăng|posted|xong)|đã\s+đăng\s+đủ\s+slot|mọi\s+slot\s+.*?đã)/i,
+  // 4. Khung giờ / cửa sổ thời gian
+  /(?:ngoài\s+khung\s+giờ|chưa\s+(?:tới|đến)\s+khung\s+giờ|ngoài\s+cửa\s+sổ|chưa\s+(?:tới|đến)\s+giờ)/i,
+  // 5. English clean exit / no assigned task
+  /\b(?:clean\s+exit|exit(?:ing)?\s+cleanly|idempotent\s+exit)\b/i,
+  /\bno\s+(?:assigned\s+)?(?:tasks?|issues?).*?\b(?:exit|done|stop)\b/i,
+  /\balready\s+posted\b/i,
+];
+
+export function isAntigravityCleanExitProse(reply: string | null | undefined): boolean {
+  if (!reply) return false;
+  const text = reply.trim();
+  if (!text) return false;
+  return ANTIGRAVITY_CLEAN_EXIT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 // Synthesize a concise work-summary for a run that did real work (tool calls /
 // reasoning) but produced NO closing prose PLANNER_RESPONSE.content — common for
 // heartbeat WORK runs that end on a tool action. Returns "" when there is nothing

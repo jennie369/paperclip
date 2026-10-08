@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countAntigravityActionCalls } from "@paperclipai/adapter-antigravity-local/server";
+import { countAntigravityActionCalls, isAntigravityCleanExitProse } from "@paperclipai/adapter-antigravity-local/server";
 import { planQuotaRetry } from "../services/quota-retry.js";
 
 // GEM-1307 — run d5ca8b44 (Yinyang 16:15, 07/10): agy read its prompt twice, printed
@@ -29,6 +29,34 @@ describe("countAntigravityActionCalls", () => {
       name,
     }));
     expect(countAntigravityActionCalls(ro)).toBe(0);
+  });
+});
+
+describe("isAntigravityCleanExitProse", () => {
+  it("run in plan/giao kèo dở dang (d5ca8b44) không phải clean exit", () => {
+    expect(isAntigravityCleanExitProse("### ⚓ Khối Định Danh Neo 4 Điểm … 📋 BẢNG GIAO KÈO SỐ")).toBe(false);
+    expect(isAntigravityCleanExitProse("Kế hoạch: 1. Đọc file, 2. Sửa file.")).toBe(false);
+    expect(isAntigravityCleanExitProse("")).toBe(false);
+    expect(isAntigravityCleanExitProse(null)).toBe(false);
+    expect(isAntigravityCleanExitProse(undefined)).toBe(false);
+  });
+
+  it("nhận diện câu kết luận thoát sạch tiếng Việt (GEM-1316)", () => {
+    // Run 3851bd36 (Page Jennie Caption bị oan):
+    expect(isAntigravityCleanExitProse("Em xin phép thoát sạch phiên heartbeat này ạ!")).toBe(true);
+    // Không có task trong backlog:
+    expect(isAntigravityCleanExitProse("Không có task nào được assign. Thoát sạch.")).toBe(true);
+    // Ngoài khung giờ đăng bài / idempotency:
+    expect(
+      isAntigravityCleanExitProse("Slot morning đã đăng lúc 08:05, hiện tại ngoài khung giờ đăng bài. Em xin phép thoát sạch phiên ạ!"),
+    ).toBe(true);
+    // Chống đăng đôi:
+    expect(isAntigravityCleanExitProse("Idempotency gate: tránh đăng đôi cho bài đã publish.")).toBe(true);
+  });
+
+  it("nhận diện clean exit tiếng Anh", () => {
+    expect(isAntigravityCleanExitProse("No assigned tasks in backlog. Exiting cleanly.")).toBe(true);
+    expect(isAntigravityCleanExitProse("Slot already posted. Clean exit.")).toBe(true);
   });
 });
 

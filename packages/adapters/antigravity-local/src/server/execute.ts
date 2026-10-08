@@ -41,6 +41,7 @@ import {
   readAntigravityTranscriptUsage,
   summarizeAntigravityWork,
   countAntigravityActionCalls,
+  isAntigravityCleanExitProse,
 } from "./parse.js";
 import { firstNonEmptyLine } from "./utils.js";
 
@@ -1158,12 +1159,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorMessage =
         `agy chạy xong (exit 0) nhưng không tìm thấy reply cho run này trong brain nào ` +
         `(turnMarker ${turnMarker}). Nghi agy timeout/chưa flush hoặc lỗi auth/MCP giữa chừng.`;
-    } else if (requireToolAction && detected.found && countAntigravityActionCalls(detected.entries) === 0) {
+    } else if (
+      requireToolAction &&
+      detected.found &&
+      countAntigravityActionCalls(detected.entries) === 0 &&
+      !isAntigravityCleanExitProse(detected.reply || summary)
+    ) {
       // GEM-1307: exit 0 + a reply, but the model only READ (view_file…) and ended the
       // turn — run d5ca8b44 printed its SPEC-LOCK plan and stopped, Yinyang 16:15 slot
       // stayed empty while the run showed succeeded. Fail it so the slot gets a short
       // retry (quota-retry TRANSIENT) and CEO sense sees a failed run, not a green one.
       // Opt-out per agent: adapterConfig.requireToolAction=false (pure chat agents).
+      // GEM-1316: do NOT fail when the prose is an intentional clean exit (idempotency,
+      // slot already posted, outside active window, no tasks assigned).
       errorCode = "antigravity_no_action";
       errorMessage =
         `agy kết thúc lượt mà không gọi lệnh hành động nào (chỉ đọc file) — model in kế hoạch rồi dừng, ` +

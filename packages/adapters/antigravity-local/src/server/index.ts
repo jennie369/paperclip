@@ -16,6 +16,8 @@ export {
   shouldAntigravityFallback,
   countAntigravityActionCalls,
   ANTIGRAVITY_READ_ONLY_TOOLS,
+  ANTIGRAVITY_CLEAN_EXIT_PATTERNS,
+  isAntigravityCleanExitProse,
 } from "./parse.js";
 export { defaultAgyCommand } from "./execute.js";
 export { DEFAULT_ANTIGRAVITY_FALLBACK_MODELS } from "../index.js";
