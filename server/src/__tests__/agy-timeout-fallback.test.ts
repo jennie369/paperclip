@@ -292,6 +292,53 @@ describe('TimeoutCircuitBreaker (GEM-1068: agy chậm/429 → khỏi chờ 5 ph�
     const helper = src.slice(src.indexOf('const withTimeoutFallback'), src.indexOf('const dispatch = async'));
     expect(helper).toContain('getTimeoutBreaker(config.provider)');
   });
+
+  it('GEM-1335 (ENG-0930-F1068-03): mạch mở + fallback lỗi (không phải abort) → thử primary 1 lần, primary sống thì trả kết quả và đóng mạch', async () => {
+    const { b } = mk(1, 10000);
+    const fbErr = new Error('claude CLI crash (500)');
+    const fb = vi.fn().mockRejectedValue(fbErr);
+    // Lần 1: primary timeout → mở mạch
+    await expect(runWithTimeoutFallback(slow, fb, undefined, b)).rejects.toThrow();
+    expect(b.isOpen).toBe(true);
+
+    // Lần 2: mạch đang mở, fallback lỗi, nhưng primary đã hồi phục
+    const primaryRevived = vi.fn().mockResolvedValue('agy revived reply');
+    const onSkip = vi.fn();
+    const res = await runWithTimeoutFallback(primaryRevived, fb, undefined, b, onSkip);
+    expect(res).toBe('agy revived reply');
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(fb).toHaveBeenCalled(); // fallback đã được gọi trước
+    expect(primaryRevived).toHaveBeenCalledTimes(1); // primary được thử 1 lần
+    expect(b.isOpen).toBe(false); // mạch được đóng lại vì primary thành công
+  });
+
+  it('GEM-1335: mạch mở + fallback lỗi + primary cũng lỗi → ném lỗi primary, mạch vẫn mở', async () => {
+    const { b } = mk(1, 10000);
+    const fb = vi.fn().mockRejectedValue(new Error('claude CLI crash'));
+    await expect(runWithTimeoutFallback(slow, fb, undefined, b)).rejects.toThrow();
+    expect(b.isOpen).toBe(true);
+
+    const primaryStillSlow = vi.fn().mockImplementation(slow);
+    await expect(runWithTimeoutFallback(primaryStillSlow, fb, undefined, b)).rejects.toBeInstanceOf(ProviderTimeoutError);
+    expect(b.isOpen).toBe(true);
+    expect(primaryStillSlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('GEM-1335: mạch mở + fallback bị abort (AgentAbortedError/cancel-in-flight) → ném ngay, KHÔNG thử primary', async () => {
+    const { b } = mk(1, 10000);
+    const fb = vi.fn().mockResolvedValue('ok');
+    await runWithTimeoutFallback(slow, fb, undefined, b);
+    expect(b.isOpen).toBe(true);
+
+    const abortErr = new Error('agent run aborted (cancel-in-flight)');
+    (abortErr as any).name = 'AgentAbortedError';
+    const fbAborted = vi.fn().mockRejectedValue(abortErr);
+    const primary = vi.fn().mockResolvedValue('should not run');
+
+    await expect(runWithTimeoutFallback(primary, fbAborted, undefined, b)).rejects.toBe(abortErr);
+    expect(primary).not.toHaveBeenCalled();
+    expect(b.isOpen).toBe(true);
+  });
 });
 
 describe('Breaker quan sát được + sống qua restart (GEM-1094)', () => {

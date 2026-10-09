@@ -285,10 +285,22 @@ export function resetTimeoutBreakers(): void {
   breakers.clear();
 }
 
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; message?: string };
+  return (
+    e.name === 'AgentAbortedError' ||
+    e.name === 'AbortError' ||
+    (typeof e.message === 'string' && (e.message.includes('aborted') || e.message.includes('cancel-in-flight')))
+  );
+}
+
 /**
  * Chạy `primary`; nếu nó timeout (ProviderTimeoutError) và có `fallback` → chạy `fallback` ĐÚNG 1 lần.
  * Lỗi của fallback được ném nguyên (caller quyết định im lặng) — KHÔNG lặp thêm.
  * Có `breaker` + `fallback`: mạch mở ⇒ bỏ qua primary (`onSkip`), chạy fallback luôn.
+ * (GEM-1335, ENG-0930-F1068-03): Mạch mở mà fallback cũng lỗi (không phải abort) → thử primary 1 lần,
+ * nếu primary còn sống thì trả kết quả và đóng mạch (tránh khách nhận rỗng khi primary đã hồi phục).
  */
 export async function runWithTimeoutFallback<T>(
   primary: () => Promise<T>,
@@ -301,7 +313,24 @@ export async function runWithTimeoutFallback<T>(
   const cb = fallback ? breaker ?? null : null;
   if (cb && !cb.allowPrimary()) {
     onSkip?.();
-    return fallback!();
+    try {
+      return await fallback!();
+    } catch (fbErr: any) {
+      if (isAbortError(fbErr)) throw fbErr;
+      // Mạch mở mà fallback lỗi: thử primary 1 lần xem primary đã hồi phục chưa (GEM-1335)
+      try {
+        const out = await primary();
+        cb.recordSuccess();
+        return out;
+      } catch (primaryErr) {
+        if (!(primaryErr instanceof ProviderTimeoutError)) {
+          cb.releaseProbe();
+        } else {
+          cb.recordTimeout();
+        }
+        throw primaryErr;
+      }
+    }
   }
   try {
     const out = await primary();
@@ -318,3 +347,4 @@ export async function runWithTimeoutFallback<T>(
     return fallback();
   }
 }
+
