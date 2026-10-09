@@ -7,6 +7,7 @@ import type { InboundMessage, OutboundMessage, PeerKind } from './types.js';
 
 class MessageBus extends EventEmitter {
   private realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
+  private realtimeEverSubscribed = false;
 
   constructor() {
     super();
@@ -131,6 +132,10 @@ class MessageBus extends EventEmitter {
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           console.log('[Bus] Realtime subscription active for channel_pending_messages');
+          // Re-SUBSCRIBE after CLOSED/CHANNEL_ERROR: INSERTs during the gap were never
+          // delivered → consumer rescans pending rows (first SUBSCRIBE is covered by startup scan).
+          if (this.realtimeEverSubscribed) this.emit('realtime:resubscribed');
+          this.realtimeEverSubscribed = true;
         }
       });
   }

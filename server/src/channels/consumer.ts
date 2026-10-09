@@ -275,6 +275,11 @@ export function startConsumer(): void {
   });
 
   // Also listen for realtime messages (from other server instances)
+  bus.on('realtime:resubscribed', () => {
+    rescheduleUnansweredPending('Realtime resubscribed').catch((err: any) =>
+      console.error('[Consumer] Resubscribe reschedule failed:', err?.message || err));
+  });
+
   bus.on('inbound:realtime', (msg: InboundMessage, pendingId: string) => {
     processMessage(msg, pendingId).catch(err => {
       console.error('[Consumer] Unhandled error in realtime processMessage:', err);
@@ -319,48 +324,7 @@ export function startConsumer(): void {
   setTimeout(async () => {
     try {
       // (a) Reschedule unanswered customer inbound.
-      const { data: pend } = await supabase
-        .from('channel_pending_messages')
-        .select('channel_name, thread_id, from_uid, sender_name, peer_kind, metadata, created_at')
-        .eq('status', 'pending')
-        .is('handled_by', null)
-        .order('created_at', { ascending: true })
-        .limit(500);
-
-      if (pend && pend.length > 0) {
-        // One quiet-window per (channel, thread) — dedupe groups.
-        const seen = new Set<string>();
-        let scheduled = 0;
-        for (const row of pend as any[]) {
-          const ch = row.channel_name as string;
-          const tid = row.thread_id as string;
-          if (!ch || !tid) continue;
-          // GEM-887: skip stale cskh-internal test sessions (>48h) — periodic DB cleanup handles the rest via pg_cron.
-          if (ch === 'cskh-internal') {
-            const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-            if ((row.created_at as string) < fortyEightHoursAgo) continue;
-          }
-          const isGroup = row.peer_kind === 'group';
-          const sessionKey = isGroup ? `${ch}:${tid}:group` : `${ch}:${tid}:${row.from_uid}`;
-          if (seen.has(sessionKey)) continue;
-          seen.add(sessionKey);
-          const cfg = await getChannelConfig(ch);
-          if (!cfg || !cfg.enabled) continue;
-          scheduleQuietWindow(sessionKey, {
-            channel: ch,
-            channelType: 'zalo_personal', // re-resolved from row inside runSessionBatch is not needed; routing uses channel
-            threadId: tid,
-            senderId: row.from_uid,
-            senderName: row.sender_name || undefined,
-            peerKind: (row.peer_kind || 'direct') as InboundMessage['peerKind'],
-            groupName: (row.metadata as any)?.groupName,
-            channelConfig: cfg,
-          }, 3_000);
-          scheduled++;
-          if (scheduled >= 200) break; // safety cap against a thundering herd
-        }
-        if (scheduled > 0) console.log(`[Consumer] Startup: rescheduled ${scheduled} unanswered thread(s)`);
-      }
+      await rescheduleUnansweredPending('Startup');
 
       // (b) Stale-skip only rows stuck in 'processing' from a dead agent run (>1h).
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -381,6 +345,58 @@ export function startConsumer(): void {
       console.error('[Consumer] Startup reschedule failed:', err.message);
     }
   }, 10_000);
+}
+
+/**
+ * Reschedule every still-pending customer inbound (one quiet-window per thread).
+ * Runs on startup AND every time the Realtime channel re-SUBSCRIBEs: rows inserted
+ * while the channel was CLOSED never emit an INSERT event, so without this they sat
+ * 'pending' until the next process restart (09/10: widget msg stuck after CLOSED→SUBSCRIBED).
+ * The atomic claim in runSessionBatch dedupes against concurrent realtime schedules.
+ */
+async function rescheduleUnansweredPending(reason: string): Promise<void> {
+  const { data: pend } = await supabase
+    .from('channel_pending_messages')
+    .select('channel_name, thread_id, from_uid, sender_name, peer_kind, metadata, created_at')
+    .eq('status', 'pending')
+    .is('handled_by', null)
+    .order('created_at', { ascending: true })
+    .limit(500);
+
+  if (pend && pend.length > 0) {
+    // One quiet-window per (channel, thread) — dedupe groups.
+    const seen = new Set<string>();
+    let scheduled = 0;
+    for (const row of pend as any[]) {
+      const ch = row.channel_name as string;
+      const tid = row.thread_id as string;
+      if (!ch || !tid) continue;
+      // GEM-887: skip stale cskh-internal test sessions (>48h) — periodic DB cleanup handles the rest via pg_cron.
+      if (ch === 'cskh-internal') {
+        const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        if ((row.created_at as string) < fortyEightHoursAgo) continue;
+      }
+      const isGroup = row.peer_kind === 'group';
+      const sessionKey = isGroup ? `${ch}:${tid}:group` : `${ch}:${tid}:${row.from_uid}`;
+      if (seen.has(sessionKey)) continue;
+      seen.add(sessionKey);
+      const cfg = await getChannelConfig(ch);
+      if (!cfg || !cfg.enabled) continue;
+      scheduleQuietWindow(sessionKey, {
+        channel: ch,
+        channelType: 'zalo_personal', // re-resolved from row inside runSessionBatch is not needed; routing uses channel
+        threadId: tid,
+        senderId: row.from_uid,
+        senderName: row.sender_name || undefined,
+        peerKind: (row.peer_kind || 'direct') as InboundMessage['peerKind'],
+        groupName: (row.metadata as any)?.groupName,
+        channelConfig: cfg,
+      }, 3_000);
+      scheduled++;
+      if (scheduled >= 200) break; // safety cap against a thundering herd
+    }
+    if (scheduled > 0) console.log(`[Consumer] ${reason}: rescheduled ${scheduled} unanswered thread(s)`);
+  }
 }
 
 /**
@@ -1345,6 +1361,7 @@ export function clearConfigCache(channelName?: string): void {
 export function stopConsumer(): void {
   bus.removeAllListeners('inbound');
   bus.removeAllListeners('inbound:realtime');
+  bus.removeAllListeners('realtime:resubscribed');
   debouncer.flushAll();
   console.log('[Consumer] Stopped');
 }
