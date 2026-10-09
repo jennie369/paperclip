@@ -4867,19 +4867,21 @@ export function heartbeatService(db: Db) {
       const agentTaskFlags = new Map<string, { hasActionable: boolean; hasBlocked: boolean }>();
       if (pendingFires.length > 0) {
         const pendingIds = pendingFires.map((p) => p.agent.id);
-        const taskRows = await db
-          .select({ agentId: issues.assigneeAgentId, status: issues.status })
-          .from(issues)
-          .where(
-            and(
-              inArray(issues.assigneeAgentId, pendingIds),
-              inArray(issues.status, ["todo", "in_progress", "backlog", "blocked"]),
-              sql`${issues.hiddenAt} is null`,
-              // Issues waiting on a scheduled wake are not actionable yet —
-              // they must not keep an otherwise-idle agent's timer firing.
-              sql`(${issues.scheduledWakeAt} is null or ${issues.scheduledWakeAt} <= now())`,
+        const taskRows = await boundedPoll(db, (tx) =>
+          tx
+            .select({ agentId: issues.assigneeAgentId, status: issues.status })
+            .from(issues)
+            .where(
+              and(
+                inArray(issues.assigneeAgentId, pendingIds),
+                inArray(issues.status, ["todo", "in_progress", "backlog", "blocked"]),
+                sql`${issues.hiddenAt} is null`,
+                // Issues waiting on a scheduled wake are not actionable yet —
+                // they must not keep an otherwise-idle agent's timer firing.
+                sql`(${issues.scheduledWakeAt} is null or ${issues.scheduledWakeAt} <= now())`,
+              ),
             ),
-          );
+        );
         for (const row of taskRows) {
           if (!row.agentId) continue;
           const entry = agentTaskFlags.get(row.agentId) ?? { hasActionable: false, hasBlocked: false };

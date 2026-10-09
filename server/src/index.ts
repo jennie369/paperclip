@@ -676,6 +676,7 @@ export async function startServer(): Promise<StartedServer> {
       wakeups: null,
       recovery: null,
     };
+    const SCHEDULER_TICK_JOB_TIMEOUT_MS = 60_000;
     const runTickJob = (
       key: string,
       label: string,
@@ -685,19 +686,37 @@ export async function startServer(): Promise<StartedServer> {
       const startedTickAt = Date.now();
       const inFlightSince = tickInFlight[key];
       if (inFlightSince !== null) {
-        logger.warn(
-          { job: key, inFlightMs: startedTickAt - inFlightSince },
-          `${label} tick skipped — previous run still in-flight (pile-up guard F1)`,
-        );
-        return;
+        if (startedTickAt - inFlightSince > SCHEDULER_TICK_JOB_TIMEOUT_MS) {
+          logger.warn(
+            { job: key, inFlightMs: startedTickAt - inFlightSince, limitMs: SCHEDULER_TICK_JOB_TIMEOUT_MS },
+            `${label} tick in-flight TTL expired (> ${SCHEDULER_TICK_JOB_TIMEOUT_MS}ms) — releasing stuck lock`,
+          );
+          tickInFlight[key] = null;
+        } else {
+          logger.warn(
+            { job: key, inFlightMs: startedTickAt - inFlightSince },
+            `${label} tick skipped — previous run still in-flight (pile-up guard F1)`,
+          );
+          return;
+        }
       }
       tickInFlight[key] = startedTickAt;
-      void fn()
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`${label} tick timed out after ${SCHEDULER_TICK_JOB_TIMEOUT_MS}ms`));
+        }, SCHEDULER_TICK_JOB_TIMEOUT_MS);
+        timer.unref?.();
+      });
+
+      void Promise.race([fn(), timeoutPromise])
         .catch((err) => {
           logger.error({ err }, `${label} tick failed`);
         })
         .finally(() => {
-          tickInFlight[key] = null;
+          if (tickInFlight[key] === startedTickAt) {
+            tickInFlight[key] = null;
+          }
           onSettle?.();
         });
     };
