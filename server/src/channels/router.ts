@@ -1405,7 +1405,7 @@ async function runViaAntigravity(
     REPLY_CHANNEL_SENTINEL,
     'Dùng công cụ đọc file (view_file) đọc TOÀN BỘ bối cảnh + hướng dẫn + lịch sử hội thoại trong file sau NGAY LẬP TỨC, trước khi trả lời:',
     promptFile.replace(/\\/g, '/'),
-    'Sau khi đọc xong, trả lời tin nhắn mới nhất của khách dưới đây bằng tiếng Việt, đúng vai trò + giọng đã mô tả trong file. TUYỆT ĐỐI KHÔNG đọc lại / trích lại nội dung file cho khách — chỉ trả lời tự nhiên như đang nhắn tin. Bọc DUY NHẤT tin nhắn gửi khách trong [[REPLY]] ... [[/REPLY]]:',
+    'Sau khi đọc xong, trả lời tin nhắn mới nhất của khách dưới đây bằng đúng NGÔN NGỮ khách đang dùng (khách viết tiếng Anh → trả lời tiếng Anh; tiếng Việt → tiếng Việt có dấu đầy đủ; tiếng Trung → tiếng Trung), đúng vai trò + giọng đã mô tả trong file. TUYỆT ĐỐI KHÔNG đọc lại / trích lại nội dung file cho khách — chỉ trả lời tự nhiên như đang nhắn tin. Bọc DUY NHẤT tin nhắn gửi khách trong [[REPLY]] ... [[/REPLY]]:',
     mediaDirective,
     message,
   ].join('\n');
@@ -1964,8 +1964,8 @@ function renderMediaLibraryForPrompt(lib: MediaLibrary): string {
     '',
     '📋 KHI BẠN KHÔNG CÓ THÔNG TIN HOẶC CÔNG CỤ ĐỂ TRẢ LỜI:',
     '   - KHÔNG giả vờ tạo ticket, không bịa "em sẽ chuyển team".',
-    '   - Nói THẲNG bằng tiếng Việt tự nhiên: "Em chưa tra được phần này',
-    '     ngay, để em báo lại chị Jennie / team vận hành rồi cập nhật lại',
+    '   - Nói THẲNG, tự nhiên, bằng ngôn ngữ khách đang dùng: "Em chưa tra được',
+    '     phần này ngay, để em kiểm tra với team hỗ trợ rồi cập nhật lại',
     '     cho chị sớm nhất nhé." (Hệ thống có người theo dõi inbox sẽ',
     '     escalate; bạn KHÔNG cần — và KHÔNG ĐƯỢC — output bất kỳ marker',
     '     command nào.)',
@@ -2653,7 +2653,9 @@ export function scrubBannedPhrases(text: string, agentSlug: string): string {
   const ownerNameRe = /(chị\s+jennie|dr\.?\s*jennie|jennie\s+uyên\s+chu|jennie(?!\s*team)|sếp\s+em|boss\s+em|chị\s+chủ|owner)/gi;
   if (ownerNameRe.test(scrubbed)) {
     violations.push('owner_name');
-    scrubbed = scrubbed.replace(ownerNameRe, 'team chuyên môn cấp cao');
+    // 09/10/2026: reply theo ngôn ngữ khách → câu thay thế cũng theo ngôn ngữ của reply.
+    const isViReply = /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(scrubbed);
+    scrubbed = scrubbed.replace(ownerNameRe, isViReply ? 'team chuyên môn cấp cao' : 'our senior support team');
   }
 
   // Rule 1c: bot tự nhận là AI/bot/mô hình (chị Jennie 08/10/2026) → chỉ được xưng tư vấn viên.
@@ -2821,7 +2823,10 @@ export function scrubBannedPhrases(text: string, agentSlug: string): string {
   // leak. Anchor = English first-person opener (I will/I'm/Let me/…) + a task/search/SOP/project
   // keyword, cut to the first blank line (or next Vietnamese "Dạ"/capitalised line), keep reply.
   const enNarrationRe = /(?:^|\n)[ \t]*(?:I(?:['’]ll|['’]m|\s+will|\s+am|\s+need\s+to|\s+have\s+to|\s+should|\s+can)|Let\s+me|Please\s+(?:wait|hold|allow)|Give\s+me\s+a\s+moment|Hold\s+on)\b[^\n]*?(?:background|task|search|SOP|procedure|project|check|look\s*up|wait|complete|stored|retriev|verif|fetch)[^\n]*(?:\n[ \t]*\n|\n(?=D[aạ]\b)|$)/gi;
-  if (enNarrationRe.test(scrubbed)) {
+  // 09/10/2026: bot trả lời theo ngôn ngữ khách → CHỈ cắt khi phần còn lại là tiếng Việt
+  // (khách nói tiếng Anh thì "I'll check…" là câu trả lời thật, không phải narration rò rỉ).
+  const viDiacriticRe = /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i;
+  if (enNarrationRe.test(scrubbed) && viDiacriticRe.test(scrubbed.replace(enNarrationRe, '\n'))) {
     violations.push('en_action_narration');
     scrubbed = scrubbed.replace(enNarrationRe, '\n');
   }
@@ -3023,9 +3028,8 @@ async function runViaNvidiaNim(
   const baseUrl = (process.env.NVIDIA_NIM_BASE_URL || 'https://integrate.api.nvidia.com/v1').replace(/\/$/, '');
   const model = config.model || process.env.NVIDIA_NIM_MODEL || 'google/gemma-4-31b-it';
 
-  const languageHint = (config.language || 'vi') === 'vi'
-    ? '\n\nQUY TẮC NGÔN NGỮ: Bạn PHẢI trả lời bằng tiếng Việt có dấu đầy đủ, ngắn gọn, thân thiện. TUYỆT ĐỐI không dùng tiếng Anh trừ khi khách hàng hỏi bằng tiếng Anh trước.'
-    : '';
+  // 09/10/2026 (chị Jennie chốt): trả lời theo NGÔN NGỮ CỦA KHÁCH, không ép tiếng Việt.
+  const languageHint = '\n\nQUY TẮC NGÔN NGỮ: Trả lời bằng đúng ngôn ngữ khách đang dùng — khách viết tiếng Anh thì trả lời tiếng Anh, tiếng Việt thì tiếng Việt có dấu đầy đủ, tiếng Trung thì tiếng Trung. Ngắn gọn, thân thiện. Chưa rõ thì theo ngôn ngữ tin nhắn gần nhất của khách.';
 
   const finalSystem = (systemPrompt || '') + languageHint;
 
@@ -3325,7 +3329,7 @@ async function buildSystemPrompt(
   parts.push([
     '# QUY TẮC CHAT',
     '- Đây là tin nhắn từ khách hàng qua Zalo/Facebook. Trả lời TRỰC TIẾP.',
-    '- NHẮN NGẮN 2-4 câu. Thân thiện, tiếng Việt có dấu đầy đủ.',
+    '- NHẮN NGẮN 2-4 câu. Thân thiện. Trả lời bằng đúng ngôn ngữ khách đang dùng (tiếng Anh → tiếng Anh, tiếng Việt → tiếng Việt có dấu đầy đủ, tiếng Trung → tiếng Trung).',
     `- Bạn là ${config.display_name} của Gemral. KHÔNG xưng là Jennie hay bất kỳ ai khác.`,
     '- Nếu không biết câu trả lời → nói thật, đề nghị chuyển cho người phụ trách.',
     '- Nếu khách tức giận → "Em chuyển chuyên viên nhé!" → DỪNG.',
@@ -3339,12 +3343,12 @@ async function buildSystemPrompt(
     '- TUYỆT ĐỐI KHÔNG viết tool call syntax ra text reply: KHÔNG "[CALL: ...]", KHÔNG "[MCP_...]", KHÔNG "[SEARCH: ...]".',
     '- Tool call xảy ra SILENT qua MCP — chỉ dùng RESULT của tool để soạn reply text thuần cho khách.',
     '- Khách KHÔNG cần thấy bạn đang gọi tool nào — chỉ thấy câu trả lời cuối cùng.',
-    '- Sản phẩm chính: 6 khóa học, GEM Scanner, Crystal (YinyangMasters), App Gemral.',
+    '- Sản phẩm đang bán: theo HƯỚNG DẪN VẬN HÀNH (AGENTS.md) của agent — KHÔNG tự chào sản phẩm ngoài danh sách đó.',
     `- Có thể escalate tới: ${(config.can_escalate_to || []).join(', ') || 'CEO'}`,
   ].join('\n'));
 
   if (parts.length <= 1) {
-    return `Bạn là ${config.display_name}. ${config.description || ''} Trả lời bằng tiếng Việt có dấu, ngắn gọn.`;
+    return `Bạn là ${config.display_name}. ${config.description || ''} Trả lời bằng đúng ngôn ngữ khách đang dùng (tiếng Việt thì có dấu đầy đủ), ngắn gọn.`;
   }
 
   const prompt = parts.join('\n\n---\n\n');
