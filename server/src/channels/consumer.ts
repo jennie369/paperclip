@@ -283,6 +283,29 @@ export function startConsumer(): void {
 
   console.log('[Consumer] Started — listening for inbound messages');
 
+  // Orphan un-claim (restart mid-reply): a row this table holds as 'processing' and
+  // created BEFORE this boot was claimed by the previous process, whose in-flight
+  // agent run died with it — nothing will ever finish it, and the >1h sweep below
+  // would mark it 'handled' silently (customer never answered; seen 09/10: PM2
+  // restart 5' after a cskh-web message). Return recent orphans to 'pending' NOW,
+  // before this process claims anything, so step (a) reschedules them. Bounded to
+  // <1h so genuinely stale rows keep the old stale_on_restart path.
+  const bootIso = new Date().toISOString();
+  void (async () => {
+    try {
+      const { data: orphans } = await supabase
+        .from('channel_pending_messages')
+        .update({ status: 'pending', handled_by: null, agent_slug: null })
+        .eq('status', 'processing')
+        .lt('created_at', bootIso)
+        .gte('created_at', new Date(Date.now() - 60 * 60 * 1000).toISOString())
+        .select('id');
+      if (orphans && orphans.length > 0) console.log(`[Consumer] Startup: un-claimed ${orphans.length} orphan 'processing' row(s) → pending`);
+    } catch (err: any) {
+      console.error('[Consumer] Startup orphan un-claim failed:', err?.message || err);
+    }
+  })();
+
   // On startup: RESCHEDULE unanswered customer messages (Codex R#3 — restart-safety).
   // The quiet-window timers live in memory, so a restart between a message arriving
   // and its window firing would leave the row 'pending' with no realtime event to
