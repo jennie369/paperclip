@@ -71,7 +71,10 @@ export function ConversationChat() {
     // 4xx = yêu cầu sai → dừng, đừng gõ server vô hạn. 5xx/mất mạng vẫn thử lại
     // (bắt buộc, vì mỗi lần `pm2 restart` là vài giây fetch fail).
     retry: (n, e) => !is4xx(e) && n < 3,
-    refetchInterval: (q) => (is4xx(q.state.error) ? false : 3_000),
+    // 4xx → giãn 30s chứ KHÔNG dừng hẳn: dừng vĩnh viễn làm khung chat đứng im khi chỉ
+    // 1 lần 4xx thoáng qua (09/10: danh sách đã có tin agent 15:07, khung chat không hiện
+    // tới khi tải lại trang). 1 req/30s vẫn đủ nhẹ cho session hỏng thật.
+    refetchInterval: (q) => (is4xx(q.state.error) ? 30_000 : 3_000),
   });
 
   // Send message via the Zalo Personal route (channel-specific)

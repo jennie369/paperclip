@@ -129,7 +129,10 @@ export function ChatPanel({ conversation: conv, onToggleCustomer, onAction, chan
     // 4xx = yêu cầu sai, thử lại vô ích → dừng ngay (trước đây gõ ~0.45 req/s VÔ HẠN suốt
     // 6 ngày trên 7 hội thoại gem-master mà không ai thấy, vì lỗi bị nuốt thành "trống").
     retry: (n, e) => !is4xx(e) && n < 3,
-    refetchInterval: (q) => (is4xx(q.state.error) ? false : 2_000),
+    // 4xx → giãn 30s chứ KHÔNG dừng hẳn: dừng vĩnh viễn làm khung chat đứng im khi chỉ
+    // 1 lần 4xx thoáng qua (09/10: danh sách đã có tin agent 15:07, khung chat không hiện
+    // tới khi tải lại trang). 1 req/30s vẫn đủ nhẹ cho session hỏng thật.
+    refetchInterval: (q) => (is4xx(q.state.error) ? 30_000 : 2_000),
   });
 
   // Auto-scroll to bottom — CRITICAL LOGIC:
